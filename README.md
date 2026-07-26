@@ -14,9 +14,9 @@ Home-Assistant-Custom-Integration für untenstehende ELTAKO-Geräte.
 - FFG7B – Fensterkontakt / Fenstergriff (A5-14-09)
 - FBH55ESB, FB55EB – Bewegungsmelder
 - FBH55ESB / FBHT55ESB – Bewegung + Helligkeit automatisch
-- FRWB – Rauchmelder
-- FHMB – Rauch-/Hitzemelder
-- FFT60SB – Temperatur + Feuchte 0…40 °C
+- FRWB – Rauchmelder (ungetestet)
+- FHMB – Rauch-/Hitzemelder (ungetestet)
+- FFT60SB – Temperatur + Feuchte 0…40 °C (ungetestet)
 - FLGTF – Temperatur + Feuchte −20…60 °C / 0…100 %
 - FLGTF – TVOC + Temperatur/Feuchte automatisch
 - FCO2TF65 – CO2 + Temperatur + Feuchte
@@ -29,17 +29,17 @@ Home-Assistant-Custom-Integration für untenstehende ELTAKO-Geräte.
 - FUTH55ED – 2-Punkt-Regler TF61R / FR62 (A5-38-08)
 - FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
 - FUTH55ED – Hygrostat (A5-10-12)
-- FKS-SV – Smart Valve / Heizkörper-Stellantrieb
+- FKS-SV – Smart Valve / Heizkörper-Stellantrieb (noch im Test)
 - FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
 - F3Z14D – 3-Kanal-S0-Drehstromzähler
 - FWS61, FWG14MS – Wetterstation Wind + Regen + Temperatur
 - FUD14, FUD71, FDG14, FD2G14, FUD61NP-230V, FUD61NPN-230V, FD62NP-230V, FD62NPN-230V
-- FRGBW14, FRGBW71L
+- FRGBW14 (ungetestet), FRGBW71L
 - FSR14-2x, FSR14-4x, FSR71-2x-230V, FSR71NP-2x-230V, FSR71NP-4x-230V
 - FMZ14, FSR61-230V, FSR61NP-230V, FSR61/8-24V UC, FSR61G-230V, FSR61LN-230V, FLC61NP-230V
 - FR62-230V, FR62NP-230V, FL62-230V, FL62NP-230V
 - FSB14, FSB14/12-24V DC, FSB61-230V, FSB71-230V, FSB61NP-230V, FJ62/12-36V DC, FJ62NP-230V
-- FSM60B Betriebsart 1, 2, 3 und 4
+- FSM60B Betriebsart 1, 2, 3 und 4 (ungetestet)
 
 Nicht aufgeführte Produktbezeichnungen gehören nicht zum freigegebenen Katalog. Gemeinsame EEP-Decoder bleiben intern erhalten, soweit sie für die oben genannten Geräte erforderlich sind.
 
