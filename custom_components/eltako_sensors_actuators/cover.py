@@ -51,6 +51,8 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device)
         self._is_closed = None
+        self._is_opening = False
+        self._is_closing = False
         self._position = None
         self._position_task: asyncio.Task | None = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
@@ -58,6 +60,14 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
     @property
     def is_closed(self):
         return self._is_closed
+
+    @property
+    def is_opening(self):
+        return self._is_opening
+
+    @property
+    def is_closing(self):
+        return self._is_closing
 
     @property
     def current_cover_position(self):
@@ -69,34 +79,80 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
             str(self.device_config.get("sender_id")).upper(),
         }:
             return
-        if "position" in telegram.decoded:
+
+        decoded = telegram.decoded
+
+        if "position" in decoded:
             try:
-                self._position = max(0, min(100, int(round(float(telegram.decoded["position"])))))
+                self._position = max(0, min(100, int(round(float(decoded["position"])))))
             except (TypeError, ValueError):
                 pass
-        if "closed" in telegram.decoded:
-            self._is_closed = bool(telegram.decoded["closed"])
+
+        if "closed" in decoded:
+            self._is_closed = bool(decoded["closed"])
+            self._is_opening = False
+            self._is_closing = False
             if self._is_closed:
                 self._position = 0
+
+        # FSB14/FJ62 local operation/status is emitted as RPS telegrams.
+        # ELTAKO signal code 0x70 is the upper/up direction and 0x50 is the
+        # lower/down direction. 0x00 is the release/stop telegram when present.
+        action = decoded.get("button_action", decoded.get("value"))
+        try:
+            action = int(action)
+        except (TypeError, ValueError):
+            action = None
+
+        if action == 0x70:
+            self._is_opening = True
+            self._is_closing = False
+            self._is_closed = False
+            _LOGGER.debug(
+                "ELTAKO local cover movement detected: device=%s sender=%s direction=open code=70",
+                self.device_config.get("name"),
+                telegram.sender_id,
+            )
+        elif action == 0x50:
+            self._is_opening = False
+            self._is_closing = True
+            _LOGGER.debug(
+                "ELTAKO local cover movement detected: device=%s sender=%s direction=close code=50",
+                self.device_config.get("name"),
+                telegram.sender_id,
+            )
+        elif action == 0x00:
+            self._is_opening = False
+            self._is_closing = False
+            _LOGGER.debug(
+                "ELTAKO local cover stop detected: device=%s sender=%s code=00",
+                self.device_config.get("name"),
+                telegram.sender_id,
+            )
+
         self.schedule_update_ha_state()
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         self._cancel_position_task()
         await self._async_send_or_raise("open")
-        self._position = 100
+        self._is_opening = True
+        self._is_closing = False
         self._is_closed = False
         self.schedule_update_ha_state()
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         self._cancel_position_task()
         await self._async_send_or_raise("close")
-        self._position = 0
-        self._is_closed = True
+        self._is_opening = False
+        self._is_closing = True
         self.schedule_update_ha_state()
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         self._cancel_position_task()
         await self._async_send_or_raise("stop")
+        self._is_opening = False
+        self._is_closing = False
+        self.schedule_update_ha_state()
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         target = max(0, min(100, int(kwargs[ATTR_POSITION])))
@@ -130,6 +186,9 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
 
         try:
             await self._async_send_or_raise(command)
+            self._is_opening = opening
+            self._is_closing = not opening
+            self.schedule_update_ha_state()
             await asyncio.sleep(max(0.05, duration))
             await self._async_send_or_raise("stop")
         except asyncio.CancelledError:
@@ -145,6 +204,8 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
         finally:
             self._position_task = None
 
+        self._is_opening = False
+        self._is_closing = False
         self._position = target
         self._is_closed = target == 0
         self.schedule_update_ha_state()
@@ -174,8 +235,6 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
             )
         if command == "open":
             self._is_closed = False
-        elif command == "close":
-            self._is_closed = True
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
