@@ -11,6 +11,6 @@
   "requirements": [
     "pyserial"
   ],
-  "version": "0.1.154",
+  "version": "0.1.155",
   "issue_tracker": "https://github.com/DenisZEltako/eltako-sensors-actuators/issues"
 }
