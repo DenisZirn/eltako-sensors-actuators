@@ -7,15 +7,38 @@ def _normalize_eep(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _normalize_address(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def telegram_is_from_physical_device(
+    device: dict[str, Any], decoded: dict[str, Any], logical_sender_id: Any = None
+) -> bool:
+    """Return True only for telegrams emitted by the physical actuator ID.
+
+    This mirrors Grimm's listen_to_addresses/dev_id model. The controller
+    sender ID is used for commands and must not be accepted as actuator
+    feedback, otherwise a transmitted command echo can be mistaken for a real
+    device status telegram.
+    """
+    device_id = _normalize_address(device.get("id"))
+    physical_sender = _normalize_address(decoded.get("physical_sender_id"))
+    logical_sender = _normalize_address(logical_sender_id)
+
+    if not device_id:
+        return False
+    if physical_sender:
+        return physical_sender == device_id
+    return logical_sender == device_id
+
+
 def normalize_actuator_feedback(
     device: dict[str, Any], decoded: dict[str, Any]
 ) -> dict[str, Any]:
     """Normalize feedback received from the physical actuator address.
 
-    This follows the architecture used by Grimm's integration: incoming
-    telegrams are associated with the physical device ID and decoded according
-    to the device EEP. The controller/sender EEP is relevant for transmitting
-    commands, but must not determine how actuator feedback is interpreted.
+    Incoming telegrams are interpreted according to the physical device EEP.
+    The controller/sender EEP is relevant only for transmitting commands.
     """
     result = dict(decoded)
     org = str(result.get("org") or "").upper()
@@ -26,8 +49,9 @@ def normalize_actuator_feedback(
         return result
 
     # FSR switching feedback (M5-38-08) can arrive as an RPS telegram from the
-    # physical actuator ID. Field captures and Grimm/eltakobus decoding show
-    # 0x70 as ON and 0x50 as OFF for this actuator status stream.
+    # physical actuator ID. 0x70 represents ON and 0x50 represents OFF in this
+    # actuator status stream. The routing guard above prevents ordinary rocker
+    # telegrams or controller echoes from being treated as actuator feedback.
     if device_eep == "M5-38-08" and org == "0XF6":
         action = result.get("button_action", result.get("value"))
         try:
@@ -55,7 +79,7 @@ def normalize_actuator_feedback(
             )
 
     # The internal 4BS decoder already exposes state for M5-38-08. Preserve it
-    # and add the same normalized metadata so entities can use one data model.
+    # and add the same normalized metadata so entities use one data model.
     elif device_eep == "M5-38-08" and "state" in result:
         state = bool(result["state"])
         result.update(
