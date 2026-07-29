@@ -6,6 +6,7 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 
+from .actuator_feedback import decode_actuator_feedback
 from .const import CONF_DEVICES, DOMAIN
 from .entity_base import EltakoYamlEntity, normalize_platform
 
@@ -41,15 +42,15 @@ class EltakoSwitch(EltakoYamlEntity, SwitchEntity):
         return self._is_on
 
     def _handle_telegram(self, telegram) -> None:
-        if str(telegram.sender_id).upper() not in {
-            str(self.device_config.get("id")).upper(),
-            str(self.device_config.get("sender_id")).upper(),
-        }:
+        feedback = decode_actuator_feedback(
+            self.device_config, telegram.decoded, telegram.sender_id
+        )
+        if feedback is None:
             return
-        if "state" in telegram.decoded:
-            self._is_on = bool(telegram.decoded["state"])
-        elif "on" in telegram.decoded:
-            self._is_on = bool(telegram.decoded["on"])
+        if "state" in feedback:
+            self._is_on = bool(feedback["state"])
+        elif "on" in feedback:
+            self._is_on = bool(feedback["on"])
         else:
             return
         self.schedule_update_ha_state()
