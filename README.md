@@ -49,7 +49,7 @@ Nicht aufgeführte Produktbezeichnungen gehören nicht zum freigegebenen Katalog
 
 [![Home Assistant öffnen und dieses Repository in HACS anzeigen](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DenisZEltako&repository=eltako-sensors-actuators&category=integration)
 
-Danach in HACS **ELTAKO Sensors & Actuators** herunterladen. Bei einem HACS-Update kann Home Assistant einen Neustart verlangen, damit neuer Integrationscode geladen wird. Änderungen an Gateway oder EEDTOY-YAML werden dagegen durch einen Integrations-Reload übernommen.
+Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Update kann Home Assistant einen Neustart verlangen, damit neuer Integrationscode geladen wird. Änderungen an Gateway oder EEDTOY-YAML werden dagegen durch einen Integrations-Reload übernommen.
 
 ## Manuelle Installation
 
