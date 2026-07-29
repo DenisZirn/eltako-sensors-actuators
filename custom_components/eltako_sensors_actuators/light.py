@@ -48,6 +48,7 @@ except Exception:  # pragma: no cover - older HA compatibility
     _RGB_MODE = "rgb"
     _RGBW_MODE = "rgbw"
 
+from .actuator_feedback import decode_actuator_feedback
 from .const import CONF_DEVICES, DOMAIN
 from .entity_base import EltakoYamlEntity, normalize_eep, normalize_platform
 
@@ -130,7 +131,7 @@ def _normalize_rgbw_device(device: dict[str, Any]) -> dict[str, Any]:
     name = re.sub(r"\s*\((?:\d+)\s*/\s*(?:\d+)\)\s*$", "", name)
     normalized["name"] = name
     normalized["eep"] = "07-37-F7"
-    # Older generated YAML may still have sender.eep A5-38-08 for Grimm
+    # Older generated YAML may still have sender.eep A5-38-08 for older configurations
     # compatibility. For this integration the FRGBW command builder uses the
     # sender address but generates the vendor RGBW profile internally.
     normalized["sender_eep"] = "07-37-F7"
@@ -332,17 +333,17 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         return self._effect
 
     def _handle_telegram(self, telegram) -> None:
-        if str(telegram.sender_id).upper() not in {
-            str(self.device_config.get("id")).upper(),
-            str(self.device_config.get("sender_id")).upper(),
-        }:
+        feedback = decode_actuator_feedback(
+            self.device_config, telegram.decoded, telegram.sender_id
+        )
+        if feedback is None:
             return
-        if "rgbw_color" in telegram.decoded:
-            self._rgbw_color = tuple(telegram.decoded["rgbw_color"])
-        if "component" in telegram.decoded and "component_value" in telegram.decoded:
+        if "rgbw_color" in feedback:
+            self._rgbw_color = tuple(feedback["rgbw_color"])
+        if "component" in feedback and "component_value" in feedback:
             r, g, b, w = self._rgbw_color or (0, 0, 0, 0)
-            component = telegram.decoded.get("component")
-            value = int(telegram.decoded.get("component_value") or 0)
+            component = feedback.get("component")
+            value = int(feedback.get("component_value") or 0)
             if component == "red":
                 r = value
             elif component == "green":
@@ -353,22 +354,18 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                 w = value
             self._rgbw_color = (r, g, b, w)
             if _is_rgbw_device(self.device_config):
-                # A single 07-37-F7 component telegram with value 0 only means
-                # this one channel is off. It must not switch the whole HA light
-                # off while another component is still non-zero. This fixes the
-                # immediate UI-off jump after selecting a color.
                 max_channel = max(r, g, b, w)
                 self._is_on = max_channel > 0
                 self._brightness = max_channel if self._is_on else 0
                 self.schedule_update_ha_state()
                 return
-        if "brightness" in telegram.decoded:
-            self._brightness = telegram.decoded["brightness"]
+        if "brightness" in feedback:
+            self._brightness = int(feedback["brightness"])
             self._is_on = bool(self._brightness)
-        elif "state" in telegram.decoded:
-            self._is_on = bool(telegram.decoded["state"])
-        elif "on" in telegram.decoded:
-            self._is_on = bool(telegram.decoded["on"])
+        elif "state" in feedback:
+            self._is_on = bool(feedback["state"])
+        elif "on" in feedback:
+            self._is_on = bool(feedback["on"])
         else:
             return
         self.schedule_update_ha_state()
@@ -419,7 +416,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             detail = getattr(self.gateway, "last_send_error", None)
             suffix = f" Technischer Fehler: {detail}" if detail else ""
             raise HomeAssistantError(
-                "ELTAKO Telegramm konnte nicht gesendet werden. Pruefe Gateway-Port, sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
+                "Eltako-Telegramm konnte nicht gesendet werden. Pruefe Gateway-Port, sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
                 + suffix
             )
         if command == "turn_on":
