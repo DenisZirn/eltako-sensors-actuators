@@ -1,0 +1,65 @@
+name: Release v0.1.155
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.155.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version pruefen
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('custom_components/eltako_sensors_actuators/manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.155', manifest['version']
+          print('Manifest version OK:', manifest['version'])
+          PY
+
+      - name: Python-Dateien pruefen
+        run: |
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Tag und Release erstellen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view v0.1.155 >/dev/null 2>&1; then
+            echo "Release v0.1.155 ist bereits vorhanden."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.1.155 -m "ELTAKO Sensors & Actuators v0.1.155" "${GITHUB_SHA}"
+          git push origin v0.1.155
+
+          cat > release-notes.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.155
+
+          ### Aktor-Rueckmeldungen
+
+          - Rueckmeldungen werden jetzt konsequent ueber die physische Aktor-ID zugeordnet.
+          - Gesendete Steuertelegramme beziehungsweise Echo-Telegramme werden nicht mehr faelschlich als echter Aktorstatus ausgewertet.
+          - Die Rueckmeldeauswertung orientiert sich am EEP des Aktors und nicht am Sender-EEP des Controllers.
+
+          ### Rollladen und Jalousien
+
+          - Prozentuale Positionssteuerung fuer unterstuetzte Cover-Aktoren ergaenzt.
+          - Lokale Statusrueckmeldungen werden robuster mit dem Home-Assistant-Zustand synchronisiert.
+          - Eine nicht ausreichend verifizierte RPS-Zuordnung wurde bewusst wieder entfernt.
+          EOF
+
+          gh release create v0.1.155 --title "ELTAKO Sensors & Actuators v0.1.155" --notes-file release-notes.md --verify-tag --latest
