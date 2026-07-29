@@ -1,4 +1,4 @@
-name: Replace v0.1.155 with exact test22
+name: Release corrected v0.1.155
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  replace-release:
+  release:
     runs-on: ubuntu-latest
     steps:
       - name: Repository auschecken
@@ -17,69 +17,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Exakte test22-Rueckmeldedateien wiederherstellen
-        shell: bash
+      - name: Version und Python-Dateien prüfen
         run: |
-          set -euo pipefail
-          echo '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' | base64 --decode > /tmp/test22-four.tar.gz
-          tar -xzf /tmp/test22-four.tar.gz
-
-      - name: Exakte test22-Dateien verifizieren
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo '2629416bca2b95bfceff78aae66ecb16a6a3cbac0d6a57c624a399b23c8cabbf  custom_components/eltako_sensors_actuators/actuator_feedback.py' | sha256sum --check
-          echo '6a08350ee765fbdeed83a3a5b9dd5a42461257f08a2ae49be6282f1fa3c0b734  custom_components/eltako_sensors_actuators/switch.py' | sha256sum --check
-          echo 'af33a998d3a0dbbe4dd385e077d0db3296eb5d27eca686e8d6ef286fdd3c0bdc  custom_components/eltako_sensors_actuators/light.py' | sha256sum --check
-          echo '9456ac4776e19e0782ee5559662237451bb7b44ecd80a414fe37fa4c8a23e685  custom_components/eltako_sensors_actuators/cover.py' | sha256sum --check
-          python -m compileall -q custom_components/eltako_sensors_actuators
           python - <<'PY'
           import json
           from pathlib import Path
           manifest = json.loads(Path('custom_components/eltako_sensors_actuators/manifest.json').read_text(encoding='utf-8'))
           assert manifest['version'] == '0.1.155', manifest['version']
-          print('Manifest version OK:', manifest['version'])
           PY
+          python -m compileall -q custom_components/eltako_sensors_actuators
 
-      - name: Exakten test22-Stand committen und v0.1.155 ersetzen
+      - name: Release v0.1.155 ersetzen
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add custom_components/eltako_sensors_actuators/actuator_feedback.py \
-                  custom_components/eltako_sensors_actuators/switch.py \
-                  custom_components/eltako_sensors_actuators/light.py \
-                  custom_components/eltako_sensors_actuators/cover.py
-          if ! git diff --cached --quiet; then
-            git commit -m 'Release exact hardware-tested test22 implementation as v0.1.155'
-            git push origin HEAD:main
-          fi
-          RELEASE_SHA="$(git rev-parse HEAD)"
-
           gh release delete v0.1.155 --yes --cleanup-tag || true
           git fetch --tags --force
           git tag -d v0.1.155 || true
-          git tag -a v0.1.155 -m 'ELTAKO Sensors & Actuators v0.1.155 corrected' "${RELEASE_SHA}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.1.155 -m "ELTAKO Sensors & Actuators v0.1.155 corrected" "${GITHUB_SHA}"
           git push origin v0.1.155 --force
-
-          cat > release-notes.md <<'EOF'
-          Dieser Release ersetzt den fehlerhaften ersten Stand von v0.1.155
-
-          - Aktor-Rückmeldelogik implementiert
-          - RPS- und 4BS-Rückmeldungen für Schalt- und Lichtaktoren
-          - FSB61/FJ62 Start-, Stopp- und Laufzeitauswertung
-          - Rückmeldungen von FSR61, FUD61, FL62, FD62 implementiert
-          - korrigierte Zuordnung zur physischen Aktoradresse
-          - FTFSB/FTFB mit EEP A5-04-03 wieder als Temperatur- und Feuchtesensor angelegt.
-          - Ein FTFSB, der trotz A5-04-03 im YAML tatsächlich im werkseitigen A5-04-02-Modus sendet, wird anhand des Lern- und Datentelegramms automatisch erkannt.
-          EOF
-
           gh release create v0.1.155 \
-            --title 'ELTAKO Sensors & Actuators v0.1.155' \
-            --notes-file release-notes.md \
+            --title "ELTAKO Sensors & Actuators v0.1.155" \
+            --notes-file release-notes-v0.1.155.md \
             --verify-tag \
             --latest
