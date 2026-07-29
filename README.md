@@ -1,4 +1,4 @@
-# ELTAKO Sensors & Actuators
+# Eltako Sensors & Actuators
 
 Home-Assistant-Custom-Integration für untenstehende ELTAKO-Geräte.
 
