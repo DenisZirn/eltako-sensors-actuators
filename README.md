@@ -4,6 +4,10 @@ Home-Assistant-Custom-Integration für untenstehende ELTAKO-Geräte.
 
 [![Home Assistant öffnen und dieses Repository in HACS anzeigen](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DenisZEltako&repository=eltako-sensors-actuators&category=integration)
 
+Home-Assistant-Custom-Integration für die unten aufgeführten ELTAKO-Geräte.
+
+Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
+
 ## Freigegebener Gerätekatalog (v0.1.155)
 
 - F2T55 – Taster 2-Kanal EU
