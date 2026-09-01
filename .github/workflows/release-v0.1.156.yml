@@ -21,13 +21,12 @@ jobs:
         run: |
           set -euo pipefail
           cat .release/v0.1.156.part* > /tmp/v0.1.156.b64
-          base64 -d /tmp/v0.1.156.b64 > /tmp/v0.1.156-source.zip
+          base64 --ignore-garbage -d /tmp/v0.1.156.b64 > /tmp/v0.1.156-source.zip
+          unzip -t /tmp/v0.1.156-source.zip
           rm -rf /tmp/v0.1.156-source
           mkdir -p /tmp/v0.1.156-source
           unzip -q /tmp/v0.1.156-source.zip -d /tmp/v0.1.156-source
 
-          # Vorhandene Brand-Assets bleiben erhalten; der restliche Integrationsquellstand
-          # wird exakt auf den getesteten v0.1.156-Stand synchronisiert.
           rsync -a --delete --exclude 'brand/' \
             /tmp/v0.1.156-source/custom_components/eltako_sensors_actuators/ \
             custom_components/eltako_sensors_actuators/
