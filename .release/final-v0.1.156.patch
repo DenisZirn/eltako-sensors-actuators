@@ -1,0 +1,160 @@
+diff --git a/custom_components/eltako_sensors_actuators/binary_sensor.py b/custom_components/eltako_sensors_actuators/binary_sensor.py
+index b403a26..85f7e48 100644
+--- a/custom_components/eltako_sensors_actuators/binary_sensor.py
++++ b/custom_components/eltako_sensors_actuators/binary_sensor.py
+@@ -389,11 +389,9 @@ class EltakoFTS14EMInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
+     def _handle_telegram(self, telegram) -> None:
+         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+             return
+-        raw = telegram.decoded.get("button_action", telegram.decoded.get("value"))
+-        try:
+-            active = int(raw) != 0
+-        except (TypeError, ValueError):
++        if "pressed" not in telegram.decoded:
+             return
++        active = bool(telegram.decoded["pressed"])
+         self._state = not active if self._inverted else active
+         self.schedule_update_ha_state()
+ 
+diff --git a/custom_components/eltako_sensors_actuators/gateway.py b/custom_components/eltako_sensors_actuators/gateway.py
+index 5a62aa7..1bfb9a9 100644
+--- a/custom_components/eltako_sensors_actuators/gateway.py
++++ b/custom_components/eltako_sensors_actuators/gateway.py
+@@ -1149,22 +1149,44 @@ class EltakoGateway:
+         self._dispatch(telegram)
+ 
+     def _dispatch(self, telegram: EltakoTelegram) -> None:
++        """Dispatch one telegram without allowing one consumer to block all others.
++
++        v0.1.155 effectively relied on every registered entity receiving every
++        matching telegram. Newer device-specific listeners and diagnostics must
++        therefore never be able to abort the dispatch chain. In particular,
++        gateway status entities such as ``Last Message Received`` must continue
++        to update even if another entity raises while processing the same frame.
++        """
+         self._last_telegram = telegram
++
+         if telegram.sender_id != "__gateway_status__":
+-            diagnostic_event(
+-                self.hass,
+-                "telegram_received",
+-                level="debug",
+-                entry_id=self.entry_id,
+-                gateway=self.gateway_type,
+-                port=self.port,
+-                sender_id=telegram.sender_id,
+-                eep=telegram.eep,
+-                raw=telegram.raw,
+-                decoded=telegram.decoded,
+-            )
++            try:
++                diagnostic_event(
++                    self.hass,
++                    "telegram_received",
++                    level="debug",
++                    entry_id=self.entry_id,
++                    gateway=self.gateway_type,
++                    port=self.port,
++                    sender_id=telegram.sender_id,
++                    eep=telegram.eep,
++                    raw=telegram.raw,
++                    decoded=telegram.decoded,
++                )
++            except Exception:
++                _LOGGER.exception(
++                    "ELTAKO diagnostics failed while recording telegram; continuing dispatch"
++                )
++
+         for listener in list(self._listeners):
+-            listener(telegram)
++            try:
++                listener(telegram)
++            except Exception:
++                _LOGGER.exception(
++                    "ELTAKO entity listener failed for sender=%s eep=%s; continuing with remaining listeners",
++                    telegram.sender_id,
++                    telegram.eep,
++                )
+ 
+     @property
+     def last_telegram(self) -> EltakoTelegram | None:
+diff --git a/custom_components/eltako_sensors_actuators/sensor.py b/custom_components/eltako_sensors_actuators/sensor.py
+index c914c91..17fd3b8 100644
+--- a/custom_components/eltako_sensors_actuators/sensor.py
++++ b/custom_components/eltako_sensors_actuators/sensor.py
+@@ -74,6 +74,7 @@ from .entity_base import (
+     _is_flgtf_device,
+     _is_ffg7b_device,
+     _is_frwb_device,
++    _is_fts14em_device,
+     _f4usm61b_mode,
+     _f4usm61b_physical_unique_id,
+     _is_f4usm61b_device,
+@@ -240,7 +241,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
+                     )
+                 )
+             if eep in ("F6-02-01",):
+-                entities.extend(_rocker_button_entities(gateway, device))
++                # FTS14EM inputs already have their dedicated E1..En binary
++                # entities in binary_sensor.py. Do not recreate the old generic
++                # rocker helper sensors (button, position, signal code, last seen).
++                if not _is_fts14em_device(device):
++                    entities.extend(_rocker_button_entities(gateway, device))
+             elif eep == "D5-00-01":
+                 entities.extend(_d5_00_01_entities(gateway, device))
+             elif eep == "A5-08-01":
+@@ -296,6 +301,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
+     _remove_obsolete_gateway_path_entities(hass, entry)
+     _remove_obsolete_flgtf_last_seen_entities(hass, entry, devices)
+     _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
++    _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
+     _migrate_flgtf_entity_ids(hass, entry, devices)
+ 
+     _LOGGER.info(
+@@ -504,6 +510,46 @@ def _weather_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
+ 
+ 
+ 
++def _remove_obsolete_fts14em_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
++    """Remove legacy generic FTS14EM rocker helper sensors.
++
++    FTS14EM has dedicated E1..En binary entities. Older builds also created
++    four generic F6-02-01 helper sensors per input (button label, position,
++    signal code and last telegram). They are redundant and must not remain in
++    the Home Assistant entity registry after upgrading.
++    """
++    try:
++        registry = er.async_get(hass)
++    except Exception:
++        return
++
++    suffixes = (
++        "Gedrueckte Taste",
++        "Gedrückte Taste",
++        "Tastenposition",
++        "Signalcode",
++        "Letztes Telegramm",
++    )
++    obsolete_unique_ids: set[str] = set()
++    for device in devices or []:
++        if not isinstance(device, dict) or not _is_fts14em_device(device):
++            continue
++        if normalize_eep(device.get("eep")) != "F6-02-01":
++            continue
++        for suffix in suffixes:
++            obsolete_unique_ids.add(_yaml_entity_unique_id(entry.entry_id, device, suffix))
++
++    for unique_id in obsolete_unique_ids:
++        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
++        if not entity_id:
++            continue
++        try:
++            registry.async_remove(entity_id)
++            _LOGGER.info("Removed obsolete FTS14EM helper entity %s", entity_id)
++        except Exception:
++            _LOGGER.exception("Failed to remove obsolete FTS14EM helper entity %s", entity_id)
++
++
+ def _remove_obsolete_gateway_path_entities(hass, entry) -> None:
+     """Remove legacy gateway path sensors from the entity registry.
+ 
