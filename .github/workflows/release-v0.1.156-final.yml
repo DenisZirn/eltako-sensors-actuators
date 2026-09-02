@@ -1,0 +1,97 @@
+name: Release v0.1.156 final
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.156-final.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('custom_components/eltako_sensors_actuators/manifest.json')
+          m = json.loads(p.read_text(encoding='utf-8'))
+          assert m['version'] == '0.1.156', m['version']
+          PY
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Remove temporary release workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/release-v0.1.156-final.yml
+          git add .github/workflows/release-v0.1.156-final.yml
+          git commit -m "Remove temporary v0.1.156 release workflow"
+          git push origin HEAD:main
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          SHA="$(git rev-parse origin/main)"
+          git tag -a v0.1.156 "$SHA" -m "ELTAKO Sensors & Actuators v0.1.156"
+          git push origin v0.1.156
+          cat > /tmp/release-notes.md <<'EOF'
+# Eltako Sensors & Actuators v0.1.156
+
+## Änderungen
+
+- FMS14 als eigener 2-Kanal-Multifunktions-Stromstoßschalter ergänzt.
+- FMS14-Ansteuerung über A5-38-08 mit `01-00-00-09` für EIN und `01-00-00-08` für AUS.
+- Die von EEDTOY vorgegebene `sender.id` wird für den FMS14 unverändert verwendet.
+- FMS14-Statusrückmeldungen werden pro physischer Kanaladresse ausgewertet; `70` entspricht EIN und `50` AUS.
+- Mehrkanalige Series-14-Aktoren werden kanalbezogen verarbeitet.
+- F4USM61B-Unterstützung für Betriebsarten 1 bis 8 erweitert.
+- FTS14EM als 10-Kanal-Eingabemodul unterstützt.
+- Beim FTS14EM werden nur die eigentlichen Eingänge als Home-Assistant-Entitäten angelegt; alte Hilfsentitäten wurden entfernt.
+- FAE14LPR als 2-Kanal-Aktor berücksichtigt.
+- FSM60B-Auswertung für die unterschiedlichen Betriebsarten erweitert und hardwareseitig getestet.
+- Series-14-Rückmeldungen weiter vereinheitlicht und stabilisiert.
+- Status-Dispatch abgesichert, damit einzelne fehlerhafte Listener nicht mehr andere Status-Updates wie `Last Message Received` blockieren.
+- Funk-/Bus-Diagnose weiter überarbeitet.
+- Das Diagnose-Frontend verwendet jetzt `diagnostics-panel.js`; alte interne Testbezeichnungen wurden entfernt.
+- Deutsche und englische Übersetzungen ergänzt.
+- FHK14-/F4HK14-Decoder und Sendewege sind enthalten; die aktive Steuerung wird weiterhin hardwareseitig validiert.
+- FRGBW14-Unterstützung ist enthalten, die praktische Ansteuerung wird weiterhin validiert.
+
+## FMS14
+
+Der FMS14 wird als 2-Kanal-Multifunktions-Stromstoßschalter unterstützt. Jeder Kanal wird als eigene Home-Assistant-Entität angelegt.
+
+Ansteuerung über A5-38-08:
+- EIN: `01-00-00-09`
+- AUS: `01-00-00-08`
+
+Statusrückmeldungen:
+- `70` = EIN
+- `50` = AUS
+
+## FTS14EM
+
+Der FTS14EM wird als 10-Kanal-Eingabemodul unterstützt. Die Eingänge E1 bis E10 werden als eigene Home-Assistant-Entitäten angelegt. Technische Zusatzinformationen werden nicht mehr als separate Geräteentitäten erzeugt.
+
+## Hinweise
+
+FHK14/F4HK14 und FRGBW14 werden weiterhin praktisch validiert.
+EOF
+          gh release create v0.1.156 --title "ELTAKO Sensors & Actuators v0.1.156" --notes-file /tmp/release-notes.md --target "$SHA" --latest
