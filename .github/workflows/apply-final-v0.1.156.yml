@@ -1,0 +1,41 @@
+name: Apply final v0.1.156 status fixes
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-final-v0.1.156.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact tested patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .release/final-v0.1.156.patch
+          git apply .release/final-v0.1.156.patch
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Commit final tested v0.1.156 state
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-final-v0.1.156.yml
+          rm -f .release/final-v0.1.156.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/eltako_sensors_actuators/binary_sensor.py \
+                  custom_components/eltako_sensors_actuators/gateway.py \
+                  custom_components/eltako_sensors_actuators/sensor.py \
+                  .github/workflows/apply-final-v0.1.156.yml \
+                  .release/final-v0.1.156.patch
+          git commit -m "Finalize v0.1.156 tested status handling"
+          git push origin HEAD:main
