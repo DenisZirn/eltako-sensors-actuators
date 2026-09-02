@@ -389,11 +389,9 @@ class EltakoFTS14EMInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     def _handle_telegram(self, telegram) -> None:
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
             return
-        raw = telegram.decoded.get("button_action", telegram.decoded.get("value"))
-        try:
-            active = int(raw) != 0
-        except (TypeError, ValueError):
+        if "pressed" not in telegram.decoded:
             return
+        active = bool(telegram.decoded["pressed"])
         self._state = not active if self._inverted else active
         self.schedule_update_ha_state()
 

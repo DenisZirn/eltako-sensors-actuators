@@ -74,6 +74,7 @@ from .entity_base import (
     _is_flgtf_device,
     _is_ffg7b_device,
     _is_frwb_device,
+    _is_fts14em_device,
     _f4usm61b_mode,
     _f4usm61b_physical_unique_id,
     _is_f4usm61b_device,
@@ -240,7 +241,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                     )
                 )
             if eep in ("F6-02-01",):
-                entities.extend(_rocker_button_entities(gateway, device))
+                # FTS14EM inputs already have their dedicated E1..En binary
+                # entities in binary_sensor.py. Do not recreate the old generic
+                # rocker helper sensors (button, position, signal code, last seen).
+                if not _is_fts14em_device(device):
+                    entities.extend(_rocker_button_entities(gateway, device))
             elif eep == "D5-00-01":
                 entities.extend(_d5_00_01_entities(gateway, device))
             elif eep == "A5-08-01":
@@ -296,6 +301,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_gateway_path_entities(hass, entry)
     _remove_obsolete_flgtf_last_seen_entities(hass, entry, devices)
     _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
+    _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
     _LOGGER.info(
@@ -502,6 +508,46 @@ def _weather_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
         EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
     ]
 
+
+
+def _remove_obsolete_fts14em_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove legacy generic FTS14EM rocker helper sensors.
+
+    FTS14EM has dedicated E1..En binary entities. Older builds also created
+    four generic F6-02-01 helper sensors per input (button label, position,
+    signal code and last telegram). They are redundant and must not remain in
+    the Home Assistant entity registry after upgrading.
+    """
+    try:
+        registry = er.async_get(hass)
+    except Exception:
+        return
+
+    suffixes = (
+        "Gedrueckte Taste",
+        "Gedrückte Taste",
+        "Tastenposition",
+        "Signalcode",
+        "Letztes Telegramm",
+    )
+    obsolete_unique_ids: set[str] = set()
+    for device in devices or []:
+        if not isinstance(device, dict) or not _is_fts14em_device(device):
+            continue
+        if normalize_eep(device.get("eep")) != "F6-02-01":
+            continue
+        for suffix in suffixes:
+            obsolete_unique_ids.add(_yaml_entity_unique_id(entry.entry_id, device, suffix))
+
+    for unique_id in obsolete_unique_ids:
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        if not entity_id:
+            continue
+        try:
+            registry.async_remove(entity_id)
+            _LOGGER.info("Removed obsolete FTS14EM helper entity %s", entity_id)
+        except Exception:
+            _LOGGER.exception("Failed to remove obsolete FTS14EM helper entity %s", entity_id)
 
 
 def _remove_obsolete_gateway_path_entities(hass, entry) -> None:

@@ -1149,22 +1149,44 @@ class EltakoGateway:
         self._dispatch(telegram)
 
     def _dispatch(self, telegram: EltakoTelegram) -> None:
+        """Dispatch one telegram without allowing one consumer to block all others.
+
+        v0.1.155 effectively relied on every registered entity receiving every
+        matching telegram. Newer device-specific listeners and diagnostics must
+        therefore never be able to abort the dispatch chain. In particular,
+        gateway status entities such as ``Last Message Received`` must continue
+        to update even if another entity raises while processing the same frame.
+        """
         self._last_telegram = telegram
+
         if telegram.sender_id != "__gateway_status__":
-            diagnostic_event(
-                self.hass,
-                "telegram_received",
-                level="debug",
-                entry_id=self.entry_id,
-                gateway=self.gateway_type,
-                port=self.port,
-                sender_id=telegram.sender_id,
-                eep=telegram.eep,
-                raw=telegram.raw,
-                decoded=telegram.decoded,
-            )
+            try:
+                diagnostic_event(
+                    self.hass,
+                    "telegram_received",
+                    level="debug",
+                    entry_id=self.entry_id,
+                    gateway=self.gateway_type,
+                    port=self.port,
+                    sender_id=telegram.sender_id,
+                    eep=telegram.eep,
+                    raw=telegram.raw,
+                    decoded=telegram.decoded,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "ELTAKO diagnostics failed while recording telegram; continuing dispatch"
+                )
+
         for listener in list(self._listeners):
-            listener(telegram)
+            try:
+                listener(telegram)
+            except Exception:
+                _LOGGER.exception(
+                    "ELTAKO entity listener failed for sender=%s eep=%s; continuing with remaining listeners",
+                    telegram.sender_id,
+                    telegram.eep,
+                )
 
     @property
     def last_telegram(self) -> EltakoTelegram | None:
