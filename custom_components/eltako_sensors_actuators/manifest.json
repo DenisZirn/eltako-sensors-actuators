@@ -2,7 +2,7 @@
   "domain": "eltako_sensors_actuators",
   "name": "ELTAKO Sensors & Actuators",
   "codeowners": [
-    "@DenisZEltako"
+    "@DenisZirn"
   ],
   "config_flow": true,
   "integration_type": "hub",
