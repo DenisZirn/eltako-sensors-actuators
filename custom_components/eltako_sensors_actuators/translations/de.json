@@ -27,7 +27,8 @@
         "title": "ELTAKO Sensors & Actuators konfigurieren",
         "menu_options": {
           "connection": "Gateway / seriellen Anschluss ändern",
-          "yaml": "EEDTOY YAML importieren oder ersetzen"
+          "yaml": "EEDTOY YAML importieren oder ersetzen",
+          "diagnostics": "Funk / Bus Diagnose"
         }
       },
       "connection": {
@@ -66,6 +67,13 @@
         "data": {
           "yaml_file_path": "YAML-Dateipfad auf Home Assistant"
         }
+      },
+      "diagnostics": {
+        "title": "Funk / Bus Diagnose",
+        "description": "Aktiviert oder deaktiviert den Diagnosepuffer und den Seitenleistenpunkt global für alle ELTAKO-Gateways.",
+        "data": {
+          "diagnostics_enabled": "Diagnose anzeigen"
+        }
       }
     },
     "error": {
@@ -75,10 +83,20 @@
       "file_not_found": "Die YAML-Datei wurde nicht gefunden.",
       "file_not_allowed": "Aus Sicherheitsgründen dürfen nur Dateien innerhalb des Home-Assistant-Konfigurationsordners gelesen werden.",
       "missing_gateway": "Bitte einen Gateway-Block auswählen.",
-      "yaml_source_required": "Bitte einen YAML-Dateipfad angeben oder den EEDTOY YAML-Export in das Textfeld einfügen.",
+      "yaml_source_required": "Bitte einen YAML-Dateipfad angeben oder den EEDTOY YAML-Export in das Textfeld einfuegen.",
       "yaml_file_required": "Bitte einen YAML-Dateipfad angeben.",
       "sender_id_collision": "Mindestens eine FKS-SV sender.id ist bereits einem anderen Gerät oder Regler zugeordnet. Jeder unabhängig geregelte FKS-SV benötigt eine eigene freie Sender-ID.",
       "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "fnsn_detection": {
+        "state": {
+          "on": "Detektion",
+          "off": "Keine Detektion"
+        }
+      }
     }
   }
 }

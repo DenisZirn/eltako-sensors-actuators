@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+import re
 
 from .esp2 import ESP2Message, ORG_1BS, ORG_4BS, ORG_RPS
 from .ids import format_address
@@ -9,6 +10,7 @@ from .eep_a5_20_01 import (
     decode_a5_20_01_actuator_status,
     decode_a5_20_01_controller_telegram,
 )
+from .eep_a5_04 import decode_a5_04
 from .eep_a5_09_04 import decode_a5_09_04
 from .eep_a5_10_12 import decode_a5_10_12
 from .eep_a5_20_04 import decode_a5_20_04_controller_telegram
@@ -26,7 +28,9 @@ def decode_esp2_message(
     org = body[1]
     sender_id = format_address(body[6:10])
     data = body[2:6]
-    normalized_eep = str(eep or "").upper().strip()
+    eep_text = str(eep or "").upper().strip()
+    eep_match = re.search(r"(?:^|[^0-9A-F])([A-F0-9]{2}-[A-F0-9]{2}-[A-F0-9]{2})(?:$|[^0-9A-F])", eep_text)
+    normalized_eep = eep_match.group(1) if eep_match else eep_text
 
     decoded: dict[str, Any] = {
         "raw": message.serialize().hex("-"),
@@ -116,11 +120,32 @@ def _decode_rps(data_byte: int, eep: str) -> dict[str, Any]:
         if window_state is not None:
             result["window_state"] = window_state
         return result
+    if eep == "F6-01-01":
+        # ELTAKO FNSN55EB / FNS65EB proximity switch (EEP F6-01-01):
+        #   DB3 = 0x10 -> hand in detection area
+        #   DB3 = 0x00 -> hand removed
+        # Other values are not documented for the device and are deliberately
+        # left without a state key so Home Assistant keeps the previous state.
+        if data_byte == 0x10:
+            return {
+                "presence": True,
+                "pressed": True,
+                "proximity_raw": data_byte,
+                "value": data_byte,
+            }
+        if data_byte == 0x00:
+            return {
+                "presence": False,
+                "pressed": False,
+                "proximity_raw": data_byte,
+                "value": data_byte,
+            }
+        return {"proximity_raw": data_byte, "value": data_byte}
     if eep == "F6-02-01":
         pressed = data_byte != 0x00
 
-        # Eltako 4-way rocker mapping used by F2T55/FT55 style buttons.
-        # The signal codes are commonly shown as 10/30/50/70 in Eltako tools;
+        # ELTAKO 4-way rocker mapping used by F2T55/FT55 style buttons.
+        # The signal codes are commonly shown as 10/30/50/70 in ELTAKO tools;
         # on the wire these are the byte values 0x10/0x30/0x50/0x70.
         position_map = {
             0x30: ("left_top", "Left Top", "Oben links"),
@@ -134,9 +159,23 @@ def _decode_rps(data_byte: int, eep: str) -> dict[str, Any]:
             ("unknown", f"0x{data_byte:02X}", f"0x{data_byte:02X}"),
         )
 
+        heating_mode_map = {
+            0x70: ("normal", "Normalbetrieb", 0),
+            0x50: ("night_reduction", "Nachtabsenkung", -4),
+            0x30: ("reduced", "Absenkbetrieb", -2),
+            0x10: ("frost_protection", "Aus / Frostschutz", None),
+        }
+        heating_mode, heating_mode_label, temperature_reduction = heating_mode_map.get(
+            data_byte, ("unknown", f"0x{data_byte:02X}", None)
+        )
+
         return {
             "pressed": pressed,
             "button_action": data_byte,
+            "heating_mode": heating_mode,
+            "heating_mode_label": heating_mode_label,
+            "temperature_reduction": temperature_reduction,
+            "frost_protection": data_byte == 0x10,
             "signal_code": f"{data_byte:02X}",
             "signal_code_decimal": data_byte,
             "button_position": position,
@@ -151,6 +190,94 @@ def _decode_rps(data_byte: int, eep: str) -> dict[str, Any]:
 
 def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
     db3, db2, db1, db0 = data
+
+    # FSM60B can be changed between BA3 and BA4 without changing its EnOcean ID.
+    # Detect the active operating mode from the actual field telegram instead of
+    # trusting a possibly stale YAML EEP.
+    if eep in ("A5-30-01", "A5-30-03"):
+        if data in (
+            bytes((0x00, 0x90, 0x00, 0x0E)),
+            bytes((0x00, 0x90, 0xFF, 0x0E)),
+        ):
+            eep = "A5-30-01"
+        elif data in (
+            bytes((0x00, 0x00, 0x0F, 0x08)),
+            bytes((0x00, 0x00, 0x1F, 0x08)),
+        ):
+            eep = "A5-30-03"
+
+    if eep == "A5-30-03":
+        # FRWB and FSM60B BA3 share EEP A5-30-03.
+        # Confirmed data telegrams:
+        #   DB1 0x0F = alarm, DB1 0x1F = no alarm, DB0 0x08 = data.
+        # FRWB additionally carries inverted 0..40 °C temperature in DB2.
+        learn = not bool(db0 & 0x08)
+        common = {
+            "learn": learn,
+            "learn_telegram": learn,
+            "data_telegram": not learn,
+            "value": data.hex("-"),
+        }
+        if learn:
+            common["telegram_type"] = "a5_30_03_teach_in"
+            return common
+
+        if db0 != 0x08 or db1 not in (0x0F, 0x1F):
+            common.update({
+                "telegram_type": "a5_30_03_unrecognized",
+                "ignored": True,
+            })
+            return common
+
+        alarm = db1 == 0x0F
+        temperature = (255 - db2) * 40.0 / 255.0
+        common.update({
+            # FRWB entities
+            "smoke_alarm": alarm,
+            "temperature": round(temperature, 1),
+            # FSM60B BA3 entities
+            "moisture": alarm,
+            "wet": alarm,
+            "water_alarm": alarm,
+            # shared diagnostics
+            "alarm": alarm,
+            "pressed": alarm,
+            "open": not alarm,
+            "closed": alarm,
+            "temperature_raw": int(db2),
+            "telegram_type": "a5_30_03_alarm_temperature",
+        })
+        return common
+
+    if eep == "A5-30-01":
+        # ELTAKO FSM60B operating mode 4, measured telegrams:
+        #   00-8F-00-0E = input/contact active (pressed)
+        #   00-8F-FF-0E = input/contact inactive (released)
+        #
+        # The contact state is carried in DB1, while the battery status is
+        # carried independently in the lower nibble of DB2.  Keeping these
+        # fields separate prevents a contact change from incorrectly setting
+        # the battery entity to 0 percent.
+        learn = not bool(db0 & 0x08)
+        contact_closed = db1 == 0x00
+        contact_open = not contact_closed
+        battery_raw = int(db2 & 0x0F)
+        battery_percentage = round(battery_raw / 15.0 * 100.0)
+        return {
+            "open": contact_open,
+            "closed": contact_closed,
+            "contact_open": contact_open,
+            "contact_closed": contact_closed,
+            "pressed": contact_closed,
+            "learn": learn,
+            "learn_telegram": learn,
+            "data_telegram": not learn,
+            "battery_raw": battery_raw,
+            "battery_percentage": battery_percentage,
+            "battery_low": battery_raw <= 2,
+            "value": data.hex("-"),
+            "telegram_type": "fsm60b_ba4_contact_battery",
+        }
 
     if eep == "A5-14-09":
         return decode_ffg7b_a5(data)
@@ -172,58 +299,15 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
             }
         return {"value": data.hex("-"), "telegram_type": "d5_00_01_4bs_unknown"}
 
-    if eep == "A5-04-01":
-        # FFT60SB: DB2 = humidity 0..100 % encoded 0..250,
-        # DB1 = temperature 0..40 C encoded 0..250.
-        humidity = round(max(0, min(250, db2)) / 250.0 * 100.0, 1)
-        temperature = round(max(0, min(250, db1)) / 250.0 * 40.0, 1)
-        return {
-            "temperature": temperature,
-            "humidity": humidity,
-            "learn": (db0 & 0x08) == 0,
-            "temperature_available": bool(db0 & 0x02),
-            "value": data.hex("-"),
-            "telegram_type": "temperature_humidity_a5_04_01",
-        }
-
-    if eep == "A5-04-02":
-        # FLGTF temperature/humidity profile:
-        # DB2 = humidity 0..100 % encoded 0..250,
-        # DB1 = temperature -20..60 C encoded 0..250.
-        teach_in = data == bytes((0x10, 0x10, 0x0D, 0x87)) or not bool(db0 & 0x08)
-        if teach_in:
-            return {
-                "learn": True,
-                "learn_telegram": True,
-                "data_telegram": False,
-                "configured_eep": eep,
-                "detected_eep": "A5-04-02",
-                "value": data.hex("-"),
-                "telegram_type": "temperature_humidity_a5_04_02_teach_in",
-            }
-        humidity_raw = max(0, min(250, db2))
-        temperature_raw = max(0, min(250, db1))
-        return {
-            "temperature": round(-20.0 + (temperature_raw / 250.0 * 80.0), 1),
-            "humidity": round(humidity_raw / 250.0 * 100.0, 1),
-            "learn": False,
-            "learn_telegram": False,
-            "data_telegram": True,
-            "temperature_available": bool(db0 & 0x02),
-            "temperature_raw_8bit": temperature_raw,
-            "humidity_raw_8bit": humidity_raw,
-            "configured_eep": eep,
-            "detected_eep": "A5-04-02",
-            "value": data.hex("-"),
-            "telegram_type": "temperature_humidity_a5_04_02",
-        }
+    if eep in {"A5-04-01", "A5-04-02", "A5-04-03"}:
+        return decode_a5_04(data, eep)
 
     if eep == "A5-09-04":
         return decode_a5_09_04(data)
 
     if eep == "A5-09-0C":
         # FLGTF / A5-09-0C air quality. Keep the byte layout compatible
-        # with Grimm/eltako14bus:
+        # with the established decoder behavior:
         #   DB3..DB2 = concentration base value,
         #   DB1      = VOC substance type (0 = VOCT Total used by FLGTF),
         #   DB0 bit3 = LRN bit, bit2 = unit, bit1..0 = scale multiplier.
@@ -329,36 +413,53 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
         else:
             movement = bool(db1)
             detection_mode = f"0x{db1:02X}"
+        supply_voltage = round(db3 / 255.0 * 5.1, 2)
         result.update(
             {
                 "movement": movement,
                 "movement_detection_mode": detection_mode,
                 "movement_raw": int(db1),
                 "motion_raw": int(db1),
+                "voltage": supply_voltage,
+                "battery_voltage": supply_voltage,
+                "battery_raw": int(db3),
             }
         )
         return result
 
     if eep == "A5-10-06":
-        # FTR55ESB/FTR55EHB/FTR65... in FHK mode. ELTAKO names
-        # DB2 as setpoint and DB1 as actual temperature. Field tests with
-        # FTR55ESB show DB1 is transmitted inversely: a real room
-        # temperature around 25.8 C appears as about 14.4 C with a direct
-        # DB1*40/255 conversion. Therefore decode the actual temperature
-        # as (255-DB1)*40/255. DB2 maps 0..255 to 0..40 C; the normal
-        # adjustable range is 12..28 C and 8 C represents the frost symbol.
+        # Heating/cooling controller and actuator response.  DB3 contains the
+        # ELTAKO operating mode; DB0 contains controller priority (0x08/0x0A/
+        # 0x0E) or 0x0F for an actuator response.  DB1 is inverted.
         target_temperature = round((db2 / 255.0) * 40.0, 1)
         current_temperature = round(((255 - db1) / 255.0) * 40.0, 1)
-        slide_switch = db0 & 0x01
+        mode_names = {
+            0x70: "normal",
+            0x50: "night_setback",
+            0x30: "setback",
+            0x10: "off",
+            0x00: "unknown",
+        }
+        priority_names = {
+            0x08: "home_automation",
+            0x0A: "limited_thermostat",
+            0x0E: "auto",
+            0x0F: "actuator_response",
+        }
+        mode_name = mode_names.get(db3, f"0x{db3:02X}")
+        priority_name = priority_names.get(db0, f"0x{db0:02X}")
         frost_protection = abs(target_temperature - 8.0) <= 0.2
         return {
             "target_temperature": target_temperature,
             "temperature": current_temperature,
-            "hvac_mode": "heat" if slide_switch else "off",
-            "slide_switch": slide_switch,
+            "hvac_mode": "off" if db3 == 0x10 else "heat",
+            "heater_mode": mode_name,
+            "heater_mode_code": db3,
+            "controller_priority": priority_name,
+            "controller_priority_code": db0,
+            "actuator_response": db0 == 0x0F,
             "frost_protection": frost_protection,
             "setpoint_in_adjustable_range": 12.0 <= target_temperature <= 28.0,
-            "button_action": db0,
             "value": data.hex("-"),
         }
 
@@ -441,7 +542,7 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
 
     if eep == "A5-13-01":
         # Weather station / FWS61 / FWG14MS. This EEP uses two telegram
-        # families distinguished by DB0 high nibble. Grimm/eltako14bus exposes
+        # families distinguished by DB0 high nibble. the established decoder exposes
         # exactly this split: identifier 0x01 for dawn/temperature/wind/rain
         # and identifier 0x02 for sun west/south/east.
         #
@@ -469,7 +570,7 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
         if identifier == 0x01:
             dawn_sensor = (db3 / 255.0) * 999.0
             temperature = -40.0 + (db2 / 255.0 * 120.0)
-            wind_speed = (db1 / 255.0) * 70.0
+            wind_speed = ((db1 / 255.0) * 70.0) * 3.6
             day_night = (db0 & 0x04) >> 2
             rain_indication = (db0 & 0x02) >> 1
             result.update(
@@ -518,7 +619,7 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
     if eep == "M5-38-08":
         return {"state": bool(db0 & 0x01), "value": data.hex("-")}
 
-    if eep == "07-37-F7":
+    if eep in {"07-3F-7F"}:
         # FRGBW14 / FRGBW71L sends and accepts ELTAKO FUNC=38 command 2
         # dimmer telegrams for normal control/status:
         #   DB3 = 0x02, DB2 = dim value 0..100 %, DB1 = speed,
@@ -536,7 +637,7 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
                 "telegram_type": "frgbw_dimmer_status",
             }
 
-        # ELTAKO 07-37-F7 controller telegrams use DB0=0x0F and DB1 as the
+        # ELTAKO 07-3F-7F controller telegrams use DB0=0x0F and DB1 as the
         # component command. DB3/DB2 hold a 10-bit dim value. Expose the single
         # component so the light entity can update partial color feedback.
         if db0 == 0x0F:

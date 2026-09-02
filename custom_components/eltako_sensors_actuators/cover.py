@@ -45,7 +45,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         if isinstance(device, dict) and normalize_platform(device.get("platform")) == "cover"
     ]
     _LOGGER.info(
-        "Eltako cover setup entry=%s imported_devices=%s cover_entities=%s",
+        "ELTAKO cover setup entry=%s imported_devices=%s cover_entities=%s",
         entry.entry_id,
         len(devices) if isinstance(devices, list) else 0,
         len(entities),
@@ -64,7 +64,7 @@ def _configured_travel_time(device: dict[str, Any], key: str, default: float = 2
 
 
 class EltakoCover(EltakoYamlEntity, CoverEntity):
-    """Time-based Eltako cover with one authoritative movement state machine."""
+    """Time-based ELTAKO cover with one authoritative movement state machine."""
 
     _attr_supported_features = (
         _SUPPORT_OPEN | _SUPPORT_CLOSE | _SUPPORT_STOP | _SUPPORT_SET_POSITION
@@ -88,8 +88,17 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
         self._movement_target_position: int | None = None
         self._movement_duration: float | None = None
 
+        # A slider target remains authoritative after its runtime has elapsed.
+        # Repeated actuator direction telegrams must not turn it into an endpoint run.
         self._latched_slider_target: int | None = None
+
+        # After STOP from Home Assistant, some actuators continue repeating their
+        # last direction telegram although the motor is physically stopped. Keep
+        # the stopped position authoritative until a genuinely new operation.
         self._latched_ha_stop_position: int | None = None
+
+        # RPS telegrams immediately after an HA command can be actuator echoes.
+        # Ignore them briefly; later RPS telegrams are treated as external operation.
         self._command_echo_until = 0.0
         self._pending_external_pulse_task: asyncio.Task | None = None
         self._pending_external_pulse_generation = 0
@@ -167,19 +176,32 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
 
     def _handle_cover_pulse(self, pulse: int) -> None:
         now = time.monotonic()
+
+        # RPS telegrams emitted immediately after a Home Assistant command can
+        # be command echoes. They must not replace the HA-owned movement.
         if self._owner is _MotionOwner.HOME_ASSISTANT and now <= self._command_echo_until:
             return
+
+        # Field captures for FSB61/FJ62 show that RPS 0x01/0x02 marks the
+        # beginning of a new physical movement. The following 4BS telegram is
+        # the STOP/status telegram. Therefore an RPS pulse always starts or
+        # restarts external position tracking in its reported direction.
         self._latched_slider_target = None
         self._latched_ha_stop_position = None
         self._cancel_pending_external_pulse()
+
         motion = "opening" if pulse == 0x01 else "closing"
         self._start_external_movement(motion)
 
     def _handle_motion_feedback(self, motion: str) -> None:
         if self._owner is _MotionOwner.HOME_ASSISTANT:
             if motion == "stopped":
+                # The runtime command stopped the actuator. The requested target,
+                # not the last direction telegram, is the authoritative result.
                 self._finish_home_assistant_target()
             else:
+                # Direction feedback only confirms the command. It must never replace
+                # the intermediate target with 0 or 100.
                 self._cancel_pending_external_pulse()
                 self._is_opening = motion == "opening"
                 self._is_closing = motion == "closing"
@@ -187,6 +209,8 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
             return
 
         if self._latched_slider_target is not None:
+            # Actuators may repeat their last direction telegram after stopping.
+            # Keep the completed slider target until a real new RPS pulse or HA command.
             if motion == "stopped":
                 self._position = self._latched_slider_target
                 self._is_closed = self._position == 0
@@ -196,6 +220,9 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
             return
 
         if self._latched_ha_stop_position is not None:
+            # A STOP initiated by Home Assistant is authoritative. FSB/FJ devices
+            # can keep broadcasting their previous direction after the output has
+            # already switched off. Those repeats are status residue, not a new run.
             self._position = self._latched_ha_stop_position
             self._is_closed = self._position == 0
             self._is_opening = False
@@ -210,12 +237,19 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
 
         if self._pending_external_pulse_task is not None:
             previous = self._pending_external_previous_motion
+            # A repeated status in the same direction is the actuator's last known
+            # movement state and must not cancel a pending external STOP.
             if previous == motion:
                 return
+            # Only an opposite direction confirmation represents a real reversal.
             self._cancel_pending_external_pulse()
             self._start_external_movement(motion)
             return
 
+        # Repeated direction feedback while an external movement is already tracked
+        # only confirms the current run. Restarting the timer here would make the HA
+        # slider stand still during travel and begin moving only after the actuator
+        # had physically stopped.
         if self._owner is _MotionOwner.EXTERNAL:
             current_motion = self._current_motion_direction()
             if current_motion == motion:
@@ -305,7 +339,8 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
             else:
                 current = 0
                 _LOGGER.warning(
-                    "Eltako cover %s has no known position; percentage movement starts from 0%%. Drive once fully open or closed to calibrate the estimate.",
+                    "ELTAKO cover %s has no known position; percentage movement starts from 0%%. "
+                    "Drive once fully open or closed to calibrate the estimate.",
                     self.device_config.get("name") or self.device_config.get("id"),
                 )
 
@@ -374,7 +409,14 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
         self._set_idle(clear_latch=False)
         self.async_write_ha_state()
 
-    def _begin_movement(self, *, owner: _MotionOwner, current: float, target: int, duration: float) -> None:
+    def _begin_movement(
+        self,
+        *,
+        owner: _MotionOwner,
+        current: float,
+        target: int,
+        duration: float,
+    ) -> None:
         self._invalidate_movement()
         self._owner = owner
         self._movement_started_at = time.monotonic()
@@ -434,7 +476,12 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
         self._movement_generation += 1
         task = self._movement_task
         self._movement_task = None
-        if cancel_current and task is not None and not task.done() and task is not asyncio.current_task():
+        if (
+            cancel_current
+            and task is not None
+            and not task.done()
+            and task is not asyncio.current_task()
+        ):
             task.cancel()
 
     def _cancel_movement_task(self) -> None:
@@ -462,12 +509,15 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
         return None
 
     async def _async_send_or_raise(self, command: str, **kwargs: Any) -> None:
-        ok = await self.gateway.async_send_actuator_command(self.device_config, command, **kwargs)
+        ok = await self.gateway.async_send_actuator_command(
+            self.device_config, command, **kwargs
+        )
         if not ok:
             detail = getattr(self.gateway, "last_send_error", None)
             suffix = f" Technischer Fehler: {detail}" if detail else ""
             raise HomeAssistantError(
-                "Eltako-Telegramm konnte nicht gesendet werden. Prüfe Gateway-Port, sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
+                "ELTAKO-Telegramm konnte nicht gesendet werden. Prüfe Gateway-Port, "
+                "sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
                 + suffix
             )
 

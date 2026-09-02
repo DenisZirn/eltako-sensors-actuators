@@ -36,9 +36,9 @@ except Exception:  # pragma: no cover
 
 try:
     from homeassistant.const import UnitOfSpeed
-    MPS_UNIT = UnitOfSpeed.METERS_PER_SECOND
+    KPH_UNIT = UnitOfSpeed.KILOMETERS_PER_HOUR
 except Exception:  # pragma: no cover
-    MPS_UNIT = "m/s"
+    KPH_UNIT = "km/h"
 
 try:
     from homeassistant.const import UnitOfIlluminance
@@ -73,6 +73,11 @@ from .entity_base import (
     EltakoYamlEntity,
     _is_flgtf_device,
     _is_ffg7b_device,
+    _is_frwb_device,
+    _f4usm61b_mode,
+    _f4usm61b_physical_unique_id,
+    _is_f4usm61b_device,
+    _is_fae14lpr_device,
     _futh55ed_mode,
     _is_futh55ed_device,
     _flgtf_device_base_id,
@@ -113,12 +118,40 @@ def _is_fbht_device(device: dict[str, Any]) -> bool:
 
 
 
+def _is_fsm60b_mode4(device: dict[str, Any]) -> bool:
+    """Return True for an FSM60B operating-mode-4 A5-30-01 row.
+
+    EEDTOY historically exported some FSM60B rows without device_family and
+    operating_mode.  Prefer the explicit fields, but keep the confirmed
+    A5-30-01 + FSM60B name signature so existing YAML continues to expose the
+    battery value transmitted in every data/status telegram.
+    """
+    if not isinstance(device, dict):
+        return False
+    if normalize_eep(device.get("eep")) != "A5-30-01":
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    family = str(device.get("device_family") or raw.get("device_family") or "").strip().upper()
+    name = str(device.get("name") or raw.get("name") or "").strip().upper()
+    mode_value = device.get("operating_mode")
+    if mode_value in (None, ""):
+        mode_value = raw.get("operating_mode")
+    try:
+        mode = int(mode_value) if mode_value not in (None, "") else None
+    except (TypeError, ValueError):
+        mode = None
+    if family == "FSM60B":
+        return mode in (None, 4)
+    return "FSM60B" in name and mode in (None, 4)
+
+
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     data = {**entry.data, **entry.options}
     gateway = hass.data[DOMAIN][entry.entry_id]
     devices = data.get(CONF_DEVICES) or []
 
     entities: list[SensorEntity] = _gateway_status_entities(gateway)
+    f4usm61b_battery_ids: set[str] = set()
 
     # FLGTF is one physical device that transmits two EEPs from two EnOcean
     # addresses (TVOC on A5-09-0C and temperature/humidity on A5-04-02).
@@ -144,6 +177,35 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         if device.get("id"):
             entities.append(EltakoDeviceAddressSensor(gateway, device))
 
+        # In modes 1, 2, 4, 5 and 7 the F4USM61B battery telegram is sent
+        # separately from the physical sender ID using A5-07-01. EEDTOY
+        # exports that address as physical_unique_id. Create exactly one battery entity
+        # per physical module even though two channel rows may reference it.
+        if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {1, 2, 4, 5, 7}:
+            physical_unique_id = _f4usm61b_physical_unique_id(device)
+            if physical_unique_id and physical_unique_id not in f4usm61b_battery_ids:
+                f4usm61b_battery_ids.add(physical_unique_id)
+                entities.append(EltakoF4USM61BBatterySensor(gateway, device, physical_unique_id))
+
+        # FSM60B operating mode 4 transmits its CR2032 battery level in
+        # every A5-30-01 data and status telegram.
+        if _is_fsm60b_mode4(device):
+            entities.append(
+                EltakoYamlValueSensor(
+                    gateway,
+                    device,
+                    "battery_percentage",
+                    "Batterie",
+                    SensorDeviceClass.BATTERY,
+                    PERCENTAGE,
+                    state_class="measurement",
+                )
+            )
+
+        if _is_fae14lpr_device(device) and eep == "F6-02-01":
+            entities.append(EltakoFAE14LPRModeSensor(gateway, device))
+            continue
+
         if _is_ffg7b_device(device):
             entities.extend(_ffg7b_entities(gateway, device))
             continue
@@ -165,6 +227,18 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             continue
 
         if platform == "binary_sensor":
+            if _is_frwb_device(device):
+                entities.append(
+                    EltakoYamlValueSensor(
+                        gateway,
+                        device,
+                        "temperature",
+                        "Temperatur",
+                        SensorDeviceClass.TEMPERATURE,
+                        UnitOfTemperature.CELSIUS,
+                        state_class="measurement",
+                    )
+                )
             if eep in ("F6-02-01",):
                 entities.extend(_rocker_button_entities(gateway, device))
             elif eep == "D5-00-01":
@@ -191,7 +265,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.extend(_a5_08_01_entities(gateway, device))
         elif eep == "A5-10-06":
             entities.extend(_a5_10_06_entities(gateway, device))
-        elif eep in ("A5-04-01", "A5-04-02"):
+        elif eep in ("A5-04-01", "A5-04-02", "A5-04-03"):
             entities.extend(_a5_04_entities(gateway, device))
         elif eep == "A5-09-0C":
             entities.extend(_a5_09_0c_entities(gateway, device))
@@ -221,6 +295,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_fbh_temperature_entities(hass, entry, devices)
     _remove_obsolete_gateway_path_entities(hass, entry)
     _remove_obsolete_flgtf_last_seen_entities(hass, entry, devices)
+    _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
     _LOGGER.info(
@@ -423,7 +498,7 @@ def _weather_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
         EltakoYamlValueSensor(gateway, device, "sun_south", "Helligkeit Sued", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
         EltakoYamlValueSensor(gateway, device, "sun_east", "Helligkeit Ost", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
         EltakoYamlValueSensor(gateway, device, "temperature", "Temperatur", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS, state_class="measurement"),
-        EltakoYamlValueSensor(gateway, device, "wind_speed", "Windgeschwindigkeit", getattr(SensorDeviceClass, "WIND_SPEED", None), MPS_UNIT, state_class="measurement"),
+        EltakoYamlValueSensor(gateway, device, "wind_speed", "Windgeschwindigkeit", SensorDeviceClass.WIND_SPEED, KPH_UNIT, state_class="measurement"),
         EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
     ]
 
@@ -552,6 +627,37 @@ def _remove_obsolete_fbh_temperature_entities(hass, entry, devices: list[dict[st
             _LOGGER.exception("Failed to remove obsolete FBH temperature entity %s", entity_id)
 
 
+
+def _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove the legacy raw-value FTFSB entity created before A5-04-03 support.
+
+    Temperature, humidity and last-seen entities use stable suffixed unique IDs.
+    The old unsuffixed generic entity only exposed the four raw data bytes and
+    would otherwise remain as an unavailable duplicate after the upgrade.
+    """
+    try:
+        registry = er.async_get(hass)
+    except Exception:
+        return
+
+    obsolete_unique_ids = {
+        f"{DOMAIN}_{entry.entry_id}_{device_key(device)}"
+        for device in devices or []
+        if isinstance(device, dict)
+        and normalize_platform(device.get("platform")) == "sensor"
+        and normalize_eep(device.get("eep")) == "A5-04-03"
+    }
+    for entity_entry in list(registry.entities.values()):
+        unique_id = str(getattr(entity_entry, "unique_id", "") or "")
+        if unique_id not in obsolete_unique_ids:
+            continue
+        try:
+            registry.async_remove(entity_entry.entity_id)
+            _LOGGER.info("Removed obsolete A5-04-03 raw-value entity %s", entity_entry.entity_id)
+        except Exception:
+            _LOGGER.exception("Failed to remove obsolete A5-04-03 entity %s", entity_entry.entity_id)
+
+
 def _meter_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     return [
         EltakoYamlValueSensor(gateway, device, "energy_total", "Zaehlerstand", SensorDeviceClass.ENERGY, KWH_UNIT, state_class="total_increasing"),
@@ -584,6 +690,7 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 def _a5_07_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     return [
         EltakoYamlValueSensor(gateway, device, "movement_detection_mode", "Bewegungserkennung", None, None),
+        EltakoYamlValueSensor(gateway, device, "battery_voltage", "Batteriespannung", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, state_class="measurement"),
         EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
     ]
 
@@ -654,7 +761,6 @@ def _futh55ed_hygrostat_entities(gateway, device: dict[str, Any]) -> list[Sensor
     return [
         EltakoYamlValueSensor(gateway, device, "temperature", "Temperatur", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
         EltakoYamlValueSensor(gateway, device, "humidity", "Luftfeuchtigkeit", SensorDeviceClass.HUMIDITY, PERCENTAGE, state_class="measurement"),
-        EltakoYamlValueSensor(gateway, device, "setpoint_raw", "Sollwert Rohwert", None, None),
         EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
     ]
 
@@ -873,7 +979,7 @@ def _meter_telegram_matches_config(device: dict[str, Any], decoded: dict[str, An
         return False
 
     # Some Series-14 A5-12-01 meters report the default tariff/channel as 0
-    # even when the EEDTOY/Grimm YAML contains meter_tariffs: [1]. Treat 0
+    # even when the older generated YAML contains meter_tariffs: [1]. Treat 0
     # as the default tariff for single-tariff meter devices.
     if channel_int == 0 and configured == {1}:
         return True
@@ -1090,6 +1196,100 @@ class EltakoYamlEnumSensor(EltakoYamlEntity, SensorEntity):
             self._remove_listener()
 
 
+class EltakoF4USM61BBatterySensor(EltakoYamlEntity, SensorEntity):
+    """Battery voltage received from the F4USM61B physical sender ID."""
+
+    def __init__(self, gateway, device: dict[str, Any], physical_unique_id: str) -> None:
+        battery_device = dict(device)
+        battery_device["id"] = physical_unique_id
+        battery_device["eep"] = "A5-07-01"
+        battery_device["platform"] = "sensor"
+        battery_device["name"] = str(device.get("name") or "F4USM61B").split(" Kanal ")[0]
+        super().__init__(gateway, battery_device, suffix="Batteriespannung")
+        self._physical_unique_id = physical_unique_id.upper()
+        self._value = None
+        self._attr_device_class = SensorDeviceClass.VOLTAGE
+        self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+        if SensorStateClass is not None:
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_extra_state_attributes["battery_sender_id"] = self._physical_unique_id
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    @property
+    def native_value(self):
+        return self._value
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != self._physical_unique_id:
+            return
+
+        # Always expose reception diagnostics, including the jumper/E2 learn
+        # telegram.  The learn telegram confirms the physical sender ID but is
+        # not a battery measurement and therefore must not be converted into a
+        # voltage value.
+        self._attr_extra_state_attributes["battery_sender_id"] = self._physical_unique_id
+        self._attr_extra_state_attributes["learn_telegram"] = bool(
+            telegram.decoded.get("learn_telegram")
+        )
+        for key in (
+            "battery_raw",
+            "data_hex",
+            "telegram_type",
+            "last_seen",
+            "configured_eep",
+            "detected_eep",
+        ):
+            if key in telegram.decoded:
+                self._attr_extra_state_attributes[key] = telegram.decoded[key]
+
+        value = telegram.decoded.get("battery_voltage", telegram.decoded.get("voltage"))
+        if value is not None and not telegram.decoded.get("learn_telegram"):
+            self._value = value
+        self.schedule_update_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener:
+            self._remove_listener()
+
+
+
+class EltakoFAE14LPRModeSensor(EltakoYamlEntity, SensorEntity):
+    """Bidirectional operating-mode feedback for one FAE14LPR channel."""
+
+    _attr_icon = "mdi:radiator"
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(gateway, device, suffix="Betriebsart")
+        self._value = None
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    @property
+    def native_value(self):
+        return self._value
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+        mode = telegram.decoded.get("heating_mode")
+        if mode is None:
+            return
+        self._value = telegram.decoded.get("heating_mode_label", mode)
+        for key in (
+            "heating_mode",
+            "button_action",
+            "signal_code",
+            "temperature_reduction",
+            "frost_protection",
+            "last_seen",
+        ):
+            if key in telegram.decoded:
+                self._attr_extra_state_attributes[key] = telegram.decoded[key]
+        self.schedule_update_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener:
+            self._remove_listener()
+
 class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     def __init__(
         self,
@@ -1118,6 +1318,9 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         if device_class == SensorDeviceClass.TEMPERATURE or key in {"temperature", "target_temperature"}:
             self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             self._attr_suggested_unit_of_measurement = UnitOfTemperature.CELSIUS
+        elif device_class == SensorDeviceClass.WIND_SPEED or key == "wind_speed":
+            self._attr_native_unit_of_measurement = KPH_UNIT
+            self._attr_suggested_unit_of_measurement = KPH_UNIT
 
         if state_class and SensorStateClass is not None:
             try:
@@ -1140,6 +1343,24 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
 
         if _is_ffg7b_device(self.device_config):
             enrich_ffg7b_decoded(telegram.decoded)
+
+        if configured_eep in {"A5-04-01", "A5-04-02", "A5-04-03"}:
+            for attr_key in (
+                "configured_eep",
+                "detected_eep",
+                "data_layout",
+                "data_hex",
+                "telegram_type",
+                "event_triggered",
+                "heartbeat",
+                "temperature_raw_8bit",
+                "temperature_raw_10bit",
+                "humidity_raw_8bit",
+            ):
+                if attr_key in telegram.decoded:
+                    self._attr_extra_state_attributes[attr_key] = telegram.decoded[attr_key]
+            if self.key != "last_seen" and telegram.decoded.get("learn_telegram"):
+                return
 
         if configured_eep == "A5-09-04" and self.key != "last_seen":
             verified = _decode_fco2tf65_from_telegram(telegram)
@@ -1197,7 +1418,7 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 if db0_meter_decoded:
                     telegram.decoded.update(db0_meter_decoded)
 
-            # Match Grimm behavior for meter devices: only the configured tariff/channel
+            # Match established behavior for meter devices: only the configured tariff/channel
             # is allowed to update numeric meter entities. A5-12-01 can transmit
             # cumulative energy and current power as separate telegram types.
             if self.key in {"energy_total", "counter"}:

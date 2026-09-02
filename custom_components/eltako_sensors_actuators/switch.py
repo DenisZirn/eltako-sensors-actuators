@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .actuator_feedback import decode_actuator_feedback
 from .const import CONF_DEVICES, DOMAIN
-from .entity_base import EltakoYamlEntity, normalize_platform
+from .entity_base import EltakoYamlEntity, normalize_eep, normalize_platform
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,7 +20,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     entities = [
         EltakoSwitch(gateway, device)
         for device in devices
-        if isinstance(device, dict) and normalize_platform(device.get("platform")) == "switch"
+        if (
+            isinstance(device, dict)
+            and normalize_platform(device.get("platform")) == "switch"
+            and normalize_eep(device.get("eep")) not in ("A5-30-01", "A5-30-03")
+        )
     ]
     _LOGGER.info(
         "ELTAKO switch setup entry=%s imported_devices=%s switch_entities=%s",

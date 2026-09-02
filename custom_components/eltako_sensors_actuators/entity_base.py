@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
@@ -12,7 +13,15 @@ def normalize_platform(value: Any) -> str:
 
 
 def normalize_eep(value: Any) -> str:
-    return str(value or "").strip().upper()
+    """Return the canonical RORG-FUNC-TYPE part from an EEP value.
+
+    EEDTOY exports may append a device suffix, for example
+    ``A5-04-03-FTFSB`` or ``A5-30-01-FSM60B``. Home Assistant routing and
+    decoders must still receive the canonical EEP.
+    """
+    text = str(value or "").strip().upper()
+    match = re.search(r"(?:^|[^0-9A-F])([A-F0-9]{2}-[A-F0-9]{2}-[A-F0-9]{2})(?:$|[^0-9A-F])", text)
+    return match.group(1) if match else text
 
 
 def device_key(device: dict[str, Any]) -> str:
@@ -75,6 +84,106 @@ def _strip_flgtf_suffix(name: str) -> str:
     text = str(name or "FLGTF").strip()
     text = re.sub(r"\s+(TVOC|LUFTGÜTE|LUFTGUETE|TEMPERATUR\s*\+?\s*FEUCHTE|TEMPERATUR|FEUCHTE)$", "", text, flags=re.IGNORECASE)
     return text.strip() or "FLGTF"
+
+
+
+
+def _bool_option(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "ja"}
+    return bool(value)
+
+
+def _is_f4usm61b_device(device: dict[str, Any]) -> bool:
+    """Return True for EEDTOY F4USM61B channel definitions."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    explicit = device.get("device_family") or raw.get("device_family")
+    if str(explicit or "").strip().upper() == "F4USM61B":
+        return True
+    text = " ".join(str(value or "") for value in (device.get("name"), raw.get("name"))).upper()
+    return "F4USM61B" in text
+
+
+
+def _device_family(device: dict[str, Any]) -> str:
+    if not isinstance(device, dict):
+        return ""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    explicit = device.get("device_family") or raw.get("device_family")
+    if explicit:
+        return str(explicit).strip().upper()
+    text = " ".join(str(value or "") for value in (device.get("name"), raw.get("name"))).upper()
+    for family in ("FTS14EM", "FAE14LPR", "F4USM61B"):
+        if family in text:
+            return family
+    return ""
+
+
+def _is_fts14em_device(device: dict[str, Any]) -> bool:
+    return _device_family(device) == "FTS14EM"
+
+
+def _fts14em_inverted(device: dict[str, Any]) -> bool:
+    return _bool_option(_device_option(device, "inverted", _device_option(device, "invert", False)))
+
+
+def _is_fae14lpr_device(device: dict[str, Any]) -> bool:
+    return _device_family(device) == "FAE14LPR"
+
+def _f4usm61b_mode(device: dict[str, Any]) -> int | None:
+    """Return EEDTOY operating_mode 1..8 for F4USM61B."""
+    value = _device_option(device, "operating_mode", None)
+    try:
+        mode = int(value)
+    except (TypeError, ValueError):
+        return None
+    return mode if 1 <= mode <= 8 else None
+
+
+def _f4usm61b_inverted(device: dict[str, Any]) -> bool:
+    """F4USM61B inversion is encoded by operating_mode, never generically."""
+    return False
+
+
+def _f4usm61b_physical_unique_id(device: dict[str, Any]) -> str | None:
+    """Return the physical F4USM61B sender ID used for battery telegrams."""
+    value = _device_option(device, "physical_unique_id", None)
+    text = str(value or "").strip().upper()
+    return text or None
+
+def _f4usm61b_base_id(device: dict[str, Any]) -> str | None:
+    """Return the common configured Base-ID for all F4USM61B modes."""
+    value = _device_option(device, "base_id", None)
+    text = str(value or "").strip().upper()
+    return text or None
+
+def _is_frwb_device(device: dict[str, Any]) -> bool:
+    """Return True only for an FRWB configured with EEP A5-30-03.
+
+    FRWB and FSM60B BA3 share A5-30-03.  They must therefore be separated by
+    the configured device designation, never by changing the EEP globally.
+    """
+    if not isinstance(device, dict) or normalize_eep(device.get("eep")) != "A5-30-03":
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("eltako"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("eltako"),
+        )
+    ).upper()
+    return "FRWB" in text
 
 
 def _is_flgtf_device(device: dict[str, Any]) -> bool:
@@ -234,6 +343,36 @@ class EltakoBaseEntity(Entity):
                 name = _strip_flgtf_suffix(name)
                 model = "FLGTF (A5-09-0C + A5-04-02)"
 
+            # EEDTOY exports one YAML row per FTS14EM input.  All rows with the
+            # same Base-ID belong to one physical FTS14EM device.  Use the
+            # explicit EEDTOY metadata for the Home Assistant device name so
+            # installations with several ID ranges remain distinguishable.
+            if _is_fts14em_device(self.device_config):
+                base_id = str(_device_option(self.device_config, "base_id", "") or "").strip().upper()
+                mode = str(_device_option(self.device_config, "operating_mode", "UT") or "UT").strip().upper()
+                id_range = str(_device_option(self.device_config, "id_range", "") or "").strip()
+                common_id = base_id or id_range or device_id
+                device_id = f"FTS14EM_{common_id}"
+                name_parts = ["FTS14EM", mode]
+                if id_range:
+                    name_parts.append(id_range)
+                name = " ".join(name_parts)
+                model = f"FTS14EM {mode}"
+
+            # All F4USM61B channel IDs and the separate physical battery sender ID
+            # belong to one physical module in Home Assistant.
+            if _is_f4usm61b_device(self.device_config):
+                mode = _f4usm61b_mode(self.device_config)
+                common_id = (
+                    _f4usm61b_physical_unique_id(self.device_config)
+                    if mode in {1, 2, 4, 5, 7}
+                    else _f4usm61b_base_id(self.device_config)
+                )
+                if common_id:
+                    device_id = f"F4USM61B_{common_id}"
+                name = name.split(" Kanal ")[0].strip() or "F4USM61B"
+                model = "F4USM61B"
+
             return DeviceInfo(
                 identifiers={(DOMAIN, self.gateway.entry_id, device_id)},
                 manufacturer="ELTAKO",
@@ -286,6 +425,16 @@ class EltakoYamlEntity(EltakoBaseEntity):
             "gateway": device.get("gateway"),
         }
         for option in (
+            "device_family",
+            "unique_id",
+            "operating_mode",
+            "base_id",
+            "id_range",
+            "input_number",
+            "inverted",
+            "id_count",
+            "id_offset_start",
+            "channel_count",
             "room_controller_mode",
             "hysteresis",
             "min_target_temperature",

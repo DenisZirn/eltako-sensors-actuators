@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .bus.eep_a5_04 import decode_a5_04, decode_a5_04_02, decode_a5_04_03
 from .bus.eep_a5_09_04 import decode_a5_09_04
 from .bus.eep_a5_10_12 import decode_a5_10_12
 from .bus.eep_a5_20_04 import decode_a5_20_04_controller_telegram
@@ -15,6 +16,17 @@ class ParsedValue:
     value: Any
     device_class: str | None = None
     unit: str | None = None
+
+
+def parse_f6_01_01(data: bytes) -> dict[str, Any]:
+    if not data:
+        raise ValueError("F6-01-01 expects at least one data byte")
+    raw = data[0]
+    if raw == 0x10:
+        return {"raw": raw, "presence": True, "pressed": True}
+    if raw == 0x00:
+        return {"raw": raw, "presence": False, "pressed": False}
+    return {"raw": raw}
 
 
 def parse_f6_02_01(data: bytes) -> dict[str, Any]:
@@ -52,18 +64,11 @@ def parse_d5_00_01(data: bytes) -> dict[str, Any]:
 
 
 def parse_a5_04_02(data: bytes) -> dict[str, Any]:
-    if len(data) < 4:
-        raise ValueError(f"A5-04-02 expects 4 data bytes, got {len(data)}")
-    db3, db2, db1, db0 = data[:4]
-    if bytes(data[:4]) == bytes((0x10, 0x10, 0x0D, 0x87)) or not bool(db0 & 0x08):
-        return {"learn": True, "learn_telegram": True, "raw": [db3, db2, db1, db0]}
-    return {
-        "humidity": round(max(0, min(250, db2)) / 250.0 * 100.0, 1),
-        "temperature": round(-20.0 + (max(0, min(250, db1)) / 250.0 * 80.0), 1),
-        "temperature_available": bool(db0 & 0x02),
-        "learn": False,
-        "raw": [db3, db2, db1, db0],
-    }
+    return decode_a5_04_02(bytes(data[:4]))
+
+
+def parse_a5_04_03(data: bytes) -> dict[str, Any]:
+    return decode_a5_04_03(bytes(data[:4]))
 
 
 
@@ -142,12 +147,16 @@ def parse_a5_07_01(data: bytes) -> dict[str, Any]:
     else:
         movement = bool(db1)
         mode = f"0x{db1:02X}"
+    supply_voltage = round(db3 / 255.0 * 5.1, 2)
     result = {
         "learn": learn,
         "movement": movement,
         "motion": movement,
         "movement_detection_mode": mode,
         "movement_raw": db1,
+        "voltage": supply_voltage,
+        "battery_voltage": supply_voltage,
+        "battery_raw": db3,
         "raw": [db3, db2, db1, db0],
     }
     if learn:
@@ -209,7 +218,7 @@ def parse_a5_13_01(data: bytes) -> dict[str, Any]:
         result.update({
             "dawn_sensor": dawn,
             "temperature": round(-40.0 + (db2 / 255.0 * 120.0), 1),
-            "wind_speed": round((db1 / 255.0) * 70.0, 2),
+            "wind_speed": round(((db1 / 255.0) * 70.0) * 3.6, 2),
             "rain": bool((db0 & 0x02) >> 1),
             "rain_indication": bool((db0 & 0x02) >> 1),
         })
@@ -223,11 +232,13 @@ def parse_a5_13_01(data: bytes) -> dict[str, Any]:
 
 
 PARSERS: dict[str, Callable[[bytes], dict[str, Any]]] = {
+    "F6-01-01": parse_f6_01_01,
     "F6-02-01": parse_f6_02_01,
     "F6-10-00": parse_f6_10_00,
     "A5-14-09": parse_a5_14_09,
     "D5-00-01": parse_d5_00_01,
     "A5-04-02": parse_a5_04_02,
+    "A5-04-03": parse_a5_04_03,
     "A5-09-0C": parse_a5_09_0c,
     "A5-09-04": parse_a5_09_04,
     "A5-20-01": parse_a5_20_01,

@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - HA version dependent
 
 from .const import (
     CONF_CONNECTION_KIND,
+    CONF_DIAGNOSTICS_ENABLED,
     CONF_DEVICES,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
@@ -431,7 +432,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["connection", "yaml"],
+            menu_options=["connection", "yaml", "diagnostics"],
         )
 
     def _current_data(self) -> dict[str, Any]:
@@ -455,6 +456,31 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             title="ELTAKO Sensors & Actuators",
             notification_id=f"{DOMAIN}_yaml_saved_{self.config_entry.entry_id}",
         )
+
+
+    async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Configure the global diagnostics sidebar panel."""
+        current_enabled = bool(self._current_data().get(CONF_DIAGNOSTICS_ENABLED, True))
+
+        if user_input is not None:
+            enabled = bool(user_input.get(CONF_DIAGNOSTICS_ENABLED, False))
+            # Keep this setting global across all configured ELTAKO gateways.
+            for entry in self.hass.config_entries.async_entries(DOMAIN):
+                options = dict(entry.options)
+                options[CONF_DIAGNOSTICS_ENABLED] = enabled
+                self.hass.config_entries.async_update_entry(entry, options=options)
+
+            from .diagnostics import async_set_diagnostics_enabled
+            await async_set_diagnostics_enabled(self.hass, enabled)
+            return self.async_create_entry(
+                title="",
+                data=self._merged_options({CONF_DIAGNOSTICS_ENABLED: enabled}),
+            )
+
+        schema = vol.Schema(
+            {vol.Required(CONF_DIAGNOSTICS_ENABLED, default=current_enabled): bool}
+        )
+        return self.async_show_form(step_id="diagnostics", data_schema=schema)
 
     async def async_step_connection(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}

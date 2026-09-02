@@ -51,3 +51,5 @@ SERVICE_PROBE_GATEWAY = "probe_gateway"
 SERVICE_RELOAD_CONFIG = "reload_config"
 
 CONF_RELOAD_AFTER_SAVE = "reload_after_save"
+
+CONF_DIAGNOSTICS_ENABLED = "diagnostics_enabled"

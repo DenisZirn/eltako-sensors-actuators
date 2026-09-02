@@ -5,12 +5,12 @@
     "@DenisZEltako"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/DenisZEltako/eltako-sensors-actuators",
   "integration_type": "hub",
   "iot_class": "local_push",
   "requirements": [
     "pyserial"
   ],
-  "version": "0.1.155",
-  "issue_tracker": "https://github.com/DenisZEltako/eltako-sensors-actuators/issues"
+  "version": "0.1.156",
+  "documentation": "https://github.com/DenisZirn/eltako-sensors-actuators",
+  "issue_tracker": "https://github.com/DenisZirn/eltako-sensors-actuators/issues"
 }

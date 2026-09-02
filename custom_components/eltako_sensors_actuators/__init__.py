@@ -21,8 +21,20 @@ from .const import (
 )
 from .gateway import EltakoGateway
 from .entity_base import gateway_device_name, gateway_model
+from .diagnostics import async_set_diagnostics_enabled, async_setup_diagnostics, diagnostic_event
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up integration-wide services that must not block gateway entries."""
+    try:
+        await async_setup_diagnostics(hass)
+    except Exception:
+        _LOGGER.exception(
+            "ELTAKO diagnostics panel setup failed; continuing without the panel"
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -46,6 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         selected_gateway=data.get(CONF_SELECTED_YAML_GATEWAY) if isinstance(data.get(CONF_SELECTED_YAML_GATEWAY), dict) else None,
     )
 
+    diagnostic_event(hass, "config_entry_setup", entry_id=entry.entry_id, gateway_type=data.get(CONF_GATEWAY_TYPE), port=data.get(CONF_PORT))
     await gateway.async_start()
     _async_ensure_gateway_device(hass, entry, gateway)
 
@@ -66,7 +79,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Honor only an explicit legacy reload request and prevent reload loops."""
+    """Apply global diagnostics changes and honor only explicit reload requests."""
+    from .const import CONF_DIAGNOSTICS_ENABLED
+
+    enabled = any(
+        bool(current.options.get(CONF_DIAGNOSTICS_ENABLED, True))
+        for current in hass.config_entries.async_entries(DOMAIN)
+    )
+    await async_set_diagnostics_enabled(hass, enabled)
+
     if not entry.options.get(CONF_RELOAD_AFTER_SAVE):
         _LOGGER.debug("ELTAKO options updated without reload request for entry %s", entry.entry_id)
         return
@@ -84,6 +105,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     gateway: EltakoGateway | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if gateway is not None:
+        diagnostic_event(hass, "config_entry_unload", entry_id=entry.entry_id, gateway_type=gateway.gateway_type, port=gateway.port)
         await gateway.async_stop()
 
     return unload_ok

@@ -26,17 +26,22 @@ def decode_a5_10_12(data: bytes | bytearray | Iterable[int]) -> dict[str, Any]:
         result["teach_in_query_data"] = raw
         return result
 
-    # EEP A5-10-12: DB3 humidity, DB2 set point (0..255),
-    # DB1 inverse actual temperature 0..40 C. The set point is deliberately
-    # kept as its standardized raw value because ELTAKO does not define an
-    # absolute Celsius conversion for this FUTH55ED operating mode here.
+    # ELTAKO FUTH55/FUTH55ED Hygrostat telegram (A5-10-12):
+    # DB3 = setpoint raw value
+    # DB2 = relative humidity, 0..250 -> 0..100 %
+    # DB1 = actual room temperature, 0..250 -> 0..40 °C
+    # DB0 = status / learn bit
+    #
+    # This byte assignment is intentionally device-specific. Treating DB3 as
+    # humidity and DB1 as inverse temperature produces implausible values for
+    # the FUTH55 (for example about 35 °C and 68 % in a 28 °C / 56 % room).
     result.update(
         {
-            "humidity": round(max(0, min(250, db3)) / 250.0 * 100.0, 1),
-            "setpoint_raw": int(db2),
-            "temperature": round(((255 - db1) / 255.0) * 40.0, 1),
-            "db3_humidity_raw": int(db3),
-            "db2_setpoint_raw": int(db2),
+            "temperature": round((min(db1, 250) / 250.0) * 40.0, 1),
+            "humidity": round((min(db2, 250) / 250.0) * 100.0, 1),
+            "setpoint_raw": int(db3),
+            "db3_setpoint_raw": int(db3),
+            "db2_humidity_raw": int(db2),
             "db1_temperature_raw": int(db1),
             "db0_status_raw": int(db0),
         }

@@ -25,18 +25,14 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     entities: list[ButtonEntity] = [EltakoReconnectGatewayButton(gateway)]
     teach_in_count = 0
     seen_teach_in_keys: set[str] = set()
-    gateway_type = str(getattr(gateway, "gateway_type", "") or "").strip().lower()
     for device in devices:
         if not _supports_teach_in_button(device):
             continue
-        if _is_rgbw_device(device):
-            # FRGBW14 is a Series-14 bus actuator behind FAM14/FGW14-USB.
-            # It is not learned by radio from Home Assistant; the YAML must
-            # contain the Home Assistant sender id and PCT14/the bus setup
-            # handles the sender assignment. Only wireless FRGBW71L
-            # on FAM-USB get the free-profile learn button.
-            if gateway_type != "fam-usb":
-                continue
+        if _is_frgbw14_device(device):
+            # FRGBW14 is a Series-14 bus actuator. Its controller/sensor
+            # relation is configured in the actuator/PCT14 and must not be
+            # represented by a radio teach-in button in Home Assistant.
+            continue
         key = _teach_in_group_key(device)
         if key in seen_teach_in_keys:
             continue
@@ -95,13 +91,30 @@ def _is_rgbw_device(device: dict[str, Any]) -> bool:
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
     raw_text = " ".join(str(raw.get(k) or "") for k in ("name", "device_type", "comment", "model")).upper()
     return (
-        eep == "07-37-F7"
-        or sender_eep == "07-37-F7"
+        eep in {"07-3F-7F"}
+        or sender_eep in {"07-3F-7F"}
         or "FRGBW14" in name
         or "FRGBW71" in name
         or "FRGBW14" in raw_text
         or "FRGBW71" in raw_text
     )
+
+
+def _is_frgbw14_device(device: dict[str, Any]) -> bool:
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("comment"),
+        )
+    ).upper()
+    return "FRGBW14" in text and "FRGBW71" not in text
 
 
 def _strip_channel_suffix(name: str) -> str:
@@ -173,8 +186,8 @@ def _normalize_rgbw_device_for_teach_in(device: dict[str, Any]) -> dict[str, Any
     normalized["name"] = base_name
     if base_id:
         normalized["id"] = base_id
-    normalized["eep"] = "07-37-F7"
-    normalized["sender_eep"] = "07-37-F7"
+    normalized["eep"] = "07-3F-7F"
+    normalized["sender_eep"] = "07-3F-7F"
     raw = normalized.get("raw") if isinstance(normalized.get("raw"), dict) else {}
     raw = dict(raw)
     raw["logical_channels"] = 1

@@ -99,8 +99,8 @@ def _is_rgbw_device(device: dict[str, Any]) -> bool:
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
     raw_text = " ".join(str(raw.get(k) or "") for k in ("name", "device_type", "comment")).upper()
     return (
-        eep == "07-37-F7"
-        or sender_eep == "07-37-F7"
+        eep in {"07-3F-7F"}
+        or sender_eep in {"07-3F-7F"}
         or "FRGBW14" in name
         or "FRGBW71" in name
         or "FRGBW14" in raw_text
@@ -130,11 +130,11 @@ def _normalize_rgbw_device(device: dict[str, Any]) -> dict[str, Any]:
     import re
     name = re.sub(r"\s*\((?:\d+)\s*/\s*(?:\d+)\)\s*$", "", name)
     normalized["name"] = name
-    normalized["eep"] = "07-37-F7"
+    normalized["eep"] = "07-3F-7F"
     # Older generated YAML may still have sender.eep A5-38-08 for older configurations
     # compatibility. For this integration the FRGBW command builder uses the
     # sender address but generates the vendor RGBW profile internally.
-    normalized["sender_eep"] = "07-37-F7"
+    normalized["sender_eep"] = "07-3F-7F"
     raw = dict(raw)
     raw["logical_channels"] = 1
     raw["ha_color_control"] = "rgbw"
@@ -295,7 +295,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         self._effect = None
         eep = normalize_eep(device.get("eep"))
         if _is_rgbw_device(device):
-            # v0.1.86: FRGBW14 and FRGBW71L share the 07-37-F7 runtime color
+            # v0.1.86: FRGBW14 and FRGBW71L share the 07-3F-7F runtime color
             # path. FRGBW71L learns by free-profile radio teach-in; FRGBW14
             # uses the sender.id from YAML/PCT14 on the Series-14 bus. Home Assistant is exposed as RGB
             # light because GFA5 represents white as R=G=B=100%, not as command
@@ -416,7 +416,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             detail = getattr(self.gateway, "last_send_error", None)
             suffix = f" Technischer Fehler: {detail}" if detail else ""
             raise HomeAssistantError(
-                "Eltako-Telegramm konnte nicht gesendet werden. Pruefe Gateway-Port, sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
+                "ELTAKO-Telegramm konnte nicht gesendet werden. Pruefe Gateway-Port, sender.id/sender.eep im YAML und ob der Aktor die Sender-ID angelernt hat."
                 + suffix
             )
         if command == "turn_on":

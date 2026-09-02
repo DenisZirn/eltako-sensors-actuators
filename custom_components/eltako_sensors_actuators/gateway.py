@@ -10,8 +10,9 @@ from typing import Any
 from pathlib import Path
 
 from .bus.decoder import decode_esp2_message
-from .bus.eep_07_37_f7 import build_07_37_f7_color_learn_messages, build_07_37_f7_confirmation_request_messages, build_07_37_f7_off_messages, build_07_37_f7_rgbw_messages
-from .bus.eep_a5_10_06 import build_a5_10_06_room_control
+from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
+from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
+from .bus.eep_series14 import build_series14_switch_command
 from .bus.eep_a5_20_01 import (
     build_a5_20_01_teach_in_response,
     build_a5_20_01_temperature_setpoint,
@@ -24,6 +25,9 @@ from .bus.esp2 import ESP2Message, ORG_4BS, ORG_RPS, build_regular_4bs
 from .bus.exceptions import UnsupportedCommandError
 from .bus.ids import format_address, parse_address
 from .bus.transport import SerialTransport
+from .diagnostics import diagnostic_event
+from .entity_base import normalize_eep
+from .entity_base import _f4usm61b_mode, _f4usm61b_physical_unique_id, _is_f4usm61b_device
 from .const import (
     GATEWAY_TYPE_AUTO,
     GATEWAY_TYPE_FAM14,
@@ -640,6 +644,32 @@ class GatewayProbeResult:
     message: str
 
 
+def _effective_gateway_type(
+    configured_gateway_type: str,
+    selected_gateway: dict[str, Any] | None,
+) -> str:
+    """Resolve ``auto`` from the EEDTOY gateway block selected by the user.
+
+    A config entry can remain set to automatic while the imported YAML already
+    identifies its physical gateway as FAM14, FGW14-USB or FAM-USB. Ignoring
+    that information prevents the stable serial-port resolver from running and
+    can make successful OS writes go to an unrelated USB adapter.
+    """
+    configured = str(configured_gateway_type or "").strip().lower()
+    if configured != GATEWAY_TYPE_AUTO:
+        return configured
+
+    selected = selected_gateway if isinstance(selected_gateway, dict) else {}
+    selected_type = str(selected.get("device_type") or "").strip().lower()
+    if selected_type in {
+        GATEWAY_TYPE_FAM14,
+        GATEWAY_TYPE_FGW14USB,
+        GATEWAY_TYPE_FAM_USB,
+    }:
+        return selected_type
+    return GATEWAY_TYPE_AUTO
+
+
 def _is_fbht_device_config(device: dict[str, Any] | None) -> bool:
     """Identify FBHT55ESB without confusing it with the FBH55ESB variant."""
     if not isinstance(device, dict):
@@ -664,8 +694,8 @@ class EltakoGateway:
         self.entry_id = entry_id
         self.port = port
         self.configured_gateway_type = gateway_type
-        self.gateway_type = gateway_type
         selected_gateway_data = dict(selected_gateway or {})
+        self.gateway_type = _effective_gateway_type(gateway_type, selected_gateway_data)
         self.base_id = base_id or selected_gateway_data.get("base_id")
         self.probe_result: GatewayProbeResult | None = None
         self._listeners: list[Callable[[EltakoTelegram], None]] = []
@@ -678,14 +708,15 @@ class EltakoGateway:
         self._devices: list[dict[str, Any]] = list(devices or [])
         self.selected_gateway: dict[str, Any] = selected_gateway_data
         self.auto_connect_enabled = True
-        self.message_delay = 0.10 if gateway_type == GATEWAY_TYPE_FAM_USB else (0.001 if gateway_type == GATEWAY_TYPE_FAM14 else 0.01)
-        self.baudrate = 9600 if gateway_type == GATEWAY_TYPE_FAM_USB else 57600
+        self.message_delay = 0.10 if self.gateway_type == GATEWAY_TYPE_FAM_USB else (0.001 if self.gateway_type == GATEWAY_TYPE_FAM14 else 0.01)
+        self.baudrate = 9600 if self.gateway_type == GATEWAY_TYPE_FAM_USB else 57600
         self.usb_protocol = "ESP2"
         self._last_message_received: str | None = None
         self._device_lookup: dict[str, dict[str, Any]] = {}
         self._fks_sv_physical_lookup: dict[str, dict[str, Any]] = {}
         self._fks_sv_controller_lookup: dict[str, dict[str, Any]] = {}
         self._fks_sv_reply_locks: dict[str, asyncio.Lock] = {}
+        self._send_lock = asyncio.Lock()
         self._status_sequence = 0
         self.port_descriptor: dict[str, str | None] = {}
         self.usb_serial: str | None = None
@@ -696,6 +727,7 @@ class EltakoGateway:
 
     async def async_start(self) -> None:
         _LOGGER.info("Starting ELTAKO gateway on %s", self.port)
+        diagnostic_event(self.hass, "gateway_start", entry_id=self.entry_id, gateway_type=self.gateway_type, gateway=self.gateway_type, port=self.port, base_id=self.base_id)
         await self.async_probe()
         # Open the serial transport before HA creates the status entities.
         # Otherwise the gateway device can appear as disconnected until a first
@@ -710,6 +742,7 @@ class EltakoGateway:
 
     async def async_stop(self) -> None:
         _LOGGER.info("Stopping ELTAKO gateway on %s", self.port)
+        diagnostic_event(self.hass, "gateway_stop", entry_id=self.entry_id, gateway_type=self.gateway_type, gateway=self.gateway_type, port=self.port)
         self._stopped.set()
 
         if self._transport is not None:
@@ -727,11 +760,20 @@ class EltakoGateway:
 
     async def async_probe(self) -> GatewayProbeResult:
         """Detect gateway class from path/descriptor without external bus dependencies."""
-        resolved_port = await self.hass.async_add_executor_job(_resolve_gateway_serial_port, self.port, self.configured_gateway_type, self.selected_gateway)
+        effective_gateway_type = _effective_gateway_type(
+            self.configured_gateway_type,
+            self.selected_gateway,
+        )
+        resolved_port = await self.hass.async_add_executor_job(
+            _resolve_gateway_serial_port,
+            self.port,
+            effective_gateway_type,
+            self.selected_gateway,
+        )
         if resolved_port != self.port:
             _LOGGER.info(
                 "ELTAKO gateway serial port auto-resolved: gateway_type=%s old=%s new=%s",
-                self.configured_gateway_type,
+                effective_gateway_type,
                 self.port,
                 resolved_port,
             )
@@ -742,7 +784,7 @@ class EltakoGateway:
         result = await self.hass.async_add_executor_job(
             _probe_gateway_sync,
             self.port,
-            self.configured_gateway_type,
+            effective_gateway_type,
         )
         self.probe_result = result
 
@@ -762,6 +804,27 @@ class EltakoGateway:
             )
         else:
             _LOGGER.warning("ELTAKO gateway probe failed on %s: %s", self.port, result.message)
+
+        diagnostic_event(
+            self.hass,
+            "gateway_probe",
+            entry_id=self.entry_id,
+            configured_gateway_type=self.configured_gateway_type,
+            selected_gateway_type=(self.selected_gateway or {}).get("device_type"),
+            effective_gateway_type=effective_gateway_type,
+            detected_gateway_type=result.detected_gateway_type,
+            gateway=self.gateway_type,
+            port=self.port,
+            stable_serial_path=self.stable_serial_path,
+            current_devname=self.current_devname,
+            usb_serial=self.usb_serial,
+            usb_interface=self.usb_interface,
+            baudrate=9600 if self.gateway_type == GATEWAY_TYPE_FAM_USB else 57600,
+            transport=result.transport,
+            ok=result.ok,
+            message=result.message,
+            base_id=self.base_id,
+        )
 
         return result
 
@@ -805,13 +868,28 @@ class EltakoGateway:
             for address in _candidate_addresses_for_device(device):
                 lookup[address.upper()] = device
 
+            # F4USM61B modes 1, 2, 4, 5 and 7 transmit the approximately
+            # daily battery status from the physical Unique-ID using A5-07-01,
+            # while their normal channel telegrams use Base-ID+1/+2. Register
+            # a synthetic routing definition so that this separate sender is
+            # decoded as A5-07-01 without altering either channel definition.
+            if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {1, 2, 4, 5, 7}:
+                physical_unique_id = _f4usm61b_physical_unique_id(device)
+                if physical_unique_id:
+                    battery_device = dict(device)
+                    battery_device["id"] = physical_unique_id
+                    battery_device["eep"] = "A5-07-01"
+                    battery_device["platform"] = "sensor"
+                    battery_device["f4usm61b_battery_sender"] = True
+                    lookup.setdefault(physical_unique_id.upper(), battery_device)
+
             if not _is_fks_sv_device(device):
                 continue
 
-            physical_id = _normalized_address_or_none(device.get("id"))
+            physical_unique_id = _normalized_address_or_none(device.get("id"))
             configured_sender = _normalized_address_or_none(_get_sender_id(device))
-            if physical_id:
-                fks_physical[physical_id] = device
+            if physical_unique_id:
+                fks_physical[physical_unique_id] = device
             if configured_sender:
                 other_owner = reserved_by_other_devices.get(configured_sender)
                 if other_owner:
@@ -838,7 +916,7 @@ class EltakoGateway:
                 group = str(group_value).strip() if group_value not in (None, "") else None
                 allow_shared = bool(_device_raw_option(device, "allow_shared_sender", False))
                 previous = effective_allocations.get(effective_sender)
-                if previous is not None and previous[0] != physical_id:
+                if previous is not None and previous[0] != physical_unique_id:
                     previous_physical, previous_group, previous_shared = previous
                     shared_group_ok = (
                         allow_shared
@@ -849,10 +927,10 @@ class EltakoGateway:
                     if not shared_group_ok:
                         raise ValueError(
                             f"FKS-SV Controller-ID-Kollision im Gateway-Bereich: {effective_sender} "
-                            f"fuer {previous_physical} und {physical_id}"
+                            f"fuer {previous_physical} und {physical_unique_id}"
                         )
                 else:
-                    effective_allocations[effective_sender] = (physical_id or "", group, allow_shared)
+                    effective_allocations[effective_sender] = (physical_unique_id or "", group, allow_shared)
                 fks_controller[effective_sender] = device
 
         self._device_lookup = lookup
@@ -879,6 +957,17 @@ class EltakoGateway:
         physical_sender_id, preliminary = decode_esp2_message(msg, None)
         physical_key = physical_sender_id.upper()
 
+        # Always initialize all routing variables before the device-specific
+        # branches below. A transmitted telegram can be received immediately
+        # as an echo while a Home Assistant service call is still waiting for
+        # the serial send operation. The receive callback must never fail with
+        # an unbound local variable and thereby turn a successful TX into a
+        # failed light/cover service call.
+        decoded: dict[str, Any] = dict(preliminary or {})
+        logical_sender_id = physical_sender_id
+        eep: str | None = None
+        device: dict[str, Any] | None = None
+
         # A5-20-01 uses different DB2 meanings in each direction. Detect a
         # mirrored controller telegram before the generic lookup maps it back
         # onto the physical valve. The logical sender remains the controller ID
@@ -894,8 +983,16 @@ class EltakoGateway:
             logical_sender_id = physical_sender_id
             eep = None
             if device is not None:
-                logical_sender_id = str(device.get("id") or physical_sender_id).upper()
-                eep = str(device.get("eep") or "").upper() or None
+                # F4USM61B channel telegrams must stay bound to the physical
+                # sender address (Base-ID+1 / Base-ID+2).  ``physical_unique_id`` is
+                # only the common physical module ID for device grouping and
+                # the separate battery telegram; it must never collapse both
+                # channels onto one logical sender.
+                if _is_f4usm61b_device(device):
+                    logical_sender_id = physical_sender_id
+                else:
+                    logical_sender_id = str(device.get("id") or physical_sender_id).upper()
+                eep = normalize_eep(device.get("eep")) or None
 
             mode = _futh55ed_mode(device) if device is not None else ""
             if eep == "A5-20-01":
@@ -971,6 +1068,7 @@ class EltakoGateway:
         decoded.setdefault("logical_sender_id", logical_sender_id)
         if device is not None:
             decoded.setdefault("device_name", device.get("name"))
+            _normalize_device_specific_decoded(device, decoded)
 
         self._last_message_received = decoded.get("last_seen") or datetime.now(timezone.utc).isoformat()
         telegram = EltakoTelegram(
@@ -1052,6 +1150,19 @@ class EltakoGateway:
 
     def _dispatch(self, telegram: EltakoTelegram) -> None:
         self._last_telegram = telegram
+        if telegram.sender_id != "__gateway_status__":
+            diagnostic_event(
+                self.hass,
+                "telegram_received",
+                level="debug",
+                entry_id=self.entry_id,
+                gateway=self.gateway_type,
+                port=self.port,
+                sender_id=telegram.sender_id,
+                eep=telegram.eep,
+                raw=telegram.raw,
+                decoded=telegram.decoded,
+            )
         for listener in list(self._listeners):
             listener(telegram)
 
@@ -1240,59 +1351,182 @@ class EltakoGateway:
 
         self._last_send_error = None
         messages = msg if isinstance(msg, (list, tuple)) else [msg]
-        for attempt in (1, 2):
-            try:
-                await self._async_ensure_transport()
-                frames: list[bytes] = []
-                for one_msg in messages:
-                    frames.append(await self._async_send_esp2_message(one_msg))
-                _LOGGER.info(
-                    "ELTAKO command sent: command=%s device_id=%s eep=%s sender_id=%s sender_eep=%s gateway_type=%s base_id=%s port=%s baudrate=%s frames=%s attempt=%s",
-                    command,
-                    device.get("id"),
-                    device.get("eep"),
-                    device.get("sender_id"),
-                    device.get("sender_eep"),
-                    self.gateway_type,
-                    self.base_id,
-                    self.port,
-                    self.baudrate,
-                    [frame.hex("-") for frame in frames],
-                    attempt,
+        payloads: list[str] = []
+        effective_sender_ids: list[str] = []
+        for one_msg in messages:
+            body = one_msg.body if isinstance(one_msg, ESP2Message) else None
+            if body is None and isinstance(one_msg, (bytes, bytearray)):
+                raw_frame = bytes(one_msg)
+                if len(raw_frame) == 14 and raw_frame.startswith(b"\xA5\x5A"):
+                    body = raw_frame[2:13]
+            if body is not None and len(body) == 11:
+                payloads.append(bytes(body[2:6]).hex("-").upper())
+                effective_sender_ids.append(format_address(bytes(body[6:10])))
+        model_text = " ".join(
+            str(device.get(key) or "")
+            for key in ("type", "model", "name", "description")
+        ).upper()
+        is_frgbw14 = _is_frgbw14_device_config(device)
+        frgbw_frame_code = "6B" if is_frgbw14 else None
+        is_fhk = (
+            str(device.get("eep") or "").strip().upper() == "A5-10-06"
+            or str(device.get("sender_eep") or "").strip().upper() == "A5-10-06"
+        )
+        protocol_role = (
+            "frgbw_controller_command"
+            if is_frgbw14
+            else (
+                (
+                    "fhk_rps_mode_command"
+                    if command in {"set_hvac_mode", "set_preset_mode"}
+                    else "fhk_a5_10_06_setpoint_command"
                 )
-                return True
-            except Exception as err:
-                self._last_send_error = str(err) or err.__class__.__name__
-                _LOGGER.warning(
-                    "ELTAKO command send attempt failed: command=%s device_id=%s port=%s gateway_type=%s attempt=%s error=%s",
-                    command,
-                    device.get("id"),
-                    self.port,
-                    self.gateway_type,
-                    attempt,
-                    self._last_send_error,
-                )
-                if self._transport is not None:
-                    try:
-                        await self.hass.async_add_executor_job(self._transport.close)
-                    finally:
-                        self._transport = None
-                if attempt == 1:
-                    await self.async_probe()
-                    await asyncio.sleep(0.5)
-                    continue
-                _LOGGER.exception(
-                    "ELTAKO command send failed: command=%s device_id=%s eep=%s sender_id=%s sender_eep=%s port=%s gateway_type=%s error=%s",
-                    command,
-                    device.get("id"),
-                    device.get("eep"),
-                    device.get("sender_id"),
-                    device.get("sender_eep"),
-                    self.port,
-                    self.gateway_type,
-                    self._last_send_error,
-                )
-                return False
+                if is_fhk
+                else None
+            )
+        )
+        inter_message_delay = (
+            0.02 if is_frgbw14 and len(messages) > 1
+            else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
+        )
+        _LOGGER.info(
+            "ELTAKO send start: command=%s device=%s device_id=%s eep=%s sender_id=%s effective_sender_ids=%s sender_eep=%s gateway=%s port=%s messages=%s payloads=%s role=%s delay=%.3fs",
+            command, device.get("name"), device.get("id"), device.get("eep"),
+            device.get("sender_id"), effective_sender_ids, device.get("sender_eep"), self.gateway_type,
+            self.port, len(messages), payloads, protocol_role, inter_message_delay,
+        )
+        diagnostic_event(
+            self.hass,
+            "send_start",
+            entry_id=self.entry_id,
+            gateway=self.gateway_type,
+            port=self.port,
+            configured_gateway_type=self.configured_gateway_type,
+            selected_gateway_type=(self.selected_gateway or {}).get("device_type"),
+            stable_serial_path=self.stable_serial_path,
+            current_devname=self.current_devname,
+            usb_serial=self.usb_serial,
+            usb_interface=self.usb_interface,
+            baudrate=self.baudrate,
+            protocol=self.usb_protocol,
+            rs485_mode=False,
+            command=command,
+            device=device.get("name"),
+            device_id=device.get("id"),
+            eep=device.get("eep"),
+            sender_id=device.get("sender_id"),
+            effective_sender_ids=effective_sender_ids,
+            sender_eep=device.get("sender_eep"),
+            data_hex=payloads,
+            protocol_role=protocol_role,
+            message_count=len(messages),
+            delay=inter_message_delay,
+            frame_code=frgbw_frame_code,
+        )
+        async with self._send_lock:
+            _LOGGER.debug("ELTAKO send lock acquired: command=%s device_id=%s", command, device.get("id"))
+            diagnostic_event(self.hass, "send_lock_acquired", level="debug", entry_id=self.entry_id, gateway=self.gateway_type, command=command, device_id=device.get("id"))
+            for attempt in (1, 2):
+                try:
+                    await self._async_ensure_transport()
+                    frames: list[bytes] = []
+                    if is_frgbw14 and len(messages) > 1:
+                        for index, one_msg in enumerate(messages):
+                            diagnostic_event(
+                                self.hass,
+                                "telegram_send_attempt",
+                                level="debug",
+                                entry_id=self.entry_id,
+                                gateway=self.gateway_type,
+                                command=command,
+                                device_id=device.get("id"),
+                                sender_id=device.get("sender_id"),
+                                index=index + 1,
+                                total=len(messages),
+                                message=str(one_msg),
+                                burst=True,
+                            )
+                        frames = await asyncio.wait_for(
+                            self._async_send_esp2_messages(
+                                messages,
+                                inter_frame_delay=inter_message_delay,
+                            ),
+                            timeout=3.0,
+                        )
+                        for index, frame in enumerate(frames):
+                            diagnostic_event(
+                                self.hass,
+                                "telegram_sent",
+                                level="debug",
+                                entry_id=self.entry_id,
+                                gateway=self.gateway_type,
+                                command=command,
+                                device_id=device.get("id"),
+                                index=index + 1,
+                                total=len(frames),
+                                frame=frame,
+                                burst=True,
+                            )
+                    else:
+                        for index, one_msg in enumerate(messages):
+                            _LOGGER.debug(
+                                "ELTAKO telegram send %s/%s: command=%s device_id=%s sender_id=%s gateway=%s",
+                                index + 1, len(messages), command, device.get("id"),
+                                device.get("sender_id"), self.gateway_type,
+                            )
+                            diagnostic_event(self.hass, "telegram_send_attempt", level="debug", entry_id=self.entry_id, gateway=self.gateway_type, command=command, device_id=device.get("id"), sender_id=device.get("sender_id"), index=index + 1, total=len(messages), message=str(one_msg))
+                            frame = await asyncio.wait_for(self._async_send_esp2_message(one_msg), timeout=3.0)
+                            frames.append(frame)
+                            diagnostic_event(self.hass, "telegram_sent", level="debug", entry_id=self.entry_id, gateway=self.gateway_type, command=command, device_id=device.get("id"), index=index + 1, total=len(messages), frame=frame)
+                            _LOGGER.debug(
+                                "ELTAKO telegram sent %s/%s: command=%s device_id=%s frame=%s",
+                                index + 1, len(messages), command, device.get("id"), frame.hex("-"),
+                            )
+                            if inter_message_delay and index < len(messages) - 1:
+                                await asyncio.sleep(inter_message_delay)
+                    self._last_send_error = None
+                    diagnostic_event(
+                        self.hass,
+                        "send_finished",
+                        entry_id=self.entry_id,
+                        gateway=self.gateway_type,
+                        port=self.port,
+                        baudrate=self.baudrate,
+                        protocol=self.usb_protocol,
+                        rs485_mode=False,
+                        command=command,
+                        device_id=device.get("id"),
+                        frames=frames,
+                        attempt=attempt,
+                    )
+                    _LOGGER.info(
+                        "ELTAKO send finished: command=%s device_id=%s eep=%s sender_id=%s sender_eep=%s gateway_type=%s base_id=%s port=%s baudrate=%s frames=%s attempt=%s",
+                        command, device.get("id"), device.get("eep"), device.get("sender_id"),
+                        device.get("sender_eep"), self.gateway_type, self.base_id, self.port,
+                        self.baudrate, [frame.hex("-") for frame in frames], attempt,
+                    )
+                    return True
+                except Exception as err:
+                    self._last_send_error = str(err) or err.__class__.__name__
+                    diagnostic_event(self.hass, "send_failed", level="error", entry_id=self.entry_id, gateway=self.gateway_type, command=command, device_id=device.get("id"), attempt=attempt, error=self._last_send_error)
+                    _LOGGER.exception(
+                        "ELTAKO send attempt failed: command=%s device_id=%s port=%s gateway_type=%s attempt=%s error=%s",
+                        command, device.get("id"), self.port, self.gateway_type, attempt, self._last_send_error,
+                    )
+                    if self._transport is not None:
+                        try:
+                            await self.hass.async_add_executor_job(self._transport.close)
+                        finally:
+                            self._transport = None
+                    if attempt == 1:
+                        await self.async_probe()
+                        await asyncio.sleep(0.5)
+                        continue
+                    _LOGGER.error(
+                        "ELTAKO send failed permanently: command=%s device_id=%s error=%s",
+                        command, device.get("id"), self._last_send_error,
+                    )
+                    return False
         return False
 
     async def _async_ensure_transport(self) -> None:
@@ -1333,7 +1567,11 @@ class EltakoGateway:
 
         self.baudrate = 9600 if self.gateway_type == GATEWAY_TYPE_FAM_USB else 57600
         self.message_delay = 0.10 if self.gateway_type == GATEWAY_TYPE_FAM_USB else (0.001 if self.gateway_type == GATEWAY_TYPE_FAM14 else 0.01)
-        enable_rs485 = self.gateway_type in (GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB)
+        # FAM14 and FGW14-USB expose an ESP2 serial interface through their
+        # FTDI adapter. Grimm/eltako14bus writes it as a normal serial port;
+        # enabling pyserial's RS485Settings would add RTS direction control
+        # that these gateways neither require nor use.
+        enable_rs485 = False
         self._transport = SerialTransport(
             self.port,
             baudrate=self.baudrate,
@@ -1359,6 +1597,22 @@ class EltakoGateway:
             raise RuntimeError("Serial transport is not initialized")
         return await self.hass.async_add_executor_job(self._transport.send, msg)
 
+    async def _async_send_esp2_messages(
+        self,
+        messages: list[Any] | tuple[Any, ...],
+        *,
+        inter_frame_delay: float,
+    ) -> list[bytes]:
+        await self._async_ensure_transport()
+        if self._transport is None:
+            raise RuntimeError("Serial transport is not initialized")
+        return await self.hass.async_add_executor_job(
+            lambda: self._transport.send_many(
+                messages,
+                inter_frame_delay=inter_frame_delay,
+            )
+        )
+
 
 # Backwards-compatible alias used by entity modules.
 class UnsupportedEltakoCommand(UnsupportedCommandError):
@@ -1366,19 +1620,34 @@ class UnsupportedEltakoCommand(UnsupportedCommandError):
 
 
 
+def _rgbw_model_text(device: dict[str, Any]) -> str:
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("type"),
+            device.get("model"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("comment"),
+        )
+    ).upper()
+
+
+def _is_frgbw14_device_config(device: dict[str, Any]) -> bool:
+    return "FRGBW14" in _rgbw_model_text(device)
+
+
 def _is_rgbw_device_config(device: dict[str, Any]) -> bool:
     device_eep = str(device.get("eep") or "").strip().upper()
     sender_eep = str(device.get("sender_eep") or "").strip().upper()
-    name = str(device.get("name") or "").upper()
-    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
-    raw_text = " ".join(str(raw.get(k) or "") for k in ("name", "device_type", "comment")).upper()
+    model_text = _rgbw_model_text(device)
     return (
-        device_eep == "07-37-F7"
-        or sender_eep == "07-37-F7"
-        or "FRGBW14" in name
-        or "FRGBW71" in name
-        or "FRGBW14" in raw_text
-        or "FRGBW71" in raw_text
+        device_eep in {"07-3F-7F"}
+        or sender_eep in {"07-3F-7F"}
+        or "FRGBW14" in model_text
+        or "FRGBW71" in model_text
     )
 
 
@@ -1398,9 +1667,9 @@ def _hs_to_rgb_tuple(value: Any) -> tuple[int, int, int] | None:
 # Data bytes are ordered DB3, DB2, DB1, DB0.
 TEACH_IN_A5_38_08_DIMMER_FUNC38 = bytes([0xE0, 0x40, 0x0D, 0x80])
 
-# FRGBW14 / FRGBW71L free profile EEP 07-37-F7 learn telegram.
+# FRGBW14 / FRGBW71L free profile EEP 07-3F-7F learn telegram.
 # GFA5-confirmed DB3..DB0: FF-F8-0D-87. This is required for the free RGB profile teach-in.
-TEACH_IN_07_37_F7_RGBW_FREE_PROFILE = bytes([0xFF, 0xF8, 0x0D, 0x87])
+TEACH_IN_07_3F_7F_RGBW_FREE_PROFILE = bytes([0xFF, 0xF8, 0x0D, 0x87])
 
 # ELTAKO controller teach-in matrix from "Inhalte der ELTAKO-Funktelegramme".
 # All payloads are DB3, DB2, DB1, DB0.
@@ -1409,7 +1678,7 @@ TEACH_IN_FUNC38_DIMMER_CMD2 = bytes([0xE0, 0x40, 0x0D, 0x80])
 TEACH_IN_FSUD_230V_DIMMER = bytes([0x02, 0x00, 0x00, 0x00])
 TEACH_IN_FUNC3F_COVER_7F = bytes([0xFF, 0xF8, 0x0D, 0x80])
 TEACH_IN_A5_20_01_FKS_SV = bytes([0x80, 0x08, 0x0D, 0x80])
-# Grimm/home-assistant-eltako uses this A5-10-06 teach-in payload for
+# This integration uses this A5-10-06 teach-in payload for
 # climate/thermostat controllers. It is different from the normal runtime
 # set-temperature telegram and is required for FHK/F4HK/FUTH style learning.
 TEACH_IN_A5_10_06_HEATING_COOLING = bytes([0x40, 0x30, 0x0D, 0x87])
@@ -1427,6 +1696,54 @@ def _build_f6_02_01_teach_in_sequence(sender_id: str) -> list[Any]:
         build_f6_02_01_rocker(sender_id, action=0, pressed=False, status=0x20),
         build_f6_02_01_rocker(sender_id, action=3, pressed=True, status=0x31),
     ]
+
+
+def _normalize_device_specific_decoded(device: dict[str, Any], decoded: dict[str, Any]) -> None:
+    """Remove cross-profile aliases and add a clear device-specific state.
+
+    Several ELTAKO devices share the same EEP. The generic decoder therefore
+    exposes compatibility aliases for every possible consumer. Once the YAML
+    device is known, keep only the semantics that belong to that device.
+    """
+    name = str(device.get("name") or device.get("device_family") or "").upper()
+    eep = str(device.get("eep") or "").upper()
+
+    if "FSM60B" in name and eep == "A5-30-03":
+        wet = bool(decoded.get("moisture", decoded.get("water_alarm", decoded.get("alarm", False))))
+        decoded.update({
+            "moisture": wet,
+            "wet": wet,
+            "water_alarm": wet,
+            "state": "nass" if wet else "trocken",
+            "telegram_type": "fsm60b_mode_3_moisture",
+        })
+        for key in (
+            "smoke_alarm", "temperature", "temperature_raw", "alarm",
+            "pressed", "open", "closed",
+        ):
+            decoded.pop(key, None)
+        return
+
+    if ("FRWB" in name or "FHMB" in name) and eep == "A5-30-03":
+        alarm = bool(decoded.get("smoke_alarm", decoded.get("alarm", False)))
+        decoded["alarm"] = alarm
+        decoded["state"] = "Alarm" if alarm else "kein Alarm"
+        decoded["telegram_type"] = "a5_30_03_alarm_temperature"
+        for key in ("moisture", "wet", "water_alarm", "pressed", "open", "closed"):
+            decoded.pop(key, None)
+        return
+
+    if "FFG7B" in name or "FTKE" in name or "FFTE" in name:
+        if "window_state" in decoded:
+            decoded["state"] = decoded["window_state"]
+
+    if eep in {"A5-07-01", "A5-08-01"} and ("FBH" in name or "FBHT" in name):
+        movement = bool(decoded.get("movement", decoded.get("motion", False)))
+        decoded["state"] = "Bewegung" if movement else "keine Bewegung"
+
+    if eep == "A5-13-01" and ("FWS61" in name or "FWG14MS" in name):
+        if "rain" in decoded:
+            decoded["state"] = "Regen" if decoded.get("rain") else "kein Regen"
 
 
 def _device_name_upper(device: dict[str, Any]) -> str:
@@ -1512,7 +1829,7 @@ def _fam_usb_4bs_rf_variants(address: bytes, data: bytes) -> list[Any]:
 
     Some FAM-USB / EnOcean Programmer combinations ignore 4BS transmit frames
     with a zero status byte although the frame is syntactically valid ESP2.
-    Eltako/EnOcean tools commonly use a status byte with NU/T21 bits set for
+    ELTAKO/EnOcean tools commonly use a status byte with NU/T21 bits set for
     radio transmission. For teach-in this helper sends the same ERP payload
     first in the strict form and then in the radio-safe form so a second FAM-USB
     sniffer or a FAM14 must see at least one RF telegram.
@@ -1522,6 +1839,34 @@ def _fam_usb_4bs_rf_variants(address: bytes, data: bytes) -> list[Any]:
         build_regular_4bs(address, data, status=0x30, outgoing=True),
     ]
 
+
+
+
+def _is_fms14_device(device: dict[str, Any]) -> bool:
+    """Return True for an FMS14 channel definition.
+
+    FMS14 is a two-channel Series-14 actor. EEDTOY represents each channel as
+    its own switch entity/address, therefore the command builder must use the
+    sender/channel address of the individual YAML entry without collapsing the
+    two channels.
+    """
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("eltako"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("eltako"),
+        )
+    ).upper()
+    return "FMS14" in text
 
 def _get_sender_id(device: dict[str, Any]) -> str:
     sender_id = str(device.get("sender_id") or "").strip()
@@ -1574,7 +1919,7 @@ def _series14_pct_offset_from_device(device: dict[str, Any]) -> int | None:
     """Extract the Series-14 PCT address/channel offset from the YAML device.
 
     For a FAM-USB controlling Series-14 actors through a FAM14, the controller
-    sender must be built like Grimm's multiple-gateway mapping: FAM-USB
+    sender must be built like the multiple-gateway mapping: FAM-USB
     base-id + the Series-14 internal address. The plain sender.id field can be
     stale or imported from a different gateway section. Therefore for Series-14
     devices we prefer the explicit PCT address 00-00-00-xx from device.id/name
@@ -1648,6 +1993,11 @@ def _fam_usb_effective_sender_id_for_device(device: dict[str, Any], sender_id: s
 
 def _effective_sender_id_for_gateway(sender_id: str, gateway_type: str | None, gateway_base_id: str | None = None, device: dict[str, Any] | None = None) -> str:
     gw_type = str(gateway_type or "").strip().lower()
+    if isinstance(device, dict) and _is_frgbw14_device_config(device) and gw_type != GATEWAY_TYPE_FAM_USB:
+        # Direct Series-14 control uses the internal 00-00-B0-xx controller ID
+        # entered in the actuator.  A radio transceiver is different: it can
+        # only transmit from its own base-ID range and is handled below.
+        return format_address(parse_address(sender_id))
     if gw_type == GATEWAY_TYPE_FAM_USB:
         if isinstance(device, dict):
             return _fam_usb_effective_sender_id_for_device(device, sender_id, gateway_base_id)
@@ -1688,7 +2038,7 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
     * FUNC=38 Command 2 dimmers:            E0-40-0D-80
       (FSUD-230V special learn payload:     02-00-00-00)
     * FUNC=3F TYPE=7F covers/shutters:      FF-F8-0D-80
-    * FRGBW free profile 07-37-F7:          FF-F8-0D-87
+    * FRGBW free profile 07-3F-7F:          FF-F8-0D-87
 
     If a device class is not documented here, the function raises an explicit
     error. Sending a normal command as a substitute for learn telegrams caused
@@ -1718,9 +2068,9 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
     name = _device_name_upper(device)
     status = 0x80 if gw_type == GATEWAY_TYPE_FAM_USB else 0x00
 
-    if _is_rgbw_device_config(device) or sender_eep == "07-37-F7" or device_eep == "07-37-F7":
-        _LOGGER.info("ELTAKO teach-in matrix selected: FRGBW free profile 07-37-F7, payload=FF-F8-0D-87 device=%s", device.get("name"))
-        return [build_regular_4bs(address, TEACH_IN_07_37_F7_RGBW_FREE_PROFILE, status=status, outgoing=True)]
+    if _is_rgbw_device_config(device) or sender_eep in {"07-3F-7F"} or device_eep in {"07-3F-7F"}:
+        _LOGGER.info("ELTAKO teach-in matrix selected: FRGBW free profile 07-3F-7F, payload=FF-F8-0D-87 device=%s", device.get("name"))
+        return [build_regular_4bs(address, TEACH_IN_07_3F_7F_RGBW_FREE_PROFILE, status=status, outgoing=True)]
 
     if _is_cover_direct_command_device(device, sender_eep, device_eep, platform):
         _LOGGER.info("ELTAKO teach-in matrix selected: FUNC=3F TYPE=7F cover/shutter, payload=FF-F8-0D-80 device=%s", device.get("name"))
@@ -1742,9 +2092,9 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
         _LOGGER.info("ELTAKO teach-in matrix selected: FHK61SSR PWM, payload=E0-40-0D-80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FHK61SSR_PWM, status=status, outgoing=True)]
 
-    if _is_futh55ed_device(device):
+    if _is_futh55ed_device(device) and not (sender_eep == "A5-10-06" or device_eep == "A5-10-06"):
         raise UnsupportedEltakoCommand(
-            "FUTH55ED sendet seine dokumentierten Lern- und Datentelegramme selbst; kein virtueller HA-Sender erforderlich"
+            "Für dieses FUTH55-Profil ist kein virtueller HA-Sender vorgesehen"
         )
 
     if sender_eep == "A5-20-01" or device_eep == "A5-20-01" or "FKS-SV" in name:
@@ -1773,15 +2123,19 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
 
     if command == "frgbw_free_profile_teach_in":
-        if not (_is_rgbw_device_config(device) or sender_eep == "07-37-F7" or device_eep == "07-37-F7"):
-            raise UnsupportedEltakoCommand("FRGBW freies Profil ist nur fuer FRGBW/07-37-F7 vorgesehen")
+        if not (_is_rgbw_device_config(device) or sender_eep in {"07-3F-7F"} or device_eep in {"07-3F-7F"}):
+            raise UnsupportedEltakoCommand("FRGBW freies Profil ist nur fuer FRGBW/07-3F-7F vorgesehen")
         effective_sender_id = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
         if effective_sender_id != format_address(parse_address(sender_id)):
             _LOGGER.info("ELTAKO FAM-USB sender id translated to gateway base range: original=%s effective=%s base_id=%s command=%s device=%s", sender_id, effective_sender_id, gateway_base_id, command, device.get("name"))
+        if _is_frgbw14_device_config(device):
+            raise UnsupportedEltakoCommand(
+                "FRGBW14 ist ein Series-14-Busaktor; die Controller-ID wird in PCT14/YAML zugeordnet, nicht per HA-Lerntelegramm"
+            )
         address = parse_address(effective_sender_id)
         _LOGGER.info("ELTAKO FRGBW free-profile teach-in: device=%s sender_id=%s payload=FF-F8-0D-87 status=81", device.get("name"), effective_sender_id)
         return [
-            build_regular_4bs(address, TEACH_IN_07_37_F7_RGBW_FREE_PROFILE, status=0x81, outgoing=True)
+            build_regular_4bs(address, TEACH_IN_07_3F_7F_RGBW_FREE_PROFILE, status=0x81, outgoing=True)
         ]
 
     if command in {"teach_in_rocker_top", "teach_in_rocker_up", "teach_in_rocker_down"}:
@@ -1826,22 +2180,18 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         _LOGGER.info("ELTAKO sender id translated to gateway base range: original=%s effective=%s base_id=%s command=%s device=%s gateway_type=%s", sender_id, effective_sender_id, gateway_base_id, command, device.get("name"), gateway_type)
     sender_id = effective_sender_id
     gw_type = str(gateway_type or "").strip().lower()
-    # FRGBW14 is a Series-14 bus actuator. Home Assistant sends through the
-    # FAM14/FGW14-USB RS485 bus, not through the RF optional destination path
-    # seen in the GFA5 radio sniffer. Therefore no ESP3 DestinationID is used
-    # here; the 07-37-F7 component payload is written as normal ESP2/4BS data
-    # onto the configured bus gateway using the effective HA sender id.
-    # v0.1.92: FRGBW14 uses the same status byte as the GFA5 reference (0x81),
-    # because this profile uses the status field as part of the accepted
-    # controller telegram signature. FSR14 can stay at 0x00; FRGBW14 is special.
-    #
-    # FRGBW71L on FAM-USB also keeps the proven ESP2 path without optional
-    # destination. The RF sniffer cannot prove FRGBW14 bus switching; use HA
-    # logs for the exact bus frames.
+    # FRGBW14 is a Series-14 bus actuator.  A host-to-gateway frame is always a
+    # TRT/0x6B send request.  The 0x0B frames seen in a sniffer are receive
+    # telegrams emitted by the gateway and must never be written back as TX.
     frgbw_destination_id = None
-    if _is_rgbw_device_config(device) and gw_type in (GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB):
+    if _is_frgbw14_device_config(device):
+        if gw_type != GATEWAY_TYPE_FAM_USB and not sender_id.upper().startswith("00-00-B0-"):
+            raise UnsupportedEltakoCommand(
+                "FRGBW14 am Series-14-Bus benoetigt eine in PCT14 programmierte "
+                "interne Controller-ID 00-00-B0-xx; eine GFA5-Funk-ID ist kein Ersatz"
+            )
         _LOGGER.info(
-            "ELTAKO FRGBW14 bus path selected like FSR14: device=%s device_id=%s sender_id=%s gateway_type=%s base_id=%s destination_id=none status=81",
+            "ELTAKO FRGBW14 controller path selected: device=%s device_id=%s sender_id=%s gateway_type=%s base_id=%s destination_id=none status=80 h_seq=TRT frame_code=6B",
             device.get("name"),
             device.get("id"),
             sender_id,
@@ -1849,37 +2199,45 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             gateway_base_id,
         )
 
+    if platform == "switch" and _is_fms14_device(device):
+        # FMS14 is controlled like the working FSR14 Series-14 actors: use the
+        # learned A5-38-08 central switching sender.  ORG 0x05 telegrams with
+        # 0x70/0x50 are actuator feedback, not the HA control telegram.
+        # ON  = 01-00-00-09, OFF = 01-00-00-08, status 0x00.
+        if command in {"turn_on", "turn_off"}:
+            _LOGGER.info(
+                "ELTAKO FMS14 A5-38-08 switch path selected: device=%s device_id=%s sender_id=%s command=%s payload=%s",
+                device.get("name"),
+                device.get("id"),
+                sender_id,
+                command,
+                "01-00-00-09" if command == "turn_on" else "01-00-00-08",
+            )
+            return build_a5_38_08_switch(sender_id, command == "turn_on")
+
     if platform == "light":
         if _is_rgbw_device_config(device):
-            # v0.1.86: FRGBW14 and FRGBW71L use the same 07-37-F7 RGB
-            # component data model at runtime. FRGBW14 is a bus actuator, so
-            # its sender.id must come from the selected FAM14/FGW14-USB gateway
-            # base-id range and be written by EEDTOY/YAML/PCT14. FRGBW71L uses
-            # the same data telegrams after radio teach-in.
+            # FRGBW14 and FRGBW71L use the ELTAKO 07-3F-7F RGB component data
+            # model. For FRGBW14, sender.id is the controller identity already
+            # present in the actuator's PCT14 sensor/controller relation.
+            is_frgbw14 = _is_frgbw14_device_config(device)
+            # The working GFA5 trace uses status 0x80 on the Series-14 path.
+            # Do not derive this from the gateway label (which may be "auto").
+            rgbw_status = 0x80 if is_frgbw14 else 0x81
             if command == "turn_off":
-                gw_type = str(gateway_type or "").strip().lower()
-                # v0.1.93: FRGBW71L app telemetry proves that app/off is
-                # received by HA while HA/off did not switch the actuator. The
-                # remaining mismatch is therefore our outgoing OFF command.
-                # Use the same free-profile RGBW-zero sequence as GFA5 for all
-                # FRGBW devices instead of the old A5-38-08 off telegram.
-                #
-                # FRGBW14 on FAM14/FGW14 uses the GFA5/Series-14 status 0x81.
-                # FRGBW71L on FAM-USB has been observed with status 0x80 in the
-                # GFA5 reference. Both send RGB zero and W zero explicitly.
-                off_status = 0x81 if gw_type in (GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB) else 0x80
-                return build_07_37_f7_off_messages(
+                return build_07_3f_7f_off_messages(
                     sender_id,
                     destination_id=frgbw_destination_id,
-                    include_white_zero=True,
-                    status=off_status,
+                    include_white_zero=False,
+                    status=rgbw_status,
+                    outgoing=True,
                 )
             if command == "turn_on":
                 rgbw = kwargs.get("rgbw_color")
                 rgb = kwargs.get("rgb_color")
                 brightness = int(kwargs.get("brightness", 255) or 255)
                 if isinstance(rgbw, (list, tuple)) and len(rgbw) >= 4:
-                    return build_07_37_f7_rgbw_messages(
+                    return build_07_3f_7f_rgbw_messages(
                         sender_id,
                         destination_id=frgbw_destination_id,
                         r=int(rgbw[0]),
@@ -1888,10 +2246,12 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                         w=int(rgbw[3]),
                         brightness=brightness,
                         state=True,
-                        status=0x81,
+                        status=rgbw_status,
+                        include_white=False,
+                        outgoing=True,
                     )
                 if isinstance(rgb, (list, tuple)) and len(rgb) >= 3:
-                    return build_07_37_f7_rgbw_messages(
+                    return build_07_3f_7f_rgbw_messages(
                         sender_id,
                         destination_id=frgbw_destination_id,
                         r=int(rgb[0]),
@@ -1900,13 +2260,30 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                         w=0,
                         brightness=brightness,
                         state=True,
-                        status=0x81,
+                        status=rgbw_status,
+                        include_white=False,
+                        outgoing=True,
                     )
-                # Plain ON: FRGBW14/GFA5 uses the RGB profile rather than
-                # A5-38-08. Re-send white as a safe visible default on the bus.
-                # FRGBW71L/FAM-USB keeps the empirically verified A5 ON path.
+                if is_frgbw14:
+                    # Never mix A5-38-08 with the free RGBW profile for
+                    # FRGBW14. A plain ON sends a complete visible white target
+                    # using the same 0x10/0x11/0x12 byte mapping as FRGBW71L.
+                    return build_07_3f_7f_rgbw_messages(
+                        sender_id,
+                        destination_id=frgbw_destination_id,
+                        r=255,
+                        g=255,
+                        b=255,
+                        w=0,
+                        brightness=brightness,
+                        state=True,
+                        status=rgbw_status,
+                        include_white=False,
+                        outgoing=True,
+                    )
+                # Keep the already working FRGBW71L plain-ON behavior.
                 if gw_type in (GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB):
-                    return build_07_37_f7_rgbw_messages(
+                    return build_07_3f_7f_rgbw_messages(
                         sender_id,
                         destination_id=frgbw_destination_id,
                         r=255,
@@ -1964,34 +2341,42 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                current_temperature=kwargs.get("current_temperature"),
-                hvac_mode="heat",
+                # Match the established software-controller implementation:
+                # DB1=0x00 (40 C placeholder). The room sensor learned in FHK
+                # function group 1 provides the authoritative actual value.
+                current_temperature=None,
+                # Preserve the current actuator mode exactly as Grimm does
+                # when changing only the target temperature.
+                hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
             )
         if command == "set_hvac_mode":
             hvac_mode = str(kwargs.get("hvac_mode") or "heat")
-            raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
-            target = raw.get("target_temperature") or raw.get("min_target_temperature") or 20
-            return build_a5_10_06_room_control(
-                sender_id,
-                target_temperature=target,
-                current_temperature=kwargs.get("current_temperature"),
-                hvac_mode=hvac_mode,
-                priority=(device.get("priority") or raw.get("priority")),
-            )
+            return build_fhk_mode_command(sender_id, hvac_mode)
+        if command == "set_preset_mode":
+            return build_fhk_mode_command(sender_id, kwargs.get("preset_mode"))
 
     if platform == "cover":
         if sender_eep != "H5-3F-7F":
             raise UnsupportedEltakoCommand(f"Cover sender.eep {sender_eep} wird noch nicht unterstuetzt")
         raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
         if command == "open":
-            seconds = _safe_int(raw.get("time_opens"), 254) + 1
+            configured = _safe_int(raw.get("time_opens"), 254) + 1
+            requested = kwargs.get("duration_seconds")
+            seconds = configured if requested is None else max(1, int(round(float(requested))))
             return build_h5_3f_7f_cover(sender_id, "open", duration_seconds=min(seconds, 255))
         if command == "close":
-            seconds = _safe_int(raw.get("time_closes"), 254) + 1
+            configured = _safe_int(raw.get("time_closes"), 254) + 1
+            requested = kwargs.get("duration_seconds")
+            seconds = configured if requested is None else max(1, int(round(float(requested))))
             return build_h5_3f_7f_cover(sender_id, "close", duration_seconds=min(seconds, 255))
         if command == "stop":
-            return build_h5_3f_7f_cover(sender_id, "stop", duration_seconds=0)
+            # Wireless cover actuators can miss a single short stop telegram.
+            # Send the identical H5 stop command three times. The command is
+            # idempotent and repeated transmission is also consistent with
+            # normal EnOcean radio redundancy.
+            stop = build_h5_3f_7f_cover(sender_id, "stop", duration_seconds=0)
+            return [stop, stop, stop]
 
     raise UnsupportedEltakoCommand(
         f"command={command}, platform={platform}, device_eep={device_eep}, sender_eep={sender_eep}"

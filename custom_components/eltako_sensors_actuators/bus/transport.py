@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Protocol
 
 import serial
@@ -99,6 +100,60 @@ class SerialTransport:
             raise RuntimeError(f"Serial write incomplete: wrote {written}/{len(frame)} bytes")
         _LOGGER.info("ELTAKO serial frame sent: port=%s protocol=%s frame=%s", self.port, self.protocol, frame.hex("-"))
         return frame
+
+    def send_many(
+        self,
+        messages: Iterable[SerializableMessage | bytes | bytearray],
+        *,
+        inter_frame_delay: float = 0.02,
+    ) -> list[bytes]:
+        """Send several frames as one uninterrupted serial burst.
+
+        The reader and writer intentionally share one serial lock. Sending an
+        RGBW component sequence through repeated ``send`` calls allows the
+        reader to acquire that lock between frames and wait for the normal
+        200 ms receive timeout. FRGBW14 then sees four separate operations
+        instead of the compact controller burst emitted by GFA5.
+
+        Convert all messages before taking the lock, then keep it for the
+        complete sequence. This preserves frame order and prevents receive
+        polling from stretching a roughly 100 ms RGBW burst to almost one
+        second.
+        """
+        self.open()
+        if self._serial is None:
+            raise RuntimeError("Serial port is not open")
+
+        frames = [
+            esp2_to_esp3_radio_erp1(message)
+            if self.protocol == "esp3"
+            else (bytes(message) if isinstance(message, (bytes, bytearray)) else message.serialize())
+            for message in messages
+        ]
+        if not frames:
+            return []
+
+        delay = max(0.0, float(inter_frame_delay))
+        with self._lock:
+            self._serial.reset_output_buffer()
+            for index, frame in enumerate(frames):
+                written = self._serial.write(frame)
+                self._serial.flush()
+                if written != len(frame):
+                    raise RuntimeError(
+                        f"Serial write incomplete: wrote {written}/{len(frame)} bytes"
+                    )
+                if delay and index < len(frames) - 1:
+                    time.sleep(delay)
+
+        _LOGGER.info(
+            "ELTAKO serial frame burst sent: port=%s protocol=%s frames=%s delay=%.3fs",
+            self.port,
+            self.protocol,
+            [frame.hex("-") for frame in frames],
+            delay,
+        )
+        return frames
 
     def read_frame(self) -> bytes | None:
         """Read one ESP2 frame if available, else return None.

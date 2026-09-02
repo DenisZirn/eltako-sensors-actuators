@@ -131,7 +131,7 @@ def decode_actuator_feedback(
             )
             return result
 
-    # Decentral Eltako switch/light actuators (for example FSR61 and FL62) emit their confirmed state from the physical actuator address as
+    # Decentral ELTAKO switch/light actuators (for example FSR61 and FL62) emit their confirmed state from the physical actuator address as
     # RPS 0x70 = ON and 0x50 = OFF. Restrict this interpretation to switch and
     # light entities so ordinary button/sensor telegrams are never converted
     # into actuator state.

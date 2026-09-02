@@ -12,6 +12,12 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     HVACAction = None
 try:
+    from homeassistant.components.climate.const import PRESET_ECO, PRESET_HOME, PRESET_SLEEP
+except Exception:  # pragma: no cover - older HA compatibility
+    PRESET_HOME = "home"
+    PRESET_SLEEP = "sleep"
+    PRESET_ECO = "eco"
+try:
     from homeassistant.const import PRECISION_TENTHS
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
@@ -20,8 +26,10 @@ from homeassistant.exceptions import HomeAssistantError
 try:
     from homeassistant.components.climate import ClimateEntityFeature
     _SUPPORT_TARGET_TEMPERATURE = ClimateEntityFeature.TARGET_TEMPERATURE
+    _SUPPORT_PRESET_MODE = ClimateEntityFeature.PRESET_MODE
 except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
+    _SUPPORT_PRESET_MODE = 16
 
 from .const import CONF_DEVICES, DOMAIN
 from .entity_base import EltakoYamlEntity, normalize_platform
@@ -35,18 +43,20 @@ def _coerce_ha_temperature_to_celsius(
     min_c: float = 0.0,
     max_c: float = 40.0,
 ) -> float | None:
-    """Normalize a Home Assistant climate temperature to Celsius."""
+    """Validate the Celsius value handed to the entity by Home Assistant.
+
+    Home Assistant's climate service converts from the installation's display
+    unit to ``temperature_unit`` before calling ``async_set_temperature``.
+    Because this entity declares Celsius, the value received here is already
+    Celsius. A second Fahrenheit heuristic would corrupt legitimate service
+    values and is therefore intentionally not performed.
+    """
     if value is None:
         return None
     try:
         temp = float(value)
     except (TypeError, ValueError):
         return None
-    # Older entity-registry/frontend state can still submit Fahrenheit after an
-    # upgrade. 41..104 F maps to 5..40 C and cannot be a valid configured C
-    # target in this integration.
-    if 40.0 < temp <= 104.0:
-        temp = (temp - 32.0) * 5.0 / 9.0
     return max(min_c, min(max_c, temp))
 
 
@@ -122,10 +132,30 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._target_temperature = max(self._attr_min_temp, min(self._attr_max_temp, self._target_temperature))
             self._attr_hvac_mode = HVACMode.HEAT
         else:
+            self._attr_supported_features = _SUPPORT_TARGET_TEMPERATURE | _SUPPORT_PRESET_MODE
+            self._attr_preset_modes = [PRESET_HOME, PRESET_SLEEP, PRESET_ECO]
+            self._attr_preset_mode = PRESET_HOME
             self._attr_min_temp = float(_device_option(device, "min_target_temperature", 16.0) or 16.0)
             self._attr_max_temp = float(_device_option(device, "max_target_temperature", 25.0) or 25.0)
-            self._target_temperature = None
+            # Home Assistant hides the temperature control when a climate
+            # entity reports target_temperature=None.  Do not wait for the
+            # first FHK actuator response: expose a usable setpoint immediately
+            # and replace it later when valid feedback is received.
+            initial_target = _device_option(
+                device,
+                "initial_target_temperature",
+                _device_option(device, "target_temperature", 20.0),
+            )
+            try:
+                self._target_temperature = float(initial_target)
+            except (TypeError, ValueError):
+                self._target_temperature = 20.0
+            self._target_temperature = max(
+                self._attr_min_temp,
+                min(self._attr_max_temp, self._target_temperature),
+            )
 
+        self._fhk_heater_mode = "normal"
         self._current_temperature = None
         self._valve_position: int | None = None
         self._pending_command = bool(self._is_fks_sv)
@@ -174,7 +204,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     @property
     def extra_state_attributes(self):
         base = dict(super().extra_state_attributes or {})
-        base["betriebsart_de"] = "Heizbetrieb" if self._attr_hvac_mode == HVACMode.HEAT else "Aus"
+        fhk_mode_labels = {
+            "normal": "Normalbetrieb",
+            "night_setback": "Nachtabsenkung",
+            "setback": "Absenkbetrieb",
+            "off": "Aus / Frostschutz",
+        }
+        base["betriebsart_de"] = (
+            "Heizbetrieb" if self._is_fks_sv and self._attr_hvac_mode == HVACMode.HEAT
+            else "Aus" if self._is_fks_sv
+            else fhk_mode_labels.get(self._fhk_heater_mode, "Unbekannt")
+        )
+        base["protokoll_temperatureinheit"] = UnitOfTemperature.CELSIUS
+        base["ha_temperatureinheit"] = str(self.hass.config.units.temperature_unit)
         if self._is_fks_sv:
             base.update(
                 {
@@ -226,6 +268,23 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if "hvac_mode" in telegram.decoded:
             mode = str(telegram.decoded["hvac_mode"]).lower()
             self._attr_hvac_mode = HVACMode.HEAT if mode == "heat" else HVACMode.OFF
+        heater_mode = telegram.decoded.get("heater_mode")
+        if heater_mode is None:
+            heating_mode = str(telegram.decoded.get("heating_mode") or "").lower()
+            heater_mode = {
+                "normal": "normal",
+                "night_reduction": "night_setback",
+                "reduced": "setback",
+                "frost_protection": "off",
+            }.get(heating_mode)
+        if heater_mode in {"normal", "night_setback", "setback", "off"}:
+            self._fhk_heater_mode = str(heater_mode)
+            self._attr_hvac_mode = HVACMode.OFF if heater_mode == "off" else HVACMode.HEAT
+            self._attr_preset_mode = {
+                "normal": PRESET_HOME,
+                "night_setback": PRESET_SLEEP,
+                "setback": PRESET_ECO,
+            }.get(str(heater_mode), self._attr_preset_mode)
         self.schedule_update_ha_state()
 
     def _handle_fks_sv_telegram(self, telegram) -> None:
@@ -366,6 +425,36 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             detail = self.gateway.last_send_error or "unbekannter Fehler"
             raise HomeAssistantError(f"ELTAKO Klima-Telegramm konnte nicht gesendet werden: {detail}")
         self._attr_hvac_mode = hvac_mode
+        if not self._is_fks_sv:
+            self._fhk_heater_mode = "off" if hvac_mode == HVACMode.OFF else "normal"
+            if hvac_mode == HVACMode.HEAT:
+                self._attr_preset_mode = PRESET_HOME
+        self.schedule_update_ha_state()
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        if self._is_fks_sv or preset_mode not in (self._attr_preset_modes or []):
+            raise HomeAssistantError(f"Nicht unterstuetzte ELTAKO-Betriebsart: {preset_mode}")
+
+        command_mode = {
+            PRESET_HOME: "normal",
+            PRESET_SLEEP: "night",
+            PRESET_ECO: "setback",
+        }[preset_mode]
+        ok = await self.gateway.async_send_actuator_command(
+            self.device_config,
+            "set_preset_mode",
+            preset_mode=command_mode,
+        )
+        if not ok:
+            detail = self.gateway.last_send_error or "unbekannter Fehler"
+            raise HomeAssistantError(f"ELTAKO Betriebsart-Telegramm konnte nicht gesendet werden: {detail}")
+        self._attr_preset_mode = preset_mode
+        self._attr_hvac_mode = HVACMode.HEAT
+        self._fhk_heater_mode = {
+            PRESET_HOME: "normal",
+            PRESET_SLEEP: "night_setback",
+            PRESET_ECO: "setback",
+        }[preset_mode]
         self.schedule_update_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -386,17 +475,28 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self.schedule_update_ha_state()
             return
 
+        heater_mode = self._fhk_heater_mode
+        if not self._is_fks_sv and heater_mode == "off":
+            # Grimm switches an OFF actuator back to NORMAL when the user
+            # chooses a new target temperature.
+            heater_mode = "normal"
+
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
             temperature=temperature,
             current_temperature=self._current_temperature,
+            heater_mode=heater_mode,
         )
         if not ok:
             detail = self.gateway.last_send_error or "unbekannter Fehler"
             raise HomeAssistantError(f"ELTAKO Temperatur-Telegramm konnte nicht gesendet werden: {detail}")
         self._target_temperature = temperature
         self._attr_hvac_mode = HVACMode.HEAT
+        if not self._is_fks_sv:
+            self._fhk_heater_mode = heater_mode
+            if heater_mode == "normal":
+                self._attr_preset_mode = PRESET_HOME
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
