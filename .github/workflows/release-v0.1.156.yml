@@ -96,3 +96,5 @@ jobs:
             --notes-file release-notes.md \
             --verify-tag \
             --latest
+
+# final trigger
