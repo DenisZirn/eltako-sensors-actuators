@@ -8,7 +8,7 @@ Home-Assistant-Custom-Integration für die unten aufgeführten ELTAKO-Geräte.
 
 Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
 
-## Freigegebener Gerätekatalog (v0.1.156)
+## Freigegebener Gerätekatalog (v0.1.157)
 
 - F2T55 – Taster 2-Kanal EU
 - FT55, F4T55E – Taster 4-Kanal EU
@@ -37,7 +37,8 @@ Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, i
 - FUTH55ED – Hygrostat (A5-10-12)
 - FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
 - FKS-SV – Smart Valve / Heizkörper-Stellantrieb (noch im Test)
-- FHK14, F4HK14 – Heizung/Klima, (noch im Test)
+- FKS-B – Heizkörper-Stellantrieb, A5-20-04 / Modus 02; direktes Einlernen der HA-Sender-ID über reinen FAM-USB mit ESP2 noch nicht unterstützt
+- FHK14, F4HK14 – Heizung/Klima
 - FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren
 - FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
 - F3Z14D – 3-Kanal-S0-Drehstromzähler
@@ -66,23 +67,19 @@ Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Upda
 
 Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopieren und Home Assistant neu laden beziehungsweise neu starten.
 
-## Änderungen in v0.1.156
+## Änderungen in v0.1.157
 
-- FMS14 als eigener 2-Kanal-Multifunktions-Stromstoßschalter ergänzt.
-- FMS14-Ansteuerung über A5-38-08 mit `01-00-00-09` für EIN und `01-00-00-08` für AUS.
-- Die von EEDTOY vorgegebene `sender.id` wird für den FMS14 unverändert verwendet.
-- FMS14-Statusrückmeldungen werden pro physischer Kanaladresse ausgewertet; `70` entspricht EIN und `50` AUS.
-- Mehrkanalige Series-14-Aktoren werden kanalbezogen verarbeitet.
-- F4USM61B-Unterstützung für Betriebsarten 1 bis 8 erweitert.
-- FTS14EM als eigenes Eingabemodul ergänzt.
-- Beim FTS14EM werden nur die eigentlichen Eingänge als Home-Assistant-Entitäten angelegt; alte Hilfsentitäten wie „Gedrückte Taste“, „Tastenposition“, „Signalcode“ und „Letztes Telegramm“ wurden entfernt.
-- FAE14LPR-Auswertung ergänzt.
-- FSM60B-Auswertung für die unterschiedlichen Betriebsarten erweitert und hardwareseitig getestet.
-- Series-14-Rückmeldungen weiter vereinheitlicht und stabilisiert.
-- Funk-/Bus-Diagnose weiter überarbeitet.
-- Deutsche und englische Übersetzungen ergänzt.
-- FHK14-/F4HK14-Decoder und Sendewege sind enthalten; die aktive Steuerung wird weiterhin hardwareseitig validiert.
-- FRGBW14-Unterstützung ist enthalten, die praktische Ansteuerung wird weiterhin validiert.
+- FHK14/F4HK14-Steuerung weiter stabilisiert. Die aktuelle Raumtemperatur wird nur noch aus einer echten Aktor-Rückmeldung übernommen; synthetische Controllerwerte werden nicht mehr als Isttemperatur angezeigt.
+- FAE14LPR verwendet dieselbe abgesicherte Isttemperatur-Logik. Bis zur ersten gültigen Aktor-Rückmeldung wird 0,0 °C angezeigt.
+- Zustände von Sensoren, Binärsensoren, Schaltern, Licht, Cover und Klima werden nach einem Home-Assistant-Neustart wiederhergestellt, ohne dabei Schalttelegramme auszulösen.
+- Technische Unique-IDs der YAML-Entitäten wurden stabilisiert. Bestehende Registry-Einträge werden migriert, ohne vorhandene `entity_id` umzubenennen.
+- Temperaturmesswerte werden mit einer leichten EMA-Glättung (`alpha=0.25`) beruhigt. Der unveränderte Rohwert bleibt als Attribut `raw_temperature` erhalten. Solltemperaturen werden nicht geglättet.
+- F4T55E bereinigt: Die vier echten Tasten bleiben erhalten; ältere generische Hilfsentitäten wie `Gedrückte Taste`, `Tastenposition`, `Signalcode` und `Letztes Telegramm` werden entfernt.
+- FKS-B als Klimagerät mit bidirektionalem EEP `A5-20-04` ergänzt.
+- FKS-B Modus 02: Solltemperaturen von 10–30 °C werden im Empfangsfenster des Ventils nach dem praktisch ermittelten MiniSafe2-Telegrammmuster beantwortet.
+- Der FKS-B-Teach-In-Pfad wurde hinsichtlich Nutzdaten, Status und Antwortzeit an den erfolgreichen MiniSafe2-Mitschnitt angeglichen.
+- Das direkte Einlernen einer Home-Assistant-Sender-ID in einen FKS-B über einen reinen FAM-USB mit ESP2 ist weiterhin nicht möglich.
+- FRGBW14 bleibt offen; die praktische Ansteuerung ist noch nicht abschließend validiert.
 
 ## FMS14
 
@@ -150,7 +147,17 @@ Unterstützte Modelle: FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB
 
 Die Integration enthält Decoder und Sendeunterstützung für FHK14 und F4HK14.
 
-Die aktive Steuerung wird weiterhin hardwareseitig geprüft und gilt in v0.1.156 noch nicht als abschließend validiert.
+Der FHK14 ist mit korrekt programmiertem Controllerplatz funktionsfähig. Für die Controller-Sollwertvorgabe muss die Sender-ID im Aktor in Function Group 3, Function 65 (`temperature setpoint from controller`) eingetragen sein.
+
+Die aktuelle Raumtemperatur wird nur aus einer echten Aktor-Rückmeldung übernommen. Bis zur ersten gültigen Rückmeldung wird kein synthetischer 40-°C-Wert mehr als Isttemperatur verwendet.
+
+## FKS-B
+
+Der FKS-B wird als Klimagerät mit dem bidirektionalen EEP `A5-20-04` unterstützt.
+
+Für Modus 02 wird die Solltemperatur im Bereich 10–30 °C im Empfangsfenster des Ventils beantwortet; der FKS-B übernimmt die eigentliche Ventilregelung selbstständig.
+
+Bekannte Einschränkung: Das direkte Einlernen einer Home-Assistant-Sender-ID in einen FKS-B über einen reinen FAM-USB mit ESP2 ist derzeit nicht möglich. Der ESP2-Sendepfad arbeitet als Broadcast, während der erfolgreiche Anlernvorgang mit MiniSafe2 eine gerichtete Kommunikation verwendet.
 
 ## FDG14
 
@@ -164,7 +171,7 @@ Die aktive Steuerung wird weiterhin hardwareseitig geprüft und gilt in v0.1.156
 
 Der FRGBW71L unterstützt Ein/Aus, Helligkeit sowie Rot, Grün, Blau und Weiß.
 
-Die Telegrammverarbeitung für den FRGBW14 ist ebenfalls Bestandteil der Integration. Die praktische Ansteuerung des FRGBW14 wird weiterhin validiert.
+Die Telegrammverarbeitung für den FRGBW14 ist ebenfalls Bestandteil der Integration. Die praktische Ansteuerung des FRGBW14 ist noch nicht abschließend validiert und bleibt offen.
 
 ## FFG7B
 
@@ -181,7 +188,7 @@ Die Integration enthält eine eigene Diagnose für gesendete und empfangene Funk
 
 Die Diagnose kann über die Integrationsoptionen aktiviert werden.
 
-Ab v0.1.156 verwendet das Frontend die Datei:
+Seit v0.1.156 verwendet das Frontend die Datei:
 
 `frontend/diagnostics-panel.js`
 
@@ -189,7 +196,7 @@ Technische Telegrammdetails werden bevorzugt in dieser Diagnose dargestellt und 
 
 ## Übersetzungen
 
-v0.1.156 enthält deutsche und englische Übersetzungen:
+Die Integration enthält deutsche und englische Übersetzungen:
 
 - `translations/de.json`
 - `translations/en.json`
