@@ -18,6 +18,7 @@ from .bus.eep_a5_20_01 import (
     build_a5_20_01_temperature_setpoint,
     build_a5_20_01_valve_position,
 )
+from .bus.eep_a5_20_04 import build_a5_20_04_control_response, build_a5_20_04_teach_in_response
 from .bus.eep_a5_38_08 import build_a5_38_08_dimming, build_a5_38_08_switch
 from .bus.eep_f6_02 import build_f6_02_01_rocker
 from .bus.eep_h5_3f_7f import build_h5_3f_7f_cover
@@ -716,6 +717,8 @@ class EltakoGateway:
         self._fks_sv_physical_lookup: dict[str, dict[str, Any]] = {}
         self._fks_sv_controller_lookup: dict[str, dict[str, Any]] = {}
         self._fks_sv_reply_locks: dict[str, asyncio.Lock] = {}
+        self._fks_hora_teach_in_armed_until: dict[str, float] = {}
+        self._fks_hora_priority_tx: list[dict[str, Any]] = []
         self._send_lock = asyncio.Lock()
         self._status_sequence = 0
         self.port_descriptor: dict[str, str | None] = {}
@@ -998,7 +1001,7 @@ class EltakoGateway:
             if eep == "A5-20-01":
                 direction = "controller" if mode == "fks_kp" else "actuator"
             elif eep == "A5-20-04" and mode == "fks_hora":
-                direction = "controller"
+                direction = "actuator"
             else:
                 direction = None
 
@@ -1112,6 +1115,11 @@ class EltakoGateway:
                     await asyncio.sleep(0.05)
                     continue
                 self._handle_received_frame(frame)
+                # A5-20-04 bidirectional teach-in has a very short receive
+                # window. Flush queued teach-in replies before starting the
+                # next blocking serial read, otherwise the reader can hold the
+                # transport lock for another 200 ms and make the reply too late.
+                await self._async_flush_fks_hora_priority_tx()
             except asyncio.CancelledError:
                 raise
             except Exception as err:
@@ -1178,6 +1186,14 @@ class EltakoGateway:
                     "ELTAKO diagnostics failed while recording telegram; continuing dispatch"
                 )
 
+        try:
+            self._handle_fks_hora_teach_in_pending(telegram)
+        except Exception:
+            _LOGGER.exception(
+                "FKS-H/FKS-B gateway teach-in handling failed for sender=%s",
+                telegram.sender_id,
+            )
+
         for listener in list(self._listeners):
             try:
                 listener(telegram)
@@ -1186,6 +1202,182 @@ class EltakoGateway:
                     "ELTAKO entity listener failed for sender=%s eep=%s; continuing with remaining listeners",
                     telegram.sender_id,
                     telegram.eep,
+                )
+
+    def _handle_fks_hora_teach_in_pending(self, telegram: EltakoTelegram) -> None:
+        """Queue an armed FKS-H/FKS-B teach-in reply for immediate TX.
+
+        A5-20-04 uses 4BS teach-in variation 3. The valve opens only a short
+        receive window after its query. Do not schedule a normal async task
+        here: the reader loop would usually start another 200 ms blocking read
+        first. Instead queue the already-built response and let the reader loop
+        flush it before reading again.
+        """
+        if telegram.sender_id in {"__gateway_status__", None}:
+            return
+        decoded = telegram.decoded or {}
+        if not (decoded.get("learn_telegram") or decoded.get("learn")):
+            return
+        if str(decoded.get("telegram_type") or "") != "fks_hora_teach_in":
+            return
+
+        physical_id = _normalized_address_or_none(telegram.sender_id)
+        if not physical_id:
+            return
+        device = self._device_lookup.get(physical_id)
+        if not isinstance(device, dict):
+            return
+        if normalize_eep(device.get("eep")) != "A5-20-04":
+            return
+
+        key = self._fks_hora_teach_in_key(device)
+        deadline = self._fks_hora_teach_in_armed_until.get(key)
+        if deadline is None:
+            return
+        if self.hass.loop.time() > deadline:
+            self._fks_hora_teach_in_armed_until.pop(key, None)
+            return
+
+        query = decoded.get("teach_in_query_data")
+        if query is None:
+            data_hex = decoded.get("data_hex") or decoded.get("value")
+            if data_hex:
+                try:
+                    query = bytes.fromhex(str(data_hex).replace("-", ""))
+                except ValueError:
+                    query = None
+        if query is None:
+            return
+        query = bytes(query)
+
+        # Consume only after a valid matching request is available.
+        self._fks_hora_teach_in_armed_until.pop(key, None)
+        request_started = self.hass.loop.time()
+        diagnostic_event(
+            self.hass,
+            "fks_b_teach_in_request_received",
+            entry_id=self.entry_id,
+            gateway=self.gateway_type,
+            device_id=device.get("id"),
+            physical_sender_id=physical_id,
+            query_data=query.hex("-"),
+        )
+
+        try:
+            sender_id = self._fks_sv_effective_sender_id(device)
+            # Reproduce the successful MiniSafe2 FKS-B teach-in response.
+            # The live successful capture is 80-27-FF-F0 with ERP status 0x80.
+            message = build_a5_20_04_teach_in_response(
+                sender_id,
+                query,
+                status=0x80,
+            )
+            serialized = message.serialize()
+        except Exception as err:
+            self._last_send_error = str(err) or err.__class__.__name__
+            diagnostic_event(
+                self.hass,
+                "fks_b_teach_in_response_failed",
+                level="error",
+                entry_id=self.entry_id,
+                gateway=self.gateway_type,
+                device_id=device.get("id"),
+                physical_sender_id=physical_id,
+                sender_id=_get_sender_id(device),
+                error=self._last_send_error,
+            )
+            return
+
+        self._fks_hora_priority_tx.append(
+            {
+                "device": device,
+                "physical_id": physical_id,
+                "sender_id": sender_id,
+                "message": message,
+                "serialized": serialized,
+                "data_hex": bytes(message.body[2:6]).hex("-"),
+                "request_started": request_started,
+            }
+        )
+        diagnostic_event(
+            self.hass,
+            "fks_b_teach_in_tx_queued",
+            entry_id=self.entry_id,
+            gateway=self.gateway_type,
+            device_id=device.get("id"),
+            physical_sender_id=physical_id,
+            sender_id=sender_id,
+            destination_requested=physical_id,
+            destination_transport="esp2_broadcast",
+            data_hex=bytes(message.body[2:6]).hex("-"),
+            raw_frame=serialized,
+        )
+
+    async def _async_flush_fks_hora_priority_tx(self) -> None:
+        """Transmit queued A5-20-04 teach-in replies before the next read."""
+        while self._fks_hora_priority_tx:
+            item = self._fks_hora_priority_tx.pop(0)
+            device = item["device"]
+            physical_id = item["physical_id"]
+            sender_id = item["sender_id"]
+            try:
+                # For the FKS-B receive window, do not use SerialTransport.send(),
+                # because the normal FAM-USB path deliberately sleeps 100 ms after
+                # each write. send_many() with one frame writes and flushes the same
+                # ESP2 frame but returns immediately, matching the MiniSafe timing.
+                frames = await self._async_send_esp2_messages(
+                    [item["message"]],
+                    inter_frame_delay=0.0,
+                )
+                frame = frames[0]
+                latency_ms = round(
+                    max(0.0, self.hass.loop.time() - float(item.get("request_started", self.hass.loop.time()))) * 1000.0,
+                    1,
+                )
+                self._last_send_error = None
+                diagnostic_event(
+                    self.hass,
+                    "fks_b_teach_in_tx",
+                    level="info",
+                    entry_id=self.entry_id,
+                    gateway=self.gateway_type,
+                    device_id=device.get("id"),
+                    physical_sender_id=physical_id,
+                    sender_id=sender_id,
+                    destination_requested=physical_id,
+                    destination_transport="esp2_broadcast",
+                    data_hex=item["data_hex"],
+                    raw_frame=frame,
+                    latency_ms=latency_ms,
+                )
+                diagnostic_event(
+                    self.hass,
+                    "fks_b_teach_in_response_sent",
+                    level="info",
+                    entry_id=self.entry_id,
+                    gateway=self.gateway_type,
+                    device_id=device.get("id"),
+                    physical_sender_id=physical_id,
+                    sender_id=sender_id,
+                    data_hex=item["data_hex"],
+                    raw_frame=frame,
+                    latency_ms=latency_ms,
+                    error=None,
+                )
+            except Exception as err:
+                self._last_send_error = str(err) or err.__class__.__name__
+                diagnostic_event(
+                    self.hass,
+                    "fks_b_teach_in_response_failed",
+                    level="error",
+                    entry_id=self.entry_id,
+                    gateway=self.gateway_type,
+                    device_id=device.get("id"),
+                    physical_sender_id=physical_id,
+                    sender_id=sender_id,
+                    data_hex=item.get("data_hex"),
+                    raw_frame=item.get("serialized"),
+                    error=self._last_send_error,
                 )
 
     @property
@@ -1213,6 +1405,45 @@ class EltakoGateway:
     @property
     def last_send_error(self) -> str | None:
         return self._last_send_error
+
+    def _fks_hora_teach_in_key(self, device: dict[str, Any]) -> str:
+        return _normalized_address_or_none(device.get("id")) or str(device.get("id") or "fks-hora").strip().upper()
+
+    def arm_fks_hora_teach_in(self, device: dict[str, Any], timeout_seconds: float = 120.0) -> bool:
+        """Arm the A5-20-04 bidirectional teach-in handshake for a short window."""
+        key = self._fks_hora_teach_in_key(device)
+        self._fks_hora_teach_in_armed_until[key] = self.hass.loop.time() + max(1.0, float(timeout_seconds))
+        self._last_send_error = None
+        sender_id = self._fks_sv_effective_sender_id(device)
+        _LOGGER.info(
+            "FKS-H/FKS-B teach-in armed: device_id=%s sender_id=%s timeout=%ss",
+            device.get("id"),
+            sender_id,
+            timeout_seconds,
+        )
+        diagnostic_event(
+            self.hass,
+            "fks_b_teach_in_armed",
+            entry_id=self.entry_id,
+            gateway=self.gateway_type,
+            device_id=device.get("id"),
+            sender_id=sender_id,
+            timeout_seconds=float(timeout_seconds),
+        )
+        return True
+
+    def consume_fks_hora_teach_in_arm(self, device: dict[str, Any]) -> bool:
+        """Consume one active A5-20-04 teach-in arm token for this valve."""
+        key = self._fks_hora_teach_in_key(device)
+        deadline = self._fks_hora_teach_in_armed_until.get(key)
+        if deadline is None:
+            return False
+        if self.hass.loop.time() > deadline:
+            self._fks_hora_teach_in_armed_until.pop(key, None)
+            _LOGGER.info("FKS-H/FKS-B teach-in arm expired: device_id=%s", device.get("id"))
+            return False
+        self._fks_hora_teach_in_armed_until.pop(key, None)
+        return True
 
     def _fks_sv_effective_sender_id(self, device: dict[str, Any]) -> str:
         sender_id = _get_sender_id(device)
@@ -1337,6 +1568,95 @@ class EltakoGateway:
                 self._last_send_error = str(err) or err.__class__.__name__
                 _LOGGER.exception("FKS-SV teach-in response failed for %s", device.get("id"))
                 return False
+
+
+    async def async_send_fks_hora_teach_in_response(
+        self,
+        device: dict[str, Any],
+        *,
+        query_data: bytes,
+        target_temperature: float,
+        valve_position: float | int | None,
+    ) -> bool:
+        """Send one standards-compliant A5-20-04 variation-3 teach-in response."""
+        try:
+            sender_id = self._fks_sv_effective_sender_id(device)
+            teach_message = build_a5_20_04_teach_in_response(
+                sender_id,
+                query_data,
+                status=0x00,
+            )
+            teach_frame = await self._async_send_esp2_message(teach_message)
+            self._last_send_error = None
+            _LOGGER.info(
+                "FKS-H/FKS-B teach-in response sent: device_id=%s sender_id=%s query=%s frame=%s",
+                device.get("id"), sender_id, query_data.hex("-"), teach_frame.hex("-")
+            )
+            return True
+        except Exception as err:
+            self._last_send_error = str(err) or err.__class__.__name__
+            _LOGGER.exception("FKS-H/FKS-B teach-in response failed for %s", device.get("id"))
+            return False
+
+    async def async_send_fks_hora_control_response(
+        self,
+        device: dict[str, Any],
+        *,
+        target_temperature: float,
+        valve_position: int | None,
+    ) -> bool:
+        """Reply to an FKS-B in Modus 02 while its receive window is open.
+
+        The valve regulates autonomously. Reproduce the successfully captured
+        MiniSafe2 operating telegram shape (00-XX-89-08, status 0x80) and vary
+        only DB2 with the requested target temperature.
+        """
+        try:
+            sender_id = self._fks_sv_effective_sender_id(device)
+            message = build_a5_20_04_control_response(
+                sender_id,
+                target_temperature=target_temperature,
+                status=0x80,
+            )
+            frame = await self._async_send_esp2_message(message)
+            self._last_send_error = None
+            data_hex = bytes(message.body[2:6]).hex("-")
+            diagnostic_event(
+                self.hass,
+                "fks_b_mode02_tx",
+                level="info",
+                entry_id=self.entry_id,
+                gateway=self.gateway_type,
+                device_id=device.get("id"),
+                sender_id=sender_id,
+                target_temperature=target_temperature,
+                data_hex=data_hex,
+                raw_frame=frame,
+                reference="MiniSafe2 00-XX-89-08",
+            )
+            _LOGGER.info(
+                "FKS-B Modus-02 reply sent: device_id=%s sender_id=%s target=%s data=%s frame=%s",
+                device.get("id"),
+                sender_id,
+                target_temperature,
+                data_hex,
+                frame.hex("-"),
+            )
+            return True
+        except Exception as err:
+            self._last_send_error = str(err) or err.__class__.__name__
+            diagnostic_event(
+                self.hass,
+                "fks_b_mode02_tx_failed",
+                level="error",
+                entry_id=self.entry_id,
+                gateway=self.gateway_type,
+                device_id=device.get("id"),
+                target_temperature=target_temperature,
+                error=self._last_send_error,
+            )
+            _LOGGER.exception("FKS-B Modus-02 reply failed for %s", device.get("id"))
+            return False
 
     async def async_send_actuator_command(self, device: dict[str, Any], command: str, **kwargs: Any) -> bool:
         """Build and send an actuator command using the internal bus core.
@@ -2363,12 +2683,9 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # Match the established software-controller implementation:
-                # DB1=0x00 (40 C placeholder). The room sensor learned in FHK
-                # function group 1 provides the authoritative actual value.
+                # The physical room sensor learned in the actuator remains
+                # authoritative. No synthetic room temperature is transmitted.
                 current_temperature=None,
-                # Preserve the current actuator mode exactly as Grimm does
-                # when changing only the target temperature.
                 hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
             )

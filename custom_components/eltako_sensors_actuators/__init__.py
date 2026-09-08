@@ -7,6 +7,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_GATEWAY_TYPE,
@@ -20,7 +21,7 @@ from .const import (
     SERVICE_RELOAD_CONFIG,
 )
 from .gateway import EltakoGateway
-from .entity_base import gateway_device_name, gateway_model
+from .entity_base import device_key, legacy_device_key, gateway_device_name, gateway_model
 from .diagnostics import async_set_diagnostics_enabled, async_setup_diagnostics, diagnostic_event
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +70,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = gateway
 
+    # Migrate pre-v0.1.157 YAML unique IDs before platform entities are created.
+    # Home Assistant keeps the existing entity_id while only the registry's
+    # technical unique_id changes, so dashboards and automations remain intact.
+    _async_migrate_stable_entity_unique_ids(hass, entry, devices if isinstance(devices, list) else [])
+
     # Normal options changes do not reload. Only the one-shot flag written by
     # a successful YAML import or connection update triggers a reload.
     _async_register_services(hass)
@@ -76,6 +82,66 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+def _async_migrate_stable_entity_unique_ids(
+    hass: HomeAssistant, entry: ConfigEntry, devices: list[dict]
+) -> None:
+    """Migrate old gateway-dependent YAML unique IDs without renaming entities."""
+    registry = er.async_get(hass)
+    mappings: dict[str, str] = {}
+    prefix = f"{DOMAIN}_{entry.entry_id}_"
+
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        old_base = legacy_device_key(device)
+        new_base = device_key(device)
+        if old_base == new_base:
+            continue
+        mappings[f"{prefix}{old_base}"] = f"{prefix}{new_base}"
+
+    if not mappings:
+        return
+
+    entries = [
+        entity for entity in list(registry.entities.values())
+        if getattr(entity, "config_entry_id", None) == entry.entry_id
+        and getattr(entity, "platform", None) == DOMAIN
+    ]
+    used_unique_ids = {str(getattr(entity, "unique_id", "") or ""): entity.entity_id for entity in entries}
+
+    # Longest prefix first avoids accidental partial-prefix matches.
+    ordered = sorted(mappings.items(), key=lambda item: len(item[0]), reverse=True)
+    for entity in entries:
+        current = str(getattr(entity, "unique_id", "") or "")
+        for old_prefix, new_prefix in ordered:
+            if current != old_prefix and not current.startswith(old_prefix + "_"):
+                continue
+            suffix = current[len(old_prefix):]
+            new_unique_id = f"{new_prefix}{suffix}"
+            if new_unique_id == current:
+                break
+            occupied = used_unique_ids.get(new_unique_id)
+            if occupied and occupied != entity.entity_id:
+                _LOGGER.warning(
+                    "ELTAKO unique-id migration skipped for %s: target %s is already used by %s",
+                    entity.entity_id,
+                    new_unique_id,
+                    occupied,
+                )
+                break
+            try:
+                registry.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
+                used_unique_ids.pop(current, None)
+                used_unique_ids[new_unique_id] = entity.entity_id
+                _LOGGER.info(
+                    "Migrated ELTAKO entity unique_id without changing entity_id: %s",
+                    entity.entity_id,
+                )
+            except Exception:
+                _LOGGER.exception("Failed to migrate ELTAKO unique_id for %s", entity.entity_id)
+            break
 
 
 async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

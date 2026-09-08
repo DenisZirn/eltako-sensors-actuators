@@ -244,7 +244,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 # FTS14EM inputs already have their dedicated E1..En binary
                 # entities in binary_sensor.py. Do not recreate the old generic
                 # rocker helper sensors (button, position, signal code, last seen).
-                if not _is_fts14em_device(device):
+                if not _is_fts14em_device(device) and not _is_f4t55e_device(device):
                     entities.extend(_rocker_button_entities(gateway, device))
             elif eep == "D5-00-01":
                 entities.extend(_d5_00_01_entities(gateway, device))
@@ -302,6 +302,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_flgtf_last_seen_entities(hass, entry, devices)
     _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
     _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
+    _remove_obsolete_f4t55e_rocker_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
     _LOGGER.info(
@@ -465,6 +466,27 @@ class EltakoGatewayStatusSensor(EltakoGatewayEntity, SensorEntity):
 
 
 
+def _is_f4t55e_device(device: dict[str, Any]) -> bool:
+    """Return True for the four-button F4T55E rocker device."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("device_family"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("device_family"),
+        )
+    ).upper()
+    return "F4T55E" in text
+
+
 def _rocker_button_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     return [
         EltakoYamlValueSensor(gateway, device, "button_label_de", "Gedrueckte Taste", None, None),
@@ -548,6 +570,46 @@ def _remove_obsolete_fts14em_rocker_entities(hass, entry, devices: list[dict[str
             _LOGGER.info("Removed obsolete FTS14EM helper entity %s", entity_id)
         except Exception:
             _LOGGER.exception("Failed to remove obsolete FTS14EM helper entity %s", entity_id)
+
+
+def _remove_obsolete_f4t55e_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove legacy generic F4T55E rocker helper sensors.
+
+    F4T55E exposes its four physical button positions as binary sensors. Older
+    builds additionally created generic helper sensors for button label,
+    position, signal code and last telegram. These duplicate the actual button
+    entities and are removed from the entity registry on upgrade.
+    """
+    try:
+        registry = er.async_get(hass)
+    except Exception:
+        return
+
+    suffixes = (
+        "Gedrueckte Taste",
+        "Gedrückte Taste",
+        "Tastenposition",
+        "Signalcode",
+        "Letztes Telegramm",
+    )
+    obsolete_unique_ids: set[str] = set()
+    for device in devices or []:
+        if not isinstance(device, dict) or not _is_f4t55e_device(device):
+            continue
+        if normalize_eep(device.get("eep")) != "F6-02-01":
+            continue
+        for suffix in suffixes:
+            obsolete_unique_ids.add(_yaml_entity_unique_id(entry.entry_id, device, suffix))
+
+    for unique_id in obsolete_unique_ids:
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        if not entity_id:
+            continue
+        try:
+            registry.async_remove(entity_id)
+            _LOGGER.info("Removed obsolete F4T55E helper entity %s", entity_id)
+        except Exception:
+            _LOGGER.exception("Failed to remove obsolete F4T55E helper entity %s", entity_id)
 
 
 def _remove_obsolete_gateway_path_entities(hass, entry) -> None:
@@ -1039,6 +1101,45 @@ class EltakoYamlGenericSensor(EltakoYamlEntity, SensorEntity):
         self._value = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None or last_state.state in {"unknown", "unavailable", ""}:
+            return
+        value: Any = last_state.state
+        try:
+            if getattr(self, "_attr_native_unit_of_measurement", None) is not None:
+                value = float(value)
+        except (TypeError, ValueError):
+            pass
+        self._value = value
+        if self._smooth_temperature:
+            try:
+                self._temperature_ema_value = float(value)
+            except (TypeError, ValueError):
+                self._temperature_ema_value = None
+
+    def _apply_temperature_smoothing(self, value: Any) -> Any:
+        """Apply a light EMA only to real measured temperature sensors.
+
+        The raw telegram value remains exposed as ``raw_temperature``. Setpoint
+        and controller-command temperatures are deliberately not filtered.
+        """
+        if not self._smooth_temperature:
+            return value
+        try:
+            raw = float(value)
+        except (TypeError, ValueError):
+            return value
+        self._attr_extra_state_attributes["raw_temperature"] = raw
+        self._attr_extra_state_attributes["temperature_filter"] = "EMA alpha=0.25"
+        if self._temperature_ema_value is None:
+            filtered = raw
+        else:
+            filtered = (self._temperature_ema_alpha * raw) + ((1.0 - self._temperature_ema_alpha) * self._temperature_ema_value)
+        self._temperature_ema_value = filtered
+        return round(filtered, 2)
+
     @property
     def native_value(self):
         return self._value
@@ -1208,6 +1309,19 @@ class EltakoYamlEnumSensor(EltakoYamlEntity, SensorEntity):
         self._attr_icon = "mdi:window-open-variant"
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None or last_state.state in {"unknown", "unavailable", ""}:
+            return
+        value: Any = last_state.state
+        try:
+            if getattr(self, "_attr_native_unit_of_measurement", None) is not None:
+                value = float(value)
+        except (TypeError, ValueError):
+            pass
+        self._value = value
+
     @property
     def native_value(self):
         return self._value
@@ -1353,6 +1467,9 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._last_valid_numeric_value = None
         self._last_energy_sample_for_power = None
         self._last_energy_sample_ts = None
+        self._temperature_ema_alpha = 0.25
+        self._temperature_ema_value = None
+        self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
 
@@ -1376,6 +1493,19 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         elif state_class:
             self._attr_state_class = state_class
         self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None or last_state.state in {"unknown", "unavailable", ""}:
+            return
+        value: Any = last_state.state
+        try:
+            if getattr(self, "_attr_native_unit_of_measurement", None) is not None:
+                value = float(value)
+        except (TypeError, ValueError):
+            pass
+        self._value = value
 
     @property
     def native_value(self):
@@ -1450,7 +1580,7 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                         return
                     self._last_valid_numeric_value = numeric_value
 
-                self._value = new_value
+                self._value = self._apply_temperature_smoothing(new_value)
                 self.schedule_update_ha_state()
                 return
 
@@ -1567,7 +1697,7 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
 
             self._last_valid_numeric_value = numeric_value
 
-        self._value = new_value
+        self._value = self._apply_temperature_smoothing(new_value)
         self.schedule_update_ha_state()
 
 
@@ -1634,6 +1764,8 @@ class EltakoValueSensor(EltakoBaseEntity, SensorEntity):
         super().__init__(gateway, sender_id, name)
         self.key = key
         self._value = None
+        self._temperature_ema_alpha = 0.25
+        self._temperature_ema_value = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
         if key == "temperature":
@@ -1654,7 +1786,22 @@ class EltakoValueSensor(EltakoBaseEntity, SensorEntity):
     def _handle_telegram(self, telegram) -> None:
         if self.key not in telegram.decoded:
             return
-        self._value = telegram.decoded[self.key]
+        value = telegram.decoded[self.key]
+        if self.key == "temperature":
+            try:
+                raw = float(value)
+                self._attr_extra_state_attributes = dict(getattr(self, "_attr_extra_state_attributes", {}) or {})
+                self._attr_extra_state_attributes["raw_temperature"] = raw
+                self._attr_extra_state_attributes["temperature_filter"] = "EMA alpha=0.25"
+                if self._temperature_ema_value is None:
+                    filtered = raw
+                else:
+                    filtered = (self._temperature_ema_alpha * raw) + ((1.0 - self._temperature_ema_alpha) * self._temperature_ema_value)
+                self._temperature_ema_value = filtered
+                value = round(filtered, 2)
+            except (TypeError, ValueError):
+                pass
+        self._value = value
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:

@@ -310,6 +310,31 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             self._attr_color_mode = _ONOFF_MODE
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        if last_state.state == "on":
+            self._is_on = True
+        elif last_state.state == "off":
+            self._is_on = False
+        attrs = last_state.attributes or {}
+        try:
+            if attrs.get("brightness") is not None:
+                self._brightness = max(0, min(255, int(attrs.get("brightness"))))
+        except (TypeError, ValueError):
+            pass
+        rgbw = attrs.get("rgbw_color")
+        if isinstance(rgbw, (list, tuple)) and len(rgbw) >= 4:
+            try:
+                self._rgbw_color = tuple(max(0, min(255, int(v))) for v in rgbw[:4])
+                if _is_rgbw_device(self.device_config):
+                    self._frgbw_base_rgbw = self._rgbw_color
+            except (TypeError, ValueError):
+                pass
+
     @property
     def is_on(self):
         return self._is_on

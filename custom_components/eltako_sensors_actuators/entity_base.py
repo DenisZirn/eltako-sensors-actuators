@@ -4,6 +4,7 @@ from typing import Any
 import re
 
 from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN
 
@@ -24,7 +25,14 @@ def normalize_eep(value: Any) -> str:
     return match.group(1) if match else text
 
 
-def device_key(device: dict[str, Any]) -> str:
+def _sanitize_unique_part(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def legacy_device_key(device: dict[str, Any]) -> str:
+    """Return the pre-v0.1.157 YAML entity key for registry migration only."""
     gateway = device.get("gateway") if isinstance(device.get("gateway"), dict) else {}
     gateway_id = gateway.get("id") or gateway.get("device_type") or "gateway"
     return (
@@ -33,6 +41,35 @@ def device_key(device: dict[str, Any]) -> str:
         .replace(" ", "_")
         .replace("/", "_")
     )
+
+
+def device_key(device: dict[str, Any]) -> str:
+    """Return a stable technical key independent of names and gateway choice.
+
+    Entity identity must survive integration upgrades, translations, display-name
+    changes and switching the selected USB gateway. Prefer an explicit EEDTOY
+    unique_id when present; otherwise derive the key only from physical/protocol
+    fields. Human-readable names are deliberately excluded.
+    """
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    explicit = device.get("unique_id") or raw.get("unique_id")
+    if explicit not in (None, ""):
+        return f"uid_{_sanitize_unique_part(explicit)}"
+
+    parts = [
+        normalize_platform(device.get("platform")) or "entity",
+        _sanitize_unique_part(str(device.get("id") or device.get("sender_id") or "unknown").upper()),
+        _sanitize_unique_part(normalize_eep(device.get("eep")) or "no_eep"),
+    ]
+    # Only add true channel/input discriminators. These distinguish multiple
+    # entities with the same physical address without tying identity to labels.
+    for key in ("channel", "channel_number", "input_number"):
+        value = device.get(key)
+        if value is None:
+            value = raw.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}_{_sanitize_unique_part(value)}")
+    return "_".join(part for part in parts if part)
 
 
 def gateway_device_name(gateway) -> str:
@@ -231,6 +268,11 @@ def _futh55ed_mode(device: dict[str, Any]) -> str:
     future room controllers. ``futh55ed_mode`` remains supported for existing
     EEDTOY YAML files. TF61 and the older ``two_point`` spelling are normalized
     to one internal mode so entity routing stays backwards compatible.
+
+    FKS-B uses the same confirmed A5-20-04 telegram path as FKS-H. If EEDTOY
+    exports the device as FKS-B without an explicit controller mode, route it
+    through the existing ``fks_hora`` implementation without changing the
+    visible device name.
     """
     value = _device_option(device, "room_controller_mode", None)
     if value in (None, ""):
@@ -238,6 +280,23 @@ def _futh55ed_mode(device: dict[str, Any]) -> str:
     mode = str(value or "").strip().lower().replace("-", "_")
     if mode in {"tf61", "tf61r", "two_point", "2_point"}:
         return "two_point"
+    if not mode and isinstance(device, dict) and normalize_eep(device.get("eep")) == "A5-20-04":
+        raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+        text = " ".join(
+            str(value or "")
+            for value in (
+                device.get("name"),
+                device.get("device_type"),
+                device.get("model"),
+                device.get("device_family"),
+                raw.get("name"),
+                raw.get("device_type"),
+                raw.get("model"),
+                raw.get("device_family"),
+            )
+        ).upper()
+        if "FKS-B" in text or "FKS_B" in text or "FKSB" in text:
+            return "fks_hora"
     return mode
 
 
@@ -309,7 +368,7 @@ class EltakoGatewayEntity(Entity):
         )
 
 
-class EltakoBaseEntity(Entity):
+class EltakoBaseEntity(RestoreEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_available = True

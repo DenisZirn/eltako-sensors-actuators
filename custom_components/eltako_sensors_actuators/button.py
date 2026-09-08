@@ -61,10 +61,9 @@ def _supports_teach_in_button(device: Any) -> bool:
     platform = normalize_platform(device.get("platform"))
     if platform not in {"light", "cover", "climate", "switch"}:
         return False
-    # FKS-SV teach-in is initiated by a short press on the physical valve. The
-    # integration then answers its A5-20-01 teach-in query from the configured
-    # sender.id. A generic one-way "Lerntelegramm senden" button is misleading
-    # and cannot replace that bidirectional handshake.
+    # FKS-SV A5-20-01 teach-in remains fully valve initiated. FKS-H/FKS-B
+    # A5-20-04 expose a button that arms a short teach-in wait window; the
+    # physical valve must still send the bidirectional learn query afterwards.
     if normalize_eep(device.get("eep")) == "A5-20-01":
         return False
 
@@ -264,6 +263,8 @@ def _build_teach_in_buttons_for_device(gateway, device: dict[str, Any]) -> list[
     telegram FF-F8-0D-80; no rocker-position specific buttons are required for
     this GFVS path, and adding separate AUF/AB buttons is misleading.
     """
+    if normalize_eep(device.get("eep")) == "A5-20-04":
+        return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="arm_fks_hora_teach_in")]
     return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="teach_in")]
 
 
@@ -322,7 +323,10 @@ class EltakoTeachInButton(EltakoYamlEntity, ButtonEntity):
             self.device_config.get("sender_eep"),
             self.device_config.get("eep"),
         )
-        ok = await self.gateway.async_send_actuator_command(self.device_config, command)
+        if command == "arm_fks_hora_teach_in":
+            ok = self.gateway.arm_fks_hora_teach_in(self.device_config)
+        else:
+            ok = await self.gateway.async_send_actuator_command(self.device_config, command)
         if not ok:
             reason = self.gateway.last_send_error or "unbekannter Fehler"
             raise HomeAssistantError(f"ELTAKO Lern-/Anlerntelegramm konnte nicht gesendet werden: {reason}")

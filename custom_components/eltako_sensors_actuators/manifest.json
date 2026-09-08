@@ -10,7 +10,7 @@
   "requirements": [
     "pyserial"
   ],
-  "version": "0.1.156",
+  "version": "0.1.157",
   "documentation": "https://github.com/DenisZirn/eltako-sensors-actuators",
   "issue_tracker": "https://github.com/DenisZirn/eltako-sensors-actuators/issues"
 }

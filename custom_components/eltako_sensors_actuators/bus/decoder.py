@@ -13,7 +13,10 @@ from .eep_a5_20_01 import (
 from .eep_a5_04 import decode_a5_04
 from .eep_a5_09_04 import decode_a5_09_04
 from .eep_a5_10_12 import decode_a5_10_12
-from .eep_a5_20_04 import decode_a5_20_04_controller_telegram
+from .eep_a5_20_04 import (
+    decode_a5_20_04_actuator_status,
+    decode_a5_20_04_controller_telegram,
+)
 from .eep_ffg7b import decode_ffg7b_a5, decode_ffg7b_rps
 
 
@@ -54,8 +57,11 @@ def decode_esp2_message(
                 decoded.update(decode_a5_20_01_controller_telegram(data))
             else:
                 decoded.update(decode_a5_20_01_actuator_status(data))
-        elif normalized_eep == "A5-20-04" and str(direction or "").lower() in {"controller", "to_actuator", "tx"}:
-            decoded.update(decode_a5_20_04_controller_telegram(data))
+        elif normalized_eep == "A5-20-04":
+            if str(direction or "").lower() in {"controller", "to_actuator", "tx"}:
+                decoded.update(decode_a5_20_04_controller_telegram(data))
+            else:
+                decoded.update(decode_a5_20_04_actuator_status(data))
         elif normalized_eep == "A5-10-12":
             decoded.update(decode_a5_10_12(data))
         else:

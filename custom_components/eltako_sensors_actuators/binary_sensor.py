@@ -417,6 +417,16 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
         self._mode8_reset_task: asyncio.Task | None = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        if last_state.state == "on":
+            self._state = True
+        elif last_state.state == "off":
+            self._state = False
+
     @property
     def is_on(self):
         return self._state

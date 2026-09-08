@@ -41,6 +41,17 @@ class EltakoSwitch(EltakoYamlEntity, SwitchEntity):
         self._is_on = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        if last_state.state == "on":
+            self._is_on = True
+        elif last_state.state == "off":
+            self._is_on = False
+
     @property
     def is_on(self):
         return self._is_on

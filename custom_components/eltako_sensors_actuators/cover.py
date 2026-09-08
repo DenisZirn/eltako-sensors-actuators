@@ -106,6 +106,27 @@ class EltakoCover(EltakoYamlEntity, CoverEntity):
 
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        attrs = last_state.attributes or {}
+        try:
+            position = attrs.get("current_position")
+            if position is not None:
+                self._position = max(0, min(100, int(round(float(position)))))
+                self._is_closed = self._position == 0
+                return
+        except (TypeError, ValueError):
+            pass
+        if last_state.state == "closed":
+            self._is_closed = True
+            self._position = 0
+        elif last_state.state == "open":
+            self._is_closed = False
+
     @property
     def is_closed(self):
         if self._position is not None:
