@@ -6,13 +6,23 @@ from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICES, DOMAIN
 from .diagnostics import diagnostic_event
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
-from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity, _f4usm61b_mode, _futh55ed_mode, _is_f4usm61b_device, _is_futh55ed_device, _is_ffg7b_device, _is_frwb_device, _is_fts14em_device, _fts14em_inverted, normalize_eep, normalize_platform
+from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity, _f4usm61b_mode, _futh55ed_mode, _is_f4usm61b_device, _is_futh55ed_device, _is_ffg7b_device, _is_frwb_device, _is_fts14em_device, _fts14em_inverted, device_key, legacy_device_key, normalize_eep, normalize_platform
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
+    """Return True for F2T55, FT55 and F4T55E wall rockers."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(str(value or "") for value in (device.get("name"), device.get("device_type"), device.get("model"), device.get("device_family"), raw.get("name"), raw.get("device_type"), raw.get("model"), raw.get("device_family"))).upper()
+    return any(model in text for model in ("F2T55", "F4T55E", "FT55"))
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -30,6 +40,10 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
         if _is_fts14em_device(device) and eep == "F6-02-01":
             entities.append(EltakoFTS14EMInputBinarySensor(gateway, device))
+            continue
+
+        if _is_wall_rocker_device(device) and eep == "F6-02-01":
+            entities.extend(_rocker_position_entities(gateway, device))
             continue
 
         if _is_f4usm61b_device(device):
@@ -224,6 +238,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             ]
         )
 
+    _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices)
+
     _LOGGER.info(
         "ELTAKO binary_sensor setup entry=%s imported_devices=%s binary_entities=%s",
         entry.entry_id,
@@ -232,6 +248,40 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     )
     async_add_entities(entities)
 
+
+
+
+def _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove the obsolete unsuffixed generic wall-rocker binary sensor."""
+    try:
+        registry = er.async_get(hass)
+    except Exception:
+        return
+
+    for device in devices or []:
+        if not isinstance(device, dict) or not _is_wall_rocker_device(device):
+            continue
+        if normalize_eep(device.get("eep")) != "F6-02-01":
+            continue
+        known_unique_ids = {
+            f"{DOMAIN}_{entry.entry_id}_{device_key(device)}".lower(),
+            f"{DOMAIN}_{entry.entry_id}_{legacy_device_key(device)}".lower(),
+        }
+        for entity_entry in list(registry.entities.values()):
+            if getattr(entity_entry, "config_entry_id", None) != entry.entry_id:
+                continue
+            if not str(getattr(entity_entry, "entity_id", "")).startswith("binary_sensor."):
+                continue
+            if getattr(entity_entry, "platform", None) != DOMAIN:
+                continue
+            unique_id = str(getattr(entity_entry, "unique_id", "") or "").lower()
+            if unique_id not in known_unique_ids:
+                continue
+            try:
+                registry.async_remove(entity_entry.entity_id)
+                _LOGGER.info("Removed obsolete generic wall-rocker entity %s", entity_entry.entity_id)
+            except Exception:
+                _LOGGER.exception("Failed to remove obsolete wall-rocker entity %s", entity_entry.entity_id)
 
 
 def _a5_20_01_status_entities(gateway, device: dict[str, Any]) -> list[BinarySensorEntity]:

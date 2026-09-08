@@ -84,6 +84,7 @@ from .entity_base import (
     _flgtf_device_base_id,
     _strip_flgtf_suffix,
     device_key,
+    legacy_device_key,
     normalize_eep,
     normalize_platform,
 )
@@ -244,7 +245,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 # FTS14EM inputs already have their dedicated E1..En binary
                 # entities in binary_sensor.py. Do not recreate the old generic
                 # rocker helper sensors (button, position, signal code, last seen).
-                if not _is_fts14em_device(device) and not _is_f4t55e_device(device):
+                if not _is_fts14em_device(device) and not _is_wall_rocker_device(device):
                     entities.extend(_rocker_button_entities(gateway, device))
             elif eep == "D5-00-01":
                 entities.extend(_d5_00_01_entities(gateway, device))
@@ -302,7 +303,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_flgtf_last_seen_entities(hass, entry, devices)
     _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
     _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
-    _remove_obsolete_f4t55e_rocker_entities(hass, entry, devices)
+    _remove_obsolete_wall_rocker_entities(hass, entry, devices)
+    _migrate_a5_12_01_registry_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
     _LOGGER.info(
@@ -466,6 +468,27 @@ class EltakoGatewayStatusSensor(EltakoGatewayEntity, SensorEntity):
 
 
 
+def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
+    """Return True for F2T55, FT55 and F4T55E wall rockers."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("device_family"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("device_family"),
+        )
+    ).upper()
+    return any(model in text for model in ("F2T55", "F4T55E", "FT55"))
+
+
 def _is_f4t55e_device(device: dict[str, Any]) -> bool:
     """Return True for the four-button F4T55E rocker device."""
     if not isinstance(device, dict):
@@ -572,14 +595,8 @@ def _remove_obsolete_fts14em_rocker_entities(hass, entry, devices: list[dict[str
             _LOGGER.exception("Failed to remove obsolete FTS14EM helper entity %s", entity_id)
 
 
-def _remove_obsolete_f4t55e_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
-    """Remove legacy generic F4T55E rocker helper sensors.
-
-    F4T55E exposes its four physical button positions as binary sensors. Older
-    builds additionally created generic helper sensors for button label,
-    position, signal code and last telegram. These duplicate the actual button
-    entities and are removed from the entity registry on upgrade.
-    """
+def _remove_obsolete_wall_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove legacy generic RPS helper sensors from F2T55/FT55/F4T55E."""
     try:
         registry = er.async_get(hass)
     except Exception:
@@ -592,24 +609,103 @@ def _remove_obsolete_f4t55e_rocker_entities(hass, entry, devices: list[dict[str,
         "Signalcode",
         "Letztes Telegramm",
     )
-    obsolete_unique_ids: set[str] = set()
+    suffix_tokens = {
+        str(suffix).lower().replace(" ", "_").replace("/", "_")
+        for suffix in suffixes
+    }
+
     for device in devices or []:
-        if not isinstance(device, dict) or not _is_f4t55e_device(device):
+        if not isinstance(device, dict) or not _is_wall_rocker_device(device):
             continue
         if normalize_eep(device.get("eep")) != "F6-02-01":
             continue
-        for suffix in suffixes:
-            obsolete_unique_ids.add(_yaml_entity_unique_id(entry.entry_id, device, suffix))
 
-    for unique_id in obsolete_unique_ids:
-        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-        if not entity_id:
+        known_unique_ids: set[str] = set()
+        for base in {device_key(device), legacy_device_key(device)}:
+            for suffix in suffixes:
+                token = str(suffix).lower().replace(" ", "_").replace("/", "_")
+                known_unique_ids.add(f"{DOMAIN}_{entry.entry_id}_{base}_{token}".lower())
+
+        sender = str(device.get("id") or "").strip().lower()
+        eep_token = normalize_eep(device.get("eep")).lower()
+
+        for entity_entry in list(registry.entities.values()):
+            if getattr(entity_entry, "config_entry_id", None) != entry.entry_id:
+                continue
+            if not str(getattr(entity_entry, "entity_id", "")).startswith("sensor."):
+                continue
+            if getattr(entity_entry, "platform", None) != DOMAIN:
+                continue
+            unique_id = str(getattr(entity_entry, "unique_id", "") or "").lower()
+            suffix_match = any(unique_id.endswith("_" + token) for token in suffix_tokens)
+            structural_match = bool(sender and sender in unique_id and eep_token in unique_id and suffix_match)
+            if unique_id not in known_unique_ids and not structural_match:
+                continue
+            try:
+                registry.async_remove(entity_entry.entity_id)
+                _LOGGER.info("Removed obsolete wall-rocker helper entity %s", entity_entry.entity_id)
+            except Exception:
+                _LOGGER.exception("Failed to remove obsolete wall-rocker helper entity %s", entity_entry.entity_id)
+
+
+def _migrate_a5_12_01_registry_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Reconcile legacy A5-12-01 meter entities with the current unique IDs."""
+    try:
+        registry = er.async_get(hass)
+    except Exception:
+        return
+
+    suffixes = ("Zaehlerstand", "Aktuelle Leistung", "Letztes Telegramm")
+    for device in devices or []:
+        if not isinstance(device, dict):
             continue
-        try:
-            registry.async_remove(entity_id)
-            _LOGGER.info("Removed obsolete F4T55E helper entity %s", entity_id)
-        except Exception:
-            _LOGGER.exception("Failed to remove obsolete F4T55E helper entity %s", entity_id)
+        if normalize_platform(device.get("platform")) != "sensor":
+            continue
+        if normalize_eep(device.get("eep")) != "A5-12-01":
+            continue
+
+        sender = str(device.get("id") or "").strip().lower()
+        if not sender:
+            continue
+        eep_token = "a5-12-01"
+
+        for suffix in suffixes:
+            suffix_token = suffix.lower().replace(" ", "_").replace("/", "_")
+            desired_unique_id = _yaml_entity_unique_id(entry.entry_id, device, suffix)
+            desired_entity_id = registry.async_get_entity_id("sensor", DOMAIN, desired_unique_id)
+
+            candidates = []
+            for entity_entry in list(registry.entities.values()):
+                if getattr(entity_entry, "config_entry_id", None) != entry.entry_id:
+                    continue
+                if getattr(entity_entry, "platform", None) != DOMAIN:
+                    continue
+                if not str(getattr(entity_entry, "entity_id", "")).startswith("sensor."):
+                    continue
+                unique_id = str(getattr(entity_entry, "unique_id", "") or "").lower()
+                if sender not in unique_id or eep_token not in unique_id:
+                    continue
+                if not unique_id.endswith("_" + suffix_token):
+                    continue
+                candidates.append(entity_entry)
+
+            if desired_entity_id is None and candidates:
+                keep = candidates.pop(0)
+                try:
+                    registry.async_update_entity(keep.entity_id, new_unique_id=desired_unique_id)
+                    desired_entity_id = keep.entity_id
+                    _LOGGER.info("Migrated A5-12-01 meter entity %s to current unique_id", keep.entity_id)
+                except Exception:
+                    _LOGGER.exception("Failed to migrate A5-12-01 meter entity %s", keep.entity_id)
+
+            for candidate in candidates:
+                if candidate.entity_id == desired_entity_id:
+                    continue
+                try:
+                    registry.async_remove(candidate.entity_id)
+                    _LOGGER.info("Removed duplicate A5-12-01 meter entity %s", candidate.entity_id)
+                except Exception:
+                    _LOGGER.exception("Failed to remove duplicate A5-12-01 meter entity %s", candidate.entity_id)
 
 
 def _remove_obsolete_gateway_path_entities(hass, entry) -> None:
@@ -1506,6 +1602,11 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         except (TypeError, ValueError):
             pass
         self._value = value
+        if normalize_eep(self.device_config.get("eep")) == "A5-12-01" and self.key in {"energy_total", "counter"}:
+            try:
+                self._last_valid_numeric_value = float(value)
+            except (TypeError, ValueError):
+                self._last_valid_numeric_value = None
 
     @property
     def native_value(self):
@@ -1594,43 +1695,38 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 if db0_meter_decoded:
                     telegram.decoded.update(db0_meter_decoded)
 
-            # Match established behavior for meter devices: only the configured tariff/channel
-            # is allowed to update numeric meter entities. A5-12-01 can transmit
-            # cumulative energy and current power as separate telegram types.
             if self.key in {"energy_total", "counter"}:
                 if not telegram.decoded.get("is_meter_reading", False):
-                    _LOGGER.debug(
-                        "Ignored A5-12-01 non-energy telegram for %s key=%s decoded=%s",
-                        self.device_config.get("name"),
-                        self.key,
-                        telegram.decoded,
-                    )
                     return
                 if not _meter_telegram_matches_config(self.device_config, telegram.decoded):
-                    _LOGGER.debug(
-                        "Ignored A5-12-01 telegram because tariff/channel does not match for %s key=%s configured=%s decoded=%s",
-                        self.device_config.get("name"),
-                        self.key,
-                        _configured_meter_tariffs(self.device_config),
-                        telegram.decoded,
-                    )
                     return
-            elif self.key == "current_power":
-                if not _meter_telegram_matches_config(self.device_config, telegram.decoded):
-                    _LOGGER.debug(
-                        "Ignored A5-12-01 power/derived-power telegram because tariff/channel does not match for %s configured=%s decoded=%s",
-                        self.device_config.get("name"),
-                        _configured_meter_tariffs(self.device_config),
-                        telegram.decoded,
-                    )
+                if self.key not in telegram.decoded:
                     return
+                try:
+                    numeric_value = float(telegram.decoded[self.key])
+                except (TypeError, ValueError):
+                    return
+                if self._last_valid_numeric_value is not None:
+                    if numeric_value == 0 and self._last_valid_numeric_value > 0:
+                        return
+                    if numeric_value < self._last_valid_numeric_value:
+                        return
+                self._last_valid_numeric_value = numeric_value
+                self._value = numeric_value
+                self.schedule_update_ha_state()
+                return
 
-                # Prefer a real power telegram when present. Some meters, especially
-                # S0 based F3Z14D channels, do not always deliver a separate power
-                # value. For those devices we derive an average power from two
-                # consecutive valid energy readings. This matches the practical
-                # expectation in HA: the entity exists and updates as soon as the
-                # counter advances, without corrupting the cumulative kWh value.
+            if self.key == "last_seen":
+                raw_seen = telegram.decoded.get("last_seen")
+                if raw_seen is None:
+                    raw_seen = datetime.now().astimezone().isoformat()
+                self._value = _format_timestamp_seconds(raw_seen)
+                self.schedule_update_ha_state()
+                return
+
+            if self.key == "current_power":
+                if not _meter_telegram_matches_config(self.device_config, telegram.decoded):
+                    return
                 if telegram.decoded.get("is_power_reading", False) and "current_power" in telegram.decoded:
                     new_value = telegram.decoded["current_power"]
                 elif "energy_total" in telegram.decoded:
@@ -1640,7 +1736,6 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                     new_value = derived_power
                 else:
                     return
-
                 self._value = new_value
                 self.schedule_update_ha_state()
                 return
