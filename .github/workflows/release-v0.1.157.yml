@@ -1,0 +1,107 @@
+name: Release v0.1.157
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.157.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: v0.1.157 anwenden, pruefen und veroeffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if gh release view v0.1.157 >/dev/null 2>&1; then
+            echo "Release v0.1.157 ist bereits vorhanden."
+            exit 0
+          fi
+
+          cat .release/v0.1.157.part.* > /tmp/v0.1.157.patch
+          git apply --check /tmp/v0.1.157.patch
+          git apply /tmp/v0.1.157.patch
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('custom_components/eltako_sensors_actuators')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.157', manifest['version']
+          assert manifest['codeowners'] == ['@DenisZirn'], manifest['codeowners']
+
+          checks = {
+              'entity_base.py': ['RestoreEntity', 'legacy_device_key'],
+              'climate.py': ['_is_fks_hora', 'genuine_current_temperature', 'actuator_response'],
+              'gateway.py': ['fks_b_mode02_tx', 'fks_b_teach_in_tx'],
+              'sensor.py': ['_remove_obsolete_f4t55e_rocker_entities', 'EMA alpha=0.25'],
+              'bus/eep_a5_20_04.py': ['80-27-FF-F0', '00-8C-89-08'],
+          }
+          for rel, needles in checks.items():
+              text = (root / rel).read_text(encoding='utf-8')
+              for needle in needles:
+                  assert needle in text, f'{needle!r} fehlt in {rel}'
+          print('v0.1.157 Inhalt geprueft')
+          PY
+
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+          rm -rf .release
+          rm -f .github/workflows/release-v0.1.157.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Release v0.1.157"
+          git push origin HEAD:main
+
+          RELEASE_SHA=$(git rev-parse HEAD)
+          git tag -a v0.1.157 -m "ELTAKO Sensors & Actuators v0.1.157" "$RELEASE_SHA"
+          git push origin v0.1.157
+
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.157
+
+          ### Änderungen
+
+          - FHK14/F4HK14-Steuerung weiter stabilisiert. Die aktuelle Raumtemperatur wird nur noch aus einer echten Aktor-Rückmeldung übernommen; synthetische Controllerwerte werden nicht mehr als Isttemperatur angezeigt.
+          - FAE14LPR verwendet dieselbe abgesicherte Isttemperatur-Logik. Bis zur ersten gültigen Aktor-Rückmeldung wird 0,0 °C angezeigt.
+          - Zustände von Sensoren, Binärsensoren, Schaltern, Licht, Cover und Klima werden nach einem Home-Assistant-Neustart wiederhergestellt, ohne dabei Schalttelegramme auszulösen.
+          - Technische Unique-IDs der YAML-Entitäten wurden stabilisiert. Bestehende Registry-Einträge werden migriert, ohne vorhandene `entity_id` umzubenennen.
+          - Temperaturmesswerte werden mit einer leichten EMA-Glättung (`alpha=0.25`) beruhigt. Der unveränderte Rohwert bleibt als Attribut `raw_temperature` erhalten. Solltemperaturen werden nicht geglättet.
+          - F4T55E bereinigt: Die vier echten Tasten bleiben erhalten; ältere generische Hilfsentitäten wie `Gedrückte Taste`, `Tastenposition`, `Signalcode` und `Letztes Telegramm` werden entfernt.
+          - FKS-B als Klimagerät mit bidirektionalem EEP `A5-20-04` ergänzt.
+          - FKS-B Modus 02: Solltemperaturen von 10–30 °C werden im Empfangsfenster des Ventils nach dem praktisch ermittelten MiniSafe2-Telegrammmuster beantwortet.
+          - Der FKS-B-Teach-In-Pfad wurde hinsichtlich Nutzdaten, Status und Antwortzeit an den erfolgreichen MiniSafe2-Mitschnitt angeglichen.
+
+          ### FHK14
+
+          Der FHK14 ist mit korrekt programmiertem Controllerplatz funktionsfähig. Für die Controller-Sollwertvorgabe muss die Sender-ID im Aktor in Function Group 3, Function 65 (`temperature setpoint from controller`) eingetragen sein.
+
+          ### Bekannte Einschränkungen
+
+          - Das direkte Einlernen einer Home-Assistant-Sender-ID in einen FKS-B über einen reinen FAM-USB mit ESP2 ist weiterhin nicht möglich. Der ESP2-Sendepfad arbeitet als Broadcast, während der erfolgreiche FKS-B-Anlernvorgang mit dem MiniSafe2 eine gerichtete Kommunikation verwendet.
+          - Die praktische Ansteuerung des FRGBW14 ist noch nicht abschließend validiert und bleibt offen. Sie wird in GitHub Issue #1 weiterverfolgt.
+
+          ### Hinweis
+
+          v0.1.157 basiert auf dem getesteten Entwicklungsstand `test15`. Die FRGBW14-Unterstützung wurde für diesen Release nicht verändert.
+          EOF
+
+          gh release create v0.1.157 \
+            --title "ELTAKO Sensors & Actuators v0.1.157" \
+            --notes-file /tmp/release-notes.md \
+            --verify-tag \
+            --latest
