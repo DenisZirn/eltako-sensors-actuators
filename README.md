@@ -38,8 +38,8 @@ Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, i
 - FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
 - FKS-SV – Smart Valve / Heizkörper-Stellantrieb (noch im Test)
 - FKS-B – Heizkörper-Stellantrieb, A5-20-04 / Modus 02; direktes Einlernen der HA-Sender-ID über reinen FAM-USB mit ESP2 noch nicht unterstützt
-- FHK14, F4HK14 – Heizung/Klima
-- FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren
+- FHK14, F4HK14 – Heizung/Klima  (noch im Test)
+- FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren  (noch im Test)
 - FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
 - F3Z14D – 3-Kanal-S0-Drehstromzähler
 - FWS61, FWG14MS – Wetterstation Wind + Regen + Temperatur
