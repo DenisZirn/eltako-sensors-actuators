@@ -8,7 +8,7 @@ Home-Assistant-Custom-Integration für die unten aufgeführten ELTAKO-Geräte.
 
 Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
 
-## Freigegebener Gerätekatalog (v0.1.158)
+## Freigegebener Gerätekatalog (v0.1.159)
 
 - F2T55 – Taster 2-Kanal EU
 - FT55, F4T55E – Taster 4-Kanal EU
@@ -66,6 +66,17 @@ Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Upda
 ## Manuelle Installation
 
 Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopieren und Home Assistant neu laden beziehungsweise neu starten.
+
+## Änderungen in v0.1.159
+
+- Die FHK14-/F4HK14-Behandlung für Anlagen ohne eingelernten Raumtemperatursensor wurde angepasst.
+- Der vom FHK14 verwendete Protokollwert 40,0 °C bleibt sichtbar, solange keine abweichende echte Aktor-Rückmeldung zur Raumtemperatur vorliegt.
+- Sollwerttelegramme verwenden weiterhin den etablierten Protokollplatzhalter `DB1=0x00` (40 °C); für die tatsächliche Raumtemperatur bleibt der im Aktor eingelernte Raumtemperatursensor maßgeblich.
+- Die Hotfix-Korrekturen aus v0.1.158 für FWZ14-65A, DSZ14DRS sowie F2T55, FT55 und F4T55E bleiben vollständig enthalten.
+
+### Bekannter Prüfpunkt
+
+Die FHK-Unterstützung befindet sich hinsichtlich der korrekten Ermittlung und Darstellung der Ist-Temperatur weiterhin in Prüfung.
 
 ## Änderungen in v0.1.157
 
@@ -149,7 +160,9 @@ Die Integration enthält Decoder und Sendeunterstützung für FHK14 und F4HK14.
 
 Der FHK14 ist mit korrekt programmiertem Controllerplatz funktionsfähig. Für die Controller-Sollwertvorgabe muss die Sender-ID im Aktor in Function Group 3, Function 65 (`temperature setpoint from controller`) eingetragen sein.
 
-Die aktuelle Raumtemperatur wird nur aus einer echten Aktor-Rückmeldung übernommen. Bis zur ersten gültigen Rückmeldung wird kein synthetischer 40-°C-Wert mehr als Isttemperatur verwendet.
+Die aktuelle Raumtemperatur wird nur aus einer echten Aktor-Rückmeldung übernommen. Meldet der FHK14 den Protokollwert 40,0 °C, bleibt dieser als Hinweis auf einen möglicherweise nicht eingelernten Raumtemperatursensor sichtbar.
+
+Die korrekte Ermittlung und Darstellung der Ist-Temperatur befindet sich weiterhin in Prüfung.
 
 ## FKS-B
 

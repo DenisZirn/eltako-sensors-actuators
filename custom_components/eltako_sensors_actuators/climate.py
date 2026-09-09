@@ -183,9 +183,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             and "FAE14LPR" not in model_text
         )
         self._is_fae14lpr = self._eep == "A5-10-06" and "FAE14LPR" in model_text
-        # FHK14/F4HK14 and FAE14LPR show a defined 0 °C until a genuine
-        # A5-10-06 actuator response supplies a room-temperature value.
-        self._current_temperature = 0.0 if (self._is_fhk14 or self._is_fae14lpr) else None
+        # FHK14/F4HK14 report the A5-10-06 protocol value 40 °C when no
+        # room-temperature sensor is learned. Keep this value visible until a
+        # genuine actuator response provides a different room temperature.
+        self._current_temperature = 40.0 if self._is_fhk14 else (0.0 if self._is_fae14lpr else None)
         self._has_genuine_current_temperature = False
         self._valve_position: int | None = None
         self._pending_command = bool(self._is_fks_sv or self._is_fks_hora)
@@ -229,7 +230,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                         self._current_temperature = float(restored_current)
                         self._has_genuine_current_temperature = True
                     else:
-                        self._current_temperature = 0.0
+                        self._current_temperature = 40.0 if self._is_fhk14 else 0.0
                         self._has_genuine_current_temperature = False
                 else:
                     self._current_temperature = float(restored_current)
