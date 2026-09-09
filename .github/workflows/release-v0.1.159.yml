@@ -1,0 +1,63 @@
+name: Release v0.1.159
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.159.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release version and syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          root = Path('custom_components/eltako_sensors_actuators')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.159'
+          for path in root.rglob('*.py'):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+
+          climate = (root / 'climate.py').read_text(encoding='utf-8')
+          assert 'self._current_temperature = 40.0 if self._is_fhk14' in climate
+          assert 'def _migrate_a5_12_01_registry_entities' in (root / 'sensor.py').read_text(encoding='utf-8')
+          print('Release validation OK')
+          PY
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.1.159 -m "ELTAKO Sensors & Actuators v0.1.159"
+          git push origin v0.1.159
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.159
+
+          ### Änderungen
+
+          - Die FHK14-/F4HK14-Behandlung für Anlagen ohne eingelernten Raumtemperatursensor wurde angepasst.
+          - Der vom FHK14 verwendete Protokollwert **40,0 °C** bleibt sichtbar, solange keine abweichende echte Aktor-Rückmeldung zur Raumtemperatur vorliegt.
+          - Nur eine echte A5-10-06-Rückmeldung des physischen Aktors aktualisiert die angezeigte Ist-Temperatur; ausgehende Controllertelegramme überschreiben sie nicht.
+          - Sollwerttelegramme verwenden weiterhin den etablierten Protokollplatzhalter `DB1=0x00` (40 °C). Für die tatsächliche Raumtemperatur bleibt der im Aktor eingelernte Raumtemperatursensor maßgeblich.
+          - Die Hotfix-Korrekturen aus **v0.1.158** für FWZ14-65A, DSZ14DRS sowie F2T55, FT55 und F4T55E bleiben vollständig enthalten.
+
+          ### Bekannter Prüfpunkt
+
+          Die FHK-Unterstützung befindet sich hinsichtlich der korrekten Ermittlung und Darstellung der **Ist-Temperatur weiterhin in Prüfung**. Abhängig von weiteren Hardwaretests kann die Auswertung in einem kommenden Release nochmals angepasst werden.
+          EOF
+          gh release create v0.1.159 \
+            --title "ELTAKO Sensors & Actuators v0.1.159" \
+            --notes-file /tmp/release-notes.md
