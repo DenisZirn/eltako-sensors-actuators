@@ -871,9 +871,25 @@ def _meter_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 
 
 def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
+    voltage_sensor = EltakoYamlValueSensor(
+        gateway,
+        device,
+        "voltage",
+        "Spannung",
+        SensorDeviceClass.VOLTAGE,
+        UnitOfElectricPotential.VOLT,
+        state_class="measurement",
+    )
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {3, 6}:
+        # F4USM61B modes 3/6 carry the battery/supply voltage in the normal
+        # A5-08-01 data telegram. Keep the existing unique ID (..._spannung)
+        # so current HA entities/history are preserved; only correct the
+        # displayed entity name to "Batteriespannung".
+        voltage_sensor._attr_name = f"{str(device.get('name') or 'F4USM61B')} Batteriespannung"
+
     entities: list[SensorEntity] = [
         EltakoYamlValueSensor(gateway, device, "brightness", "Helligkeit", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
-        EltakoYamlValueSensor(gateway, device, "voltage", "Spannung", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, state_class="measurement"),
+        voltage_sensor,
     ]
     if _is_fbht_device(device):
         entities.append(
