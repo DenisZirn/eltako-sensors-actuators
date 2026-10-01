@@ -1370,6 +1370,7 @@ class EltakoFlgtfLastSeenSensor(EltakoYamlEntity, SensorEntity):
         base_id = _flgtf_device_base_id(primary) or str(primary.get("id") or "FLGTF").upper()
         safe_base_id = str(base_id).lower().replace("-", "_").replace(" ", "_")
         self._attr_unique_id = f"{DOMAIN}_{gateway.entry_id}_flgtf_{safe_base_id}_last_seen"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._sender_ids = {
             str(device.get("id") or "").upper()
             for device in devices
@@ -1608,6 +1609,12 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
+
+        # "Letztes Telegramm" is diagnostic metadata, not a measurement.
+        # Keep the existing sensor entity and unique ID, but let Home Assistant
+        # display every YAML last-seen entity in the device's Diagnose section.
+        if key == "last_seen":
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
         # Home Assistant can convert temperature sensors to the configured
         # unit system for display, for example to Fahrenheit. ELTAKO telegrams
