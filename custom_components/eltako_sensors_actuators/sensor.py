@@ -1390,10 +1390,7 @@ class EltakoFlgtfLastSeenSensor(EltakoYamlEntity, SensorEntity):
     def _handle_telegram(self, telegram) -> None:
         if str(getattr(telegram, "sender_id", "")).upper() not in self._sender_ids:
             return
-        decoded = getattr(telegram, "decoded", None)
-        if not isinstance(decoded, dict) or "last_seen" not in decoded:
-            return
-        self._value = _format_timestamp_seconds(decoded.get("last_seen"))
+        self._value = _format_timestamp_seconds(datetime.now().astimezone())
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -1663,6 +1660,11 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
             return
 
+        if self.key == "last_seen":
+            self._value = _format_timestamp_seconds(datetime.now().astimezone())
+            self.schedule_update_ha_state()
+            return
+
         configured_eep = normalize_eep(self.device_config.get("eep"))
 
         if _is_ffg7b_device(self.device_config):
@@ -1907,6 +1909,12 @@ class EltakoF4USM61BMode8ValueSensor(EltakoYamlValueSensor):
     def _handle_telegram(self, telegram) -> None:
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
             return
+
+        if self.key == "last_seen":
+            self._value = _format_timestamp_seconds(datetime.now().astimezone())
+            self.schedule_update_ha_state()
+            return
+
         if telegram.decoded.get("learn_telegram") or telegram.decoded.get("learn"):
             return
 
