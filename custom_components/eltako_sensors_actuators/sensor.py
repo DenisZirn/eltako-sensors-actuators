@@ -189,6 +189,25 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 f4usm61b_battery_ids.add(physical_unique_id)
                 entities.append(EltakoF4USM61BBatterySensor(gateway, device, physical_unique_id))
 
+        # F4USM61B mode 2 uses A5-38-08 for its two switching channels.
+        # Add a passive per-channel receive timestamp for the Diagnose section;
+        # the binary_sensor platform remains solely responsible for switching state.
+        if (
+            _is_f4usm61b_device(device)
+            and _f4usm61b_mode(device) == 2
+            and eep == "A5-38-08"
+        ):
+            entities.append(
+                EltakoYamlValueSensor(
+                    gateway,
+                    device,
+                    "last_seen",
+                    "Letztes Telegramm",
+                    None,
+                    None,
+                )
+            )
+
         # FSM60B operating mode 4 transmits its CR2032 battery level in
         # every A5-30-01 data and status telegram.
         if _is_fsm60b_mode4(device):
@@ -871,9 +890,25 @@ def _meter_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 
 
 def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
+    voltage_sensor = EltakoYamlValueSensor(
+        gateway,
+        device,
+        "voltage",
+        "Spannung",
+        SensorDeviceClass.VOLTAGE,
+        UnitOfElectricPotential.VOLT,
+        state_class="measurement",
+    )
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {3, 6}:
+        # F4USM61B modes 3/6 carry the battery/supply voltage in the normal
+        # A5-08-01 data telegram. Keep the existing unique ID (..._spannung)
+        # so current HA entities/history are preserved; only correct the
+        # displayed entity name to "Batteriespannung".
+        voltage_sensor._attr_name = f"{str(device.get('name') or 'F4USM61B')} Batteriespannung"
+
     entities: list[SensorEntity] = [
         EltakoYamlValueSensor(gateway, device, "brightness", "Helligkeit", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
-        EltakoYamlValueSensor(gateway, device, "voltage", "Spannung", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, state_class="measurement"),
+        voltage_sensor,
     ]
     if _is_fbht_device(device):
         entities.append(
@@ -892,6 +927,20 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 
 
 def _a5_07_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) == 8:
+        return [
+            EltakoF4USM61BMode8ValueSensor(gateway, device, "movement_detection_mode", "Bewegungserkennung", None, None),
+            EltakoF4USM61BMode8ValueSensor(
+                gateway,
+                device,
+                "battery_voltage",
+                "Batteriespannung",
+                SensorDeviceClass.VOLTAGE,
+                UnitOfElectricPotential.VOLT,
+                state_class="measurement",
+            ),
+            EltakoF4USM61BMode8ValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
+        ]
     return [
         EltakoYamlValueSensor(gateway, device, "movement_detection_mode", "Bewegungserkennung", None, None),
         EltakoYamlValueSensor(gateway, device, "battery_voltage", "Batteriespannung", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, state_class="measurement"),
@@ -1028,9 +1077,19 @@ def _d5_00_01_has_battery_voltage(device: dict[str, Any]) -> bool:
 
 
 def _d5_00_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
-    entities: list[SensorEntity] = [
-        EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
-    ]
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {4, 7}:
+        last_seen_sensor: SensorEntity = EltakoF4USM61BLastSeenSensor(gateway, device)
+    else:
+        last_seen_sensor = EltakoYamlValueSensor(
+            gateway,
+            device,
+            "last_seen",
+            "Letztes Telegramm",
+            None,
+            None,
+        )
+
+    entities: list[SensorEntity] = [last_seen_sensor]
     if _d5_00_01_has_battery_voltage(device):
         entities.insert(
             0,
@@ -1330,6 +1389,7 @@ class EltakoFlgtfLastSeenSensor(EltakoYamlEntity, SensorEntity):
         base_id = _flgtf_device_base_id(primary) or str(primary.get("id") or "FLGTF").upper()
         safe_base_id = str(base_id).lower().replace("-", "_").replace(" ", "_")
         self._attr_unique_id = f"{DOMAIN}_{gateway.entry_id}_flgtf_{safe_base_id}_last_seen"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._sender_ids = {
             str(device.get("id") or "").upper()
             for device in devices
@@ -1349,10 +1409,7 @@ class EltakoFlgtfLastSeenSensor(EltakoYamlEntity, SensorEntity):
     def _handle_telegram(self, telegram) -> None:
         if str(getattr(telegram, "sender_id", "")).upper() not in self._sender_ids:
             return
-        decoded = getattr(telegram, "decoded", None)
-        if not isinstance(decoded, dict) or "last_seen" not in decoded:
-            return
-        self._value = _format_timestamp_seconds(decoded.get("last_seen"))
+        self._value = _format_timestamp_seconds(datetime.now().astimezone())
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -1547,6 +1604,26 @@ class EltakoFAE14LPRModeSensor(EltakoYamlEntity, SensorEntity):
             self._remove_listener()
 
 class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
+    def _apply_temperature_smoothing(self, value: Any) -> Any:
+        """Apply a light EMA only to measured temperature sensors."""
+        if not self._smooth_temperature:
+            return value
+        try:
+            raw = float(value)
+        except (TypeError, ValueError):
+            return value
+        self._attr_extra_state_attributes["raw_temperature"] = raw
+        self._attr_extra_state_attributes["temperature_filter"] = "EMA alpha=0.25"
+        if self._temperature_ema_value is None:
+            filtered = raw
+        else:
+            filtered = (
+                self._temperature_ema_alpha * raw
+                + (1.0 - self._temperature_ema_alpha) * self._temperature_ema_value
+            )
+        self._temperature_ema_value = filtered
+        return round(filtered, 2)
+
     def __init__(
         self,
         gateway,
@@ -1568,6 +1645,12 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
+
+        # "Letztes Telegramm" is diagnostic metadata, not a measurement.
+        # Keep the existing sensor entity and unique ID, but let Home Assistant
+        # display every YAML last-seen entity in the device's Diagnose section.
+        if key == "last_seen":
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
         # Home Assistant can convert temperature sensors to the configured
         # unit system for display, for example to Fahrenheit. ELTAKO telegrams
@@ -1614,6 +1697,11 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
 
     def _handle_telegram(self, telegram) -> None:
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        if self.key == "last_seen":
+            self._value = _format_timestamp_seconds(datetime.now().astimezone())
+            self.schedule_update_ha_state()
             return
 
         configured_eep = normalize_eep(self.device_config.get("eep"))
@@ -1852,6 +1940,80 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
+
+
+class EltakoF4USM61BMode8ValueSensor(EltakoYamlValueSensor):
+    """F4USM61B mode 8 values decoded directly from its A5-07-01 data frame."""
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        if self.key == "last_seen":
+            self._value = _format_timestamp_seconds(datetime.now().astimezone())
+            self.schedule_update_ha_state()
+            return
+
+        if telegram.decoded.get("learn_telegram") or telegram.decoded.get("learn"):
+            return
+
+        decoded = telegram.decoded
+        data_hex = str(decoded.get("data_hex") or "").replace("-", "")
+        try:
+            payload = bytes.fromhex(data_hex)
+        except ValueError:
+            payload = b""
+
+        if len(payload) == 4 and (payload[3] & 0x08):
+            db3, _db2, db1, _db0 = payload
+            supply_voltage = round(db3 / 255.0 * 5.1, 2)
+            if db1 == 0xC8:
+                movement_detection_mode = "halbautomatisch"
+            elif db1 == 0xFF:
+                movement_detection_mode = "vollautomatisch"
+            elif db1 == 0x00:
+                movement_detection_mode = "keine Bewegung"
+            else:
+                movement_detection_mode = f"0x{db1:02X}"
+        else:
+            supply_voltage = decoded.get("battery_voltage", decoded.get("voltage"))
+            movement_detection_mode = decoded.get("movement_detection_mode")
+
+        if self.key == "battery_voltage":
+            value = decoded.get("battery_voltage", supply_voltage)
+        elif self.key == "movement_detection_mode":
+            value = decoded.get("movement_detection_mode", movement_detection_mode)
+        elif self.key == "last_seen":
+            value = decoded.get("last_seen") or datetime.now().astimezone().isoformat()
+            value = _format_timestamp_seconds(value)
+        else:
+            value = decoded.get(self.key)
+
+        if value is None:
+            return
+        self._value = value
+        self.schedule_update_ha_state()
+
+
+class EltakoF4USM61BLastSeenSensor(EltakoYamlValueSensor):
+    """Last received telegram timestamp for F4USM61B D5 channel IDs."""
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(
+            gateway,
+            device,
+            "last_seen",
+            "Letztes Telegramm",
+            None,
+            None,
+        )
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        self._value = _format_timestamp_seconds(datetime.now().astimezone())
+        self.schedule_update_ha_state()
 
 
 class EltakoValueSensor(EltakoBaseEntity, SensorEntity):
