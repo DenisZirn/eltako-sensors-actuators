@@ -2051,7 +2051,21 @@ def _normalize_device_specific_decoded(device: dict[str, Any], decoded: dict[str
     eep = str(device.get("eep") or "").upper()
 
     if "FSM60B" in name and eep == "A5-30-03":
+        # Confirmed FSM60B BA3 field telegrams use DB1 for the moisture state:
+        #   00-8B/8C-00-0E -> wet
+        #   00-8B/8C-FF-0E -> dry
+        # Keep this correction device-specific so FRWB/FHMB A5-30-03 decoding
+        # remains untouched.
         wet = bool(decoded.get("moisture", decoded.get("water_alarm", decoded.get("alarm", False))))
+        data_hex = str(decoded.get("data_hex") or decoded.get("value") or "").replace(":", "-")
+        try:
+            payload = bytes.fromhex(data_hex.replace("-", " "))
+        except ValueError:
+            payload = b""
+        if len(payload) == 4 and payload[3] == 0x0E and payload[2] in (0x00, 0xFF):
+            wet = payload[2] == 0x00
+            decoded.pop("ignored", None)
+
         decoded.update({
             "moisture": wet,
             "wet": wet,
