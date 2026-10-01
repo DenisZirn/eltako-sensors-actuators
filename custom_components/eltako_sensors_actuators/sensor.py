@@ -1585,6 +1585,26 @@ class EltakoFAE14LPRModeSensor(EltakoYamlEntity, SensorEntity):
             self._remove_listener()
 
 class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
+    def _apply_temperature_smoothing(self, value: Any) -> Any:
+        """Apply a light EMA only to measured temperature sensors."""
+        if not self._smooth_temperature:
+            return value
+        try:
+            raw = float(value)
+        except (TypeError, ValueError):
+            return value
+        self._attr_extra_state_attributes["raw_temperature"] = raw
+        self._attr_extra_state_attributes["temperature_filter"] = "EMA alpha=0.25"
+        if self._temperature_ema_value is None:
+            filtered = raw
+        else:
+            filtered = (
+                self._temperature_ema_alpha * raw
+                + (1.0 - self._temperature_ema_alpha) * self._temperature_ema_value
+            )
+        self._temperature_ema_value = filtered
+        return round(filtered, 2)
+
     def __init__(
         self,
         gateway,
