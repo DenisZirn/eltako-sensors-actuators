@@ -1756,6 +1756,17 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 self.schedule_update_ha_state()
                 return
 
+        if (
+            self.key == "last_seen"
+            and configured_eep == "D5-00-01"
+            and _is_f4usm61b_device(self.device_config)
+            and _f4usm61b_mode(self.device_config) in {4, 7}
+            and "last_seen" not in telegram.decoded
+        ):
+            self._value = _format_timestamp_seconds(datetime.now().astimezone().isoformat())
+            self.schedule_update_ha_state()
+            return
+
         if self.key not in telegram.decoded:
             return
 
