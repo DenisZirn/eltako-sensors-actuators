@@ -1044,9 +1044,19 @@ def _d5_00_01_has_battery_voltage(device: dict[str, Any]) -> bool:
 
 
 def _d5_00_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
-    entities: list[SensorEntity] = [
-        EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
-    ]
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {4, 7}:
+        last_seen_sensor: SensorEntity = EltakoF4USM61BLastSeenSensor(gateway, device)
+    else:
+        last_seen_sensor = EltakoYamlValueSensor(
+            gateway,
+            device,
+            "last_seen",
+            "Letztes Telegramm",
+            None,
+            None,
+        )
+
+    entities: list[SensorEntity] = [last_seen_sensor]
     if _d5_00_01_has_battery_voltage(device):
         entities.insert(
             0,
@@ -1756,17 +1766,6 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 self.schedule_update_ha_state()
                 return
 
-        if (
-            self.key == "last_seen"
-            and configured_eep == "D5-00-01"
-            and _is_f4usm61b_device(self.device_config)
-            and _f4usm61b_mode(self.device_config) in {4, 7}
-            and "last_seen" not in telegram.decoded
-        ):
-            self._value = _format_timestamp_seconds(datetime.now().astimezone().isoformat())
-            self.schedule_update_ha_state()
-            return
-
         if self.key not in telegram.decoded:
             return
 
@@ -1879,6 +1878,27 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
+
+
+class EltakoF4USM61BLastSeenSensor(EltakoYamlValueSensor):
+    """Last received telegram timestamp for F4USM61B D5 channel IDs."""
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(
+            gateway,
+            device,
+            "last_seen",
+            "Letztes Telegramm",
+            None,
+            None,
+        )
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        self._value = _format_timestamp_seconds(datetime.now().astimezone())
+        self.schedule_update_ha_state()
 
 
 class EltakoValueSensor(EltakoBaseEntity, SensorEntity):
