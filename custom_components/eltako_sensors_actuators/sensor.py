@@ -189,6 +189,25 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 f4usm61b_battery_ids.add(physical_unique_id)
                 entities.append(EltakoF4USM61BBatterySensor(gateway, device, physical_unique_id))
 
+        # F4USM61B mode 2 uses A5-38-08 for its two switching channels.
+        # Add a passive per-channel receive timestamp for the Diagnose section;
+        # the binary_sensor platform remains solely responsible for switching state.
+        if (
+            _is_f4usm61b_device(device)
+            and _f4usm61b_mode(device) == 2
+            and eep == "A5-38-08"
+        ):
+            entities.append(
+                EltakoYamlValueSensor(
+                    gateway,
+                    device,
+                    "last_seen",
+                    "Letztes Telegramm",
+                    None,
+                    None,
+                )
+            )
+
         # FSM60B operating mode 4 transmits its CR2032 battery level in
         # every A5-30-01 data and status telegram.
         if _is_fsm60b_mode4(device):
