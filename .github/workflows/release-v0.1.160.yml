@@ -1,0 +1,82 @@
+name: Release v0.1.160
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.160.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release version and syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          root = Path('custom_components/eltako_sensors_actuators')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.160'
+          for path in root.rglob('*.py'):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+
+          sensor = (root / 'sensor.py').read_text(encoding='utf-8')
+          binary_sensor = (root / 'binary_sensor.py').read_text(encoding='utf-8')
+          gateway = (root / 'gateway.py').read_text(encoding='utf-8')
+
+          assert 'class EltakoYamlValueSensor' in sensor
+          assert 'def _apply_temperature_smoothing' in sensor
+          assert 'F4USM61B mode 2 uses A5-38-08' in sensor
+          assert 'mode in {3, 6}' in binary_sensor
+          assert 'FSM60B BA3 field telegrams use DB1 for the moisture state' in gateway
+          print('Release validation OK')
+          PY
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.1.160 -m "ELTAKO Sensors & Actuators v0.1.160"
+          git push origin v0.1.160
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.160
+
+          ### Änderungen
+
+          - Zentralen Fehler in `EltakoYamlValueSensor` behoben, durch den korrekt dekodierte numerische Messwerte nicht mehr in Home Assistant übernommen wurden.
+          - Dadurch funktionieren u. a. wieder:
+            - FRWB Temperatur
+            - FWS61 Windgeschwindigkeit
+            - FBH55ESB / FBHT55ESB Helligkeit
+            - weitere numerische Sensorwerte, die denselben Updatepfad verwenden
+          - `Letztes Telegramm` wird als Diagnose-Entity geführt und unabhängig vom Decoder beim Empfang aktualisiert.
+          - F4USM61B-Unterstützung überarbeitet:
+            - Modus 3 und 6: Bewegungslogik korrigiert
+            - Modus 8: Bewegungs-/Belegungslogik inklusive 65-Sekunden-Rücksetzung stabilisiert
+            - Batterie-/Spannungsbehandlung für die verschiedenen Betriebsarten korrigiert
+            - Modus 2 erhält zusätzlich `Letztes Telegramm` pro Kanal
+          - FSM60B BA3 korrigiert:
+            - `DB1 = 0x00` = nass
+            - `DB1 = 0xFF` = trocken
+            - gerätespezifische Auswertung ohne Beeinflussung von FRWB/FHMB
+          - FRWB A5-30-03:
+            - Rauchalarm und Temperatur werden wieder korrekt verarbeitet
+          - Diverse Diagnose- und Routingkorrekturen für Telegrammverarbeitung und Entity-Updates.
+
+          ### Hinweise
+
+          - F4USM61B wurde in den Betriebsarten 1 bis 8 durchgetestet.
+          - Die FHK-Unterstützung bleibt hinsichtlich der Ist-Temperatur weiterhin in Prüfung.
+          EOF
+          gh release create v0.1.160             --title "ELTAKO Sensors & Actuators v0.1.160"             --notes-file /tmp/release-notes.md
