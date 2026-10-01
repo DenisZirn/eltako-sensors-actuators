@@ -908,6 +908,20 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 
 
 def _a5_07_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
+    if _is_f4usm61b_device(device) and _f4usm61b_mode(device) == 8:
+        return [
+            EltakoF4USM61BMode8ValueSensor(gateway, device, "movement_detection_mode", "Bewegungserkennung", None, None),
+            EltakoF4USM61BMode8ValueSensor(
+                gateway,
+                device,
+                "battery_voltage",
+                "Batteriespannung",
+                SensorDeviceClass.VOLTAGE,
+                UnitOfElectricPotential.VOLT,
+                state_class="measurement",
+            ),
+            EltakoF4USM61BMode8ValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
+        ]
     return [
         EltakoYamlValueSensor(gateway, device, "movement_detection_mode", "Bewegungserkennung", None, None),
         EltakoYamlValueSensor(gateway, device, "battery_voltage", "Batteriespannung", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, state_class="measurement"),
@@ -1878,6 +1892,53 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
+
+
+class EltakoF4USM61BMode8ValueSensor(EltakoYamlValueSensor):
+    """F4USM61B mode 8 values decoded directly from its A5-07-01 data frame."""
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+        if telegram.decoded.get("learn_telegram") or telegram.decoded.get("learn"):
+            return
+
+        decoded = telegram.decoded
+        data_hex = str(decoded.get("data_hex") or "").replace("-", "")
+        try:
+            payload = bytes.fromhex(data_hex)
+        except ValueError:
+            payload = b""
+
+        if len(payload) == 4 and (payload[3] & 0x08):
+            db3, _db2, db1, _db0 = payload
+            supply_voltage = round(db3 / 255.0 * 5.1, 2)
+            if db1 == 0xC8:
+                movement_detection_mode = "halbautomatisch"
+            elif db1 == 0xFF:
+                movement_detection_mode = "vollautomatisch"
+            elif db1 == 0x00:
+                movement_detection_mode = "keine Bewegung"
+            else:
+                movement_detection_mode = f"0x{db1:02X}"
+        else:
+            supply_voltage = decoded.get("battery_voltage", decoded.get("voltage"))
+            movement_detection_mode = decoded.get("movement_detection_mode")
+
+        if self.key == "battery_voltage":
+            value = decoded.get("battery_voltage", supply_voltage)
+        elif self.key == "movement_detection_mode":
+            value = decoded.get("movement_detection_mode", movement_detection_mode)
+        elif self.key == "last_seen":
+            value = decoded.get("last_seen") or datetime.now().astimezone().isoformat()
+            value = _format_timestamp_seconds(value)
+        else:
+            value = decoded.get(self.key)
+
+        if value is None:
+            return
+        self._value = value
+        self.schedule_update_ha_state()
 
 
 class EltakoF4USM61BLastSeenSensor(EltakoYamlValueSensor):
