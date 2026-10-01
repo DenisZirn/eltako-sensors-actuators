@@ -493,6 +493,25 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
             and _f4usm61b_mode(self.device_config) == 8
             and self.key == "movement"
         ):
+            # Mode 8 must react only to a real A5-07-01 movement data telegram.
+            # Learn/query frames use the same sender ID and must never arm the
+            # 65-second occupancy watchdog.
+            if telegram.decoded.get("learn_telegram") or telegram.decoded.get("learn"):
+                return
+
+            movement = telegram.decoded.get("movement")
+            if movement is None:
+                data_hex = str(telegram.decoded.get("data_hex") or "").replace("-", "")
+                try:
+                    payload = bytes.fromhex(data_hex)
+                except ValueError:
+                    payload = b""
+                if len(payload) == 4 and (payload[3] & 0x08):
+                    movement = payload[2] in (0xC8, 0xFF)
+
+            if movement is not True:
+                return
+
             self._state = True
             self.async_write_ha_state()
 
@@ -561,12 +580,14 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
                     raw_state = None
 
                 if raw_state == 0x0D:
-                    # The F4USM61B already inverts the transmitted telegram in
-                    # mode 6. Therefore both mode 3 and mode 6 use the same raw
-                    # EEP mapping: 0x0D means movement, 0x0F means no movement.
-                    state = True
+                    # Confirmed F4USM61B mapping:
+                    # mode 3: 0x0D = movement
+                    # mode 6: 0x0D = free (inverted operating mode)
+                    state = mode == 3
                 elif raw_state == 0x0F:
-                    state = False
+                    # mode 3: 0x0F = free
+                    # mode 6: 0x0F = movement
+                    state = mode == 6
                 else:
                     _LOGGER.debug(
                         "Ignoring unsupported F4USM61B motion value mode=%s raw=%r id=%s",
