@@ -15,12 +15,11 @@ try:
 except Exception:  # pragma: no cover
     PERCENTAGE = "%"
 try:
-    from homeassistant.const import CONCENTRATION_PARTS_PER_BILLION
-except Exception:  # pragma: no cover
+    from homeassistant.const import UnitOfRatio
+    CONCENTRATION_PARTS_PER_BILLION = UnitOfRatio.PARTS_PER_BILLION
+    CONCENTRATION_PARTS_PER_MILLION = UnitOfRatio.PARTS_PER_MILLION
+except Exception:  # pragma: no cover - older HA compatibility
     CONCENTRATION_PARTS_PER_BILLION = "ppb"
-try:
-    from homeassistant.const import CONCENTRATION_PARTS_PER_MILLION
-except Exception:  # pragma: no cover
     CONCENTRATION_PARTS_PER_MILLION = "ppm"
 try:
     from homeassistant.const import UnitOfEnergy
