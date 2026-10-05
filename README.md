@@ -36,8 +36,7 @@ Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, i
 - FUTH55ED – 2-Punkt-Regler TF61R / FR62 (A5-38-08)
 - FUTH55ED – Hygrostat (A5-10-12)
 - FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
-- FKS-SV – Smart Valve / Heizkörper-Stellantrieb (noch im Test)
-- FKS-B – Heizkörper-Stellantrieb, A5-20-04 / Modus 02; direktes Einlernen der HA-Sender-ID über reinen FAM-USB mit ESP2 noch nicht unterstützt
+- FKS-SV – Smart Valve / Heizkörper-Stellantrieb
 - FHK14, F4HK14 – Heizung/Klima  (noch im Test)
 - FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren  (noch im Test)
 - FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
