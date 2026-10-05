@@ -316,7 +316,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         return base
 
     def _matches_physical_device(self, telegram) -> bool:
-        return str(telegram.sender_id).upper() == str(self.device_config.get("id") or "").upper()
+        sender = str(telegram.sender_id or "").upper()
+        configured_ids = {
+            str(self.device_config.get("id") or "").upper(),
+            str(self.device_config.get("sender_id") or "").upper(),
+        }
+        sender_cfg = self.device_config.get("sender")
+        if isinstance(sender_cfg, dict):
+            configured_ids.add(str(sender_cfg.get("id") or "").upper())
+        configured_ids.discard("")
+        return sender in configured_ids
 
     def _handle_telegram(self, telegram) -> None:
         if self._is_fks_sv:
