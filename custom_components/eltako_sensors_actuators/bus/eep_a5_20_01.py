@@ -32,11 +32,11 @@ def _encode_temp_0_40(value: float | int | None, default: float = 20.0, *, avoid
 
 
 def _encode_inverse_room_temperature(value: float | int | None) -> int:
-    """Encode the optional RCU room temperature for DB2.
+    """Encode the RCU actual room temperature for Direction-2 DB2.
 
-    DB2=0x00 selects the actuator's internal temperature sensor. This is the
-    safe fallback when no external Home Assistant room-temperature entity is
-    configured or its state is unavailable.
+    EEP A5-20-01 defines DB2 inversely: 255..0 represents 0..40 °C.
+    Therefore DB2=0x00 represents 40 °C and must not be used as a sentinel for
+    "use internal sensor". Callers should provide a valid room temperature.
     """
     if value is None:
         return 0x00
