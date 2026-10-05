@@ -542,25 +542,36 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     def _external_room_temperature(self) -> float | None:
         entity_id = _device_option(self.device_config, "room_temperature_entity")
-        if not entity_id:
-            return None
-        state = self.gateway.hass.states.get(str(entity_id))
-        if state is None:
-            return None
-        try:
-            temperature = float(state.state)
-        except (TypeError, ValueError):
-            return None
+        if entity_id:
+            state = self.gateway.hass.states.get(str(entity_id))
+            if state is not None:
+                try:
+                    temperature = float(state.state)
+                except (TypeError, ValueError):
+                    temperature = None
+                if temperature is not None:
+                    attributes = getattr(state, "attributes", {}) or {}
+                    unit = str(attributes.get("unit_of_measurement") or "").strip().upper()
+                    if unit in {"°F", "F", "FAHRENHEIT"}:
+                        temperature = (temperature - 32.0) * 5.0 / 9.0
+                    elif 40.0 < temperature <= 104.0:
+                        # Compatibility fallback for older/custom sensors that expose a
+                        # Fahrenheit value without a unit attribute.
+                        temperature = (temperature - 32.0) * 5.0 / 9.0
+                    return max(0.0, min(40.0, temperature))
 
-        attributes = getattr(state, "attributes", {}) or {}
-        unit = str(attributes.get("unit_of_measurement") or "").strip().upper()
-        if unit in {"°F", "F", "FAHRENHEIT"}:
-            temperature = (temperature - 32.0) * 5.0 / 9.0
-        elif 40.0 < temperature <= 104.0:
-            # Compatibility fallback for older/custom sensors that expose a
-            # Fahrenheit value without a unit attribute.
-            temperature = (temperature - 32.0) * 5.0 / 9.0
-        return max(0.0, min(40.0, temperature))
+        # A5-20-01 Direction-2 DB2 is always the actual room temperature from
+        # the controller, encoded inversely (255..0 => 0..40 °C). DB2=0x00
+        # therefore means 40 °C; it does NOT select the valve's internal sensor.
+        # If no external HA room sensor is configured, echo the temperature just
+        # reported by the FKS-SV so its internal PI controller receives a valid
+        # actual value together with the HA target setpoint.
+        if self._is_fks_sv and self._current_temperature is not None:
+            try:
+                return max(0.0, min(40.0, float(self._current_temperature)))
+            except (TypeError, ValueError):
+                pass
+        return None
 
     async def _async_reply_fks_sv_control(self) -> None:
         ok = await self.gateway.async_send_fks_sv_control_response(
