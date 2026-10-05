@@ -90,7 +90,11 @@ from .entity_base import (
 
 _LOGGER = logging.getLogger(__name__)
 
-VOC_DEVICE_CLASS = getattr(SensorDeviceClass, "VOLATILE_ORGANIC_COMPOUNDS", None)
+VOC_DEVICE_CLASS = getattr(
+    SensorDeviceClass,
+    "VOLATILE_ORGANIC_COMPOUNDS_PARTS",
+    getattr(SensorDeviceClass, "VOLATILE_ORGANIC_COMPOUNDS", None),
+)
 CO2_DEVICE_CLASS = getattr(SensorDeviceClass, "CO2", None)
 
 def _is_fbht_device(device: dict[str, Any]) -> bool:
