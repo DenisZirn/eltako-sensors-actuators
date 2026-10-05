@@ -183,6 +183,19 @@ class SerialTransport:
             frame = PREAMBLE + rest
 
         # Validate before returning so gateway only handles valid frames.
-        ESP2Message.parse(frame)
+        # A single damaged ESP2 telegram is a framing/data error, not a serial
+        # transport failure. Discard it here so gateway.py does not close and
+        # reopen an otherwise healthy FAM-USB connection.
+        try:
+            ESP2Message.parse(frame)
+        except ValueError as err:
+            _LOGGER.debug(
+                "ELTAKO invalid ESP2 frame discarded without reopening transport: port=%s error=%s frame=%s",
+                self.port,
+                err,
+                frame.hex("-"),
+            )
+            return None
+
         _LOGGER.debug("ELTAKO serial frame received: port=%s frame=%s", self.port, frame.hex("-"))
         return frame
