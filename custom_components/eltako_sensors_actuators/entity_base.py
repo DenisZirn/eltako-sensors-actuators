@@ -439,7 +439,9 @@ class EltakoBaseEntity(RestoreEntity):
                 name=name,
                 model=model,
                 via_device_id=dr.async_get_device_id_by_identifier(
-                    self.gateway.hass, (DOMAIN, self.gateway.entry_id)
+                    self.gateway.hass,
+                    (DOMAIN, self.gateway.entry_id),
+                    config_entry_id=self.gateway.entry_id,
                 ),
             )
 
@@ -448,7 +450,9 @@ class EltakoBaseEntity(RestoreEntity):
             manufacturer="ELTAKO",
             name=f"ELTAKO {self.sender_id}",
             via_device_id=dr.async_get_device_id_by_identifier(
-                self.gateway.hass, (DOMAIN, self.gateway.entry_id)
+                self.gateway.hass,
+                (DOMAIN, self.gateway.entry_id),
+                config_entry_id=self.gateway.entry_id,
             ),
         )
 
