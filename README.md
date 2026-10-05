@@ -37,7 +37,7 @@ Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, i
 - FUTH55ED – Hygrostat (A5-10-12)
 - FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
 - FKS-SV – Smart Valve / Heizkörper-Stellantrieb
-- FHK14, F4HK14 – Heizung/Klima  (noch im Test)
+- FHK14, F4HK14 – Heizung/Klima
 - FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren  (noch im Test)
 - FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
 - F3Z14D – 3-Kanal-S0-Drehstromzähler
@@ -66,16 +66,44 @@ Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Upda
 
 Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopieren und Home Assistant neu laden beziehungsweise neu starten.
 
-## Änderungen in v0.1.159
+## Änderungen in v0.1.161
 
-- Die FHK14-/F4HK14-Behandlung für Anlagen ohne eingelernten Raumtemperatursensor wurde angepasst.
-- Der vom FHK14 verwendete Protokollwert 40,0 °C bleibt sichtbar, solange keine abweichende echte Aktor-Rückmeldung zur Raumtemperatur vorliegt.
-- Sollwerttelegramme verwenden weiterhin den etablierten Protokollplatzhalter `DB1=0x00` (40 °C); für die tatsächliche Raumtemperatur bleibt der im Aktor eingelernte Raumtemperatursensor maßgeblich.
-- Die Hotfix-Korrekturen aus v0.1.158 für FWZ14-65A, DSZ14DRS sowie F2T55, FT55 und F4T55E bleiben vollständig enthalten.
+### FKS-SV
 
-### Bekannter Prüfpunkt
+- Die Climate-Entity des FKS-SV ist zuverlässig verfügbar.
+- Die A5-20-01-Kommunikation Controller → FKS-SV wurde korrigiert.
+- DB2 wird nun EEP-konform als aktuelle Raumtemperatur übertragen.
+- Ohne externen Home-Assistant-Raumtemperatursensor wird die zuletzt vom FKS-SV gemeldete Isttemperatur verwendet.
+- Neue Solltemperaturen werden in Home Assistant gespeichert und beim nächsten Empfangsfenster des FKS-SV übertragen.
+- Das normale Kommunikationsintervall des FKS-SV von etwa 10 Minuten wird unterstützt.
+- Durch kurzes Drücken der Taste am FKS-SV kann eine sofortige Kommunikation ausgelöst werden.
+- Die Ventilregelung mit Soll- und Isttemperatur wurde praktisch getestet.
 
-Die FHK-Unterstützung befindet sich hinsichtlich der korrekten Ermittlung und Darstellung der Ist-Temperatur weiterhin in Prüfung.
+### FHK14 / F4HK14
+
+- Die Erkennung echter Aktor-Antworttelegramme wurde korrigiert.
+- Die Isttemperatur wird nun auch dann korrekt übernommen, wenn das Antworttelegramm über die konfigurierte Sender-ID empfangen wird.
+- Der Fehler, bei dem die Climate-Entity auf 40,0 °C stehen bleiben konnte, wurde behoben.
+- Der Protokollwert 40,0 °C wird nur noch dann angezeigt, wenn er tatsächlich vom FHK14 als gültige Rückmeldung vorliegt.
+
+### Home-Assistant-Kompatibilität
+
+- Funk-/Bus-Diagnose verwendet nun die lokale Home-Assistant-Zeitzone statt UTC.
+- `ppm` und `ppb` verwenden die aktuellen `UnitOfRatio`-Konstanten von Home Assistant.
+- FLGTF TVOC in `ppb` verwendet nun die passende Device Class `VOLATILE_ORGANIC_COMPOUNDS_PARTS`.
+- `via_device` wurde auf `via_device_id` umgestellt und korrekt auf den zugehörigen Config Entry eingeschränkt.
+
+### Gateway / ESP2
+
+- Einzelne fehlerhafte ESP2-Telegramme mit Checksum-Fehler führen nicht mehr zu einem vollständigen Neustart der seriellen Verbindung.
+- Ungültige ESP2-Frames werden verworfen, während die FAM-USB-Verbindung geöffnet bleibt.
+- Echte USB-/Serial-Verbindungsfehler lösen weiterhin einen Reconnect aus.
+
+### Weitere Korrekturen
+
+- Die Wiederherstellung von Climate-Zuständen nach einem Home-Assistant-Neustart wurde stabilisiert.
+- Gerätezuordnung und Diagnose wurden weiter bereinigt.
+- Die Hotfix-Korrekturen aus den vorherigen Versionen bleiben vollständig enthalten.
 
 ## Änderungen in v0.1.157
 
@@ -159,9 +187,9 @@ Die Integration enthält Decoder und Sendeunterstützung für FHK14 und F4HK14.
 
 Der FHK14 ist mit korrekt programmiertem Controllerplatz funktionsfähig. Für die Controller-Sollwertvorgabe muss die Sender-ID im Aktor in Function Group 3, Function 65 (`temperature setpoint from controller`) eingetragen sein.
 
-Die aktuelle Raumtemperatur wird nur aus einer echten Aktor-Rückmeldung übernommen. Meldet der FHK14 den Protokollwert 40,0 °C, bleibt dieser als Hinweis auf einen möglicherweise nicht eingelernten Raumtemperatursensor sichtbar.
+Die aktuelle Raumtemperatur wird ausschließlich aus einer echten Aktor-Rückmeldung übernommen. Antworttelegramme werden sowohl über die Geräte-ID als auch über die konfigurierte Sender-ID korrekt zugeordnet.
 
-Die korrekte Ermittlung und Darstellung der Ist-Temperatur befindet sich weiterhin in Prüfung.
+Der zuvor mögliche Fehler, bei dem die Climate-Entity auf 40,0 °C stehen blieb, obwohl eine gültige Isttemperatur empfangen wurde, ist seit v0.1.161 behoben.
 
 ## FKS-B
 
@@ -205,6 +233,10 @@ Seit v0.1.156 verwendet das Frontend die Datei:
 `frontend/diagnostics-panel.js`
 
 Technische Telegrammdetails werden bevorzugt in dieser Diagnose dargestellt und nicht als zusätzliche Geräteentitäten angelegt.
+
+Seit v0.1.161 werden Zeitstempel in der lokalen Home-Assistant-Zeitzone dargestellt.
+
+Einzelne ungültige ESP2-Telegramme mit Checksum-Fehler werden verworfen, ohne die serielle FAM-USB-Verbindung vollständig neu zu öffnen.
 
 ## Übersetzungen
 
