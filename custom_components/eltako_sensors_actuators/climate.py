@@ -119,6 +119,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
 
         if self._is_fks_sv:
+            self._attr_supported_features = _SUPPORT_TARGET_TEMPERATURE
+            self._attr_preset_modes = []
             self._attr_min_temp = float(_device_option(device, "min_target_temperature", 8.0) or 8.0)
             self._attr_max_temp = float(_device_option(device, "max_target_temperature", 28.0) or 28.0)
             initial_target = _device_option(
@@ -242,7 +244,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         elif restored_hvac in {str(HVACMode.OFF), "off"}:
             self._attr_hvac_mode = HVACMode.OFF
         restored_preset = attrs.get("preset_mode")
-        if restored_preset in (self._attr_preset_modes or []):
+        if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
             self._attr_preset_mode = restored_preset
 
     @property
