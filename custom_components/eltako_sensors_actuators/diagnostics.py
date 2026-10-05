@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from typing import Any
@@ -11,6 +10,7 @@ import voluptuous as vol
 from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_DIAGNOSTICS_ENABLED, DOMAIN
 
@@ -34,7 +34,7 @@ class DiagnosticStore:
         self._sequence += 1
         event = {
             "sequence": self._sequence,
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "timestamp": dt_util.now().isoformat(timespec="milliseconds"),
             "type": str(event_type),
             "level": str(level),
             **{key: _json_value(value) for key, value in data.items()},
