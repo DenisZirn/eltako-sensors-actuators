@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import re
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo, Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -437,14 +438,18 @@ class EltakoBaseEntity(RestoreEntity):
                 manufacturer="ELTAKO",
                 name=name,
                 model=model,
-                via_device=(DOMAIN, self.gateway.entry_id),
+                via_device_id=dr.async_get_device_id_by_identifier(
+                    self.gateway.hass, (DOMAIN, self.gateway.entry_id)
+                ),
             )
 
         return DeviceInfo(
             identifiers={(DOMAIN, self.sender_id)},
             manufacturer="ELTAKO",
             name=f"ELTAKO {self.sender_id}",
-            via_device=(DOMAIN, self.gateway.entry_id),
+            via_device_id=dr.async_get_device_id_by_identifier(
+                self.gateway.hass, (DOMAIN, self.gateway.entry_id)
+            ),
         )
 
 
