@@ -91,11 +91,113 @@
   },
   "entity": {
     "binary_sensor": {
+      "summer_mode": {
+        "name": "Sommerbetrieb"
+      },
+      "movement": {
+        "name": "Bewegung"
+      },
+      "rain": {
+        "name": "Regen"
+      },
+      "battery_low": {
+        "name": "Batterie niedrig"
+      },
+      "window_open": {
+        "name": "Fenster offen"
+      },
+      "contact_open": {
+        "name": "Kontakt offen"
+      },
+      "actuator_obstructed": {
+        "name": "Ventil blockiert"
+      },
+      "temperature_sensor_failure": {
+        "name": "Temperaturfehler"
+      },
       "fnsn_detection": {
+        "name": "Detektion",
         "state": {
           "on": "Detektion",
           "off": "Keine Detektion"
         }
+      }
+    },
+    "sensor": {
+      "last_message": {
+        "name": "Letztes Telegramm"
+      },
+      "pressed_button": {
+        "name": "Gedrückte Taste"
+      },
+      "button_position": {
+        "name": "Tastenposition"
+      },
+      "signal_code": {
+        "name": "Signalcode"
+      },
+      "dawn": {
+        "name": "Dämmerung"
+      },
+      "brightness_west": {
+        "name": "Helligkeit West"
+      },
+      "brightness_south": {
+        "name": "Helligkeit Süd"
+      },
+      "brightness_east": {
+        "name": "Helligkeit Ost"
+      },
+      "temperature": {
+        "name": "Temperatur"
+      },
+      "wind_speed": {
+        "name": "Windgeschwindigkeit"
+      },
+      "energy_total": {
+        "name": "Zählerstand"
+      },
+      "current_power": {
+        "name": "Aktuelle Leistung"
+      },
+      "brightness": {
+        "name": "Helligkeit"
+      },
+      "movement_detection": {
+        "name": "Bewegungserkennung"
+      },
+      "battery_voltage": {
+        "name": "Batteriespannung"
+      },
+      "target_temperature": {
+        "name": "Solltemperatur"
+      },
+      "operating_mode": {
+        "name": "Betriebsart"
+      },
+      "humidity": {
+        "name": "Luftfeuchtigkeit"
+      },
+      "tvoc": {
+        "name": "TVOC"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "target_temperature_command": {
+        "name": "Solltemperaturvorgabe"
+      },
+      "valve_position_command": {
+        "name": "Ventilvorgabe"
+      },
+      "room_temperature_command": {
+        "name": "Raumtemperaturvorgabe"
+      },
+      "control_raw": {
+        "name": "Steuerdaten Rohwert"
+      },
+      "valve_position": {
+        "name": "Ventilstellung"
       }
     }
   }
