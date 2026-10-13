@@ -442,6 +442,9 @@ class EltakoDeviceAddressSensor(EltakoYamlEntity, SensorEntity):
 
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device, suffix="EnOcean-ID")
+        self._attr_translation_key = "enocean_id"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_icon = "mdi:identifier"
 
@@ -935,7 +938,6 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
         # A5-08-01 data telegram. Keep the existing unique ID (..._spannung)
         # so current HA entities/history are preserved; only correct the
         # displayed entity name to "Batteriespannung".
-        voltage_sensor._attr_name = f"{str(device.get('name') or 'F4USM61B')} Batteriespannung"
 
     entities: list[SensorEntity] = [
         EltakoYamlValueSensor(gateway, device, "brightness", "Helligkeit", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
@@ -1487,6 +1489,10 @@ class EltakoYamlEnumSensor(EltakoYamlEntity, SensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        if key == "window_state":
+            self._attr_translation_key = "window_state"
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._value = None
         self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
         self._attr_options = list(options)
@@ -1550,6 +1556,9 @@ class EltakoF4USM61BBatterySensor(EltakoYamlEntity, SensorEntity):
         battery_device["platform"] = "sensor"
         battery_device["name"] = str(device.get("name") or "F4USM61B").split(" Kanal ")[0]
         super().__init__(gateway, battery_device, suffix="Batteriespannung")
+        self._attr_translation_key = "battery_voltage"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._physical_unique_id = physical_unique_id.upper()
         self._value = None
         self._attr_device_class = SensorDeviceClass.VOLTAGE
