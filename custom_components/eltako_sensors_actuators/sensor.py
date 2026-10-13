@@ -97,6 +97,34 @@ VOC_DEVICE_CLASS = getattr(
 )
 CO2_DEVICE_CLASS = getattr(SensorDeviceClass, "CO2", None)
 
+_SENSOR_TRANSLATION_KEYS = {
+    "last_seen": "last_message",
+    "button_label_de": "pressed_button",
+    "button_position": "button_position",
+    "signal_code": "signal_code",
+    "dawn_sensor": "dawn",
+    "sun_west": "brightness_west",
+    "sun_south": "brightness_south",
+    "sun_east": "brightness_east",
+    "temperature": "temperature",
+    "wind_speed": "wind_speed",
+    "energy_total": "energy_total",
+    "current_power": "current_power",
+    "brightness": "brightness",
+    "movement_detection_mode": "movement_detection",
+    "battery_voltage": "battery_voltage",
+    "target_temperature": "target_temperature",
+    "hvac_mode": "operating_mode",
+    "humidity": "humidity",
+    "tvoc": "tvoc",
+    "carbon_dioxide": "co2",
+    "target_temperature_command": "target_temperature_command",
+    "valve_position_command": "valve_position_command",
+    "room_temperature_command": "room_temperature_command",
+    "control_raw": "control_raw",
+    "valve_position": "valve_position",
+}
+
 def _is_fbht_device(device: dict[str, Any]) -> bool:
     """Return True for the temperature-capable FBHT variant of A5-08-01.
 
@@ -1639,6 +1667,12 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        translation_key = _SENSOR_TRANSLATION_KEYS.get(key)
+        if translation_key:
+            # Keep the established unique_id/entity_id. Only the visible entity
+            # name is delegated to Home Assistant's translation system.
+            self._attr_translation_key = translation_key
+            self._attr_name = None
         self._value = None
         self._last_valid_numeric_value = None
         self._last_energy_sample_for_power = None
