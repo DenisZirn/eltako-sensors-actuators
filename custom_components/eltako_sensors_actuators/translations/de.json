@@ -121,6 +121,24 @@
           "on": "Detektion",
           "off": "Keine Detektion"
         }
+      },
+      "water_alarm": {
+        "name": "Wasseralarm"
+      },
+      "smoke_alarm": {
+        "name": "Rauchalarm"
+      },
+      "occupancy": {
+        "name": "Belegung"
+      },
+      "switch_state": {
+        "name": "Schaltzustand"
+      },
+      "heating_demand": {
+        "name": "Heizanforderung"
+      },
+      "frost_protection": {
+        "name": "Frostschutz"
       }
     },
     "sensor": {
@@ -128,10 +146,24 @@
         "name": "Letztes Telegramm"
       },
       "pressed_button": {
-        "name": "Gedrückte Taste"
+        "name": "Gedrückte Taste",
+        "state": {
+          "left_top": "Oben links",
+          "right_top": "Oben rechts",
+          "left_bottom": "Unten links",
+          "right_bottom": "Unten rechts",
+          "released": "Losgelassen"
+        }
       },
       "button_position": {
-        "name": "Tastenposition"
+        "name": "Tastenposition",
+        "state": {
+          "left_top": "Oben links",
+          "right_top": "Oben rechts",
+          "left_bottom": "Unten links",
+          "right_bottom": "Unten rechts",
+          "released": "Losgelassen"
+        }
       },
       "signal_code": {
         "name": "Signalcode"
@@ -198,6 +230,22 @@
       },
       "valve_position": {
         "name": "Ventilstellung"
+      },
+      "enocean_id": {
+        "name": "EnOcean-ID"
+      },
+      "window_state": {
+        "name": "Fensterzustand",
+        "state": {
+          "geschlossen": "Geschlossen",
+          "gekippt": "Gekippt",
+          "offen": "Offen"
+        }
+      }
+    },
+    "button": {
+      "send_teach_in": {
+        "name": "Lerntelegramm senden"
       }
     }
   }
