@@ -476,7 +476,10 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
         if translation_key:
             # Preserve unique_id/entity_id; translate only the visible name.
             self._attr_translation_key = translation_key
-            self._attr_name = None
+            # EltakoBaseEntity creates _attr_name. Home Assistant only consults
+            # translation_key when _attr_name is absent, not when it is None.
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._inverted = bool(inverted)
         self._state = None
         self._attr_device_class = device_class
