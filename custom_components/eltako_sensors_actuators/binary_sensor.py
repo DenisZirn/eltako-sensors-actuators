@@ -15,6 +15,17 @@ from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+_BINARY_SENSOR_TRANSLATION_KEYS = {
+    "summer_mode": "summer_mode",
+    "movement": "movement",
+    "rain": "rain",
+    "battery_low": "battery_low",
+    "window_open": "window_open",
+    "contact_open": "contact_open",
+    "actuator_obstructed": "actuator_obstructed",
+    "temperature_sensor_failure": "temperature_sensor_failure",
+}
+
 
 def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     """Return True for F2T55, FT55 and F4T55E wall rockers."""
@@ -461,6 +472,11 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        translation_key = _BINARY_SENSOR_TRANSLATION_KEYS.get(key)
+        if translation_key:
+            # Preserve unique_id/entity_id; translate only the visible name.
+            self._attr_translation_key = translation_key
+            self._attr_name = None
         self._inverted = bool(inverted)
         self._state = None
         self._attr_device_class = device_class
