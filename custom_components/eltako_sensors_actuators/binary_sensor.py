@@ -26,6 +26,21 @@ _BINARY_SENSOR_TRANSLATION_KEYS = {
     "temperature_sensor_failure": "temperature_sensor_failure",
 }
 
+_BINARY_SENSOR_SUFFIX_TRANSLATION_KEYS = {
+    "Fenster offen": "window_open",
+    "Kontakt offen": "contact_open",
+    "Wasseralarm": "water_alarm",
+    "Rauchalarm": "smoke_alarm",
+    "Bewegung": "movement",
+    "Belegung": "occupancy",
+    "Schaltzustand": "switch_state",
+    "Heizanforderung": "heating_demand",
+    "Frostschutz": "frost_protection",
+    "Batterie niedrig": "battery_low",
+    "Ventil blockiert": "actuator_obstructed",
+    "Temperaturfehler": "temperature_sensor_failure",
+}
+
 
 def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     """Return True for F2T55, FT55 and F4T55E wall rockers."""
@@ -472,7 +487,9 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
-        translation_key = _BINARY_SENSOR_TRANSLATION_KEYS.get(key)
+        translation_key = _BINARY_SENSOR_SUFFIX_TRANSLATION_KEYS.get(
+            str(suffix or "")
+        ) or _BINARY_SENSOR_TRANSLATION_KEYS.get(key)
         if translation_key:
             # Preserve unique_id/entity_id; translate only the visible name.
             self._attr_translation_key = translation_key
@@ -689,6 +706,10 @@ class EltakoF4USM61BInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
         telegram_code: int,
     ) -> None:
         super().__init__(gateway, device, suffix=f"Eingang E{input_number}")
+        self._attr_translation_key = "input"
+        self._attr_translation_placeholders = {"input": str(input_number)}
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._telegram_code = int(telegram_code)
         self._state = False
         self._attr_device_class = None
