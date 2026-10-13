@@ -97,6 +97,24 @@ VOC_DEVICE_CLASS = getattr(
 )
 CO2_DEVICE_CLASS = getattr(SensorDeviceClass, "CO2", None)
 
+_ROCKER_POSITION_ALIASES = {
+    "oben links": "left_top",
+    "oben rechts": "right_top",
+    "unten links": "left_bottom",
+    "unten rechts": "right_bottom",
+    "losgelassen": "released",
+    "released": "released",
+    "left_top": "left_top",
+    "right_top": "right_top",
+    "left_bottom": "left_bottom",
+    "right_bottom": "right_bottom",
+}
+
+def _normalize_rocker_position(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return _ROCKER_POSITION_ALIASES.get(value.strip().casefold(), value)
+
 _SENSOR_TRANSLATION_KEYS = {
     "last_seen": "last_message",
     "button_label_de": "pressed_button",
@@ -1695,6 +1713,16 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
 
+        if key in {"button_label_de", "button_position"}:
+            self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
+            self._attr_options = [
+                "left_top",
+                "right_top",
+                "left_bottom",
+                "right_bottom",
+                "released",
+            ]
+
         # "Letztes Telegramm" is diagnostic metadata, not a measurement.
         # Keep the existing sensor entity and unique ID, but let Home Assistant
         # display every YAML last-seen entity in the device's Diagnose section.
@@ -1733,6 +1761,8 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 value = float(value)
         except (TypeError, ValueError):
             pass
+        if self.key in {"button_label_de", "button_position"}:
+            value = _normalize_rocker_position(value)
         self._value = value
         if normalize_eep(self.device_config.get("eep")) == "A5-12-01" and self.key in {"energy_total", "counter"}:
             try:
@@ -1881,6 +1911,8 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
             return
 
         new_value = telegram.decoded[self.key]
+        if self.key in {"button_label_de", "button_position"}:
+            new_value = _normalize_rocker_position(new_value)
 
         if self.key == "last_seen":
             new_value = _format_timestamp_seconds(new_value)
