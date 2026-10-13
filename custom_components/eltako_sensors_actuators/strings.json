@@ -91,11 +91,113 @@
   },
   "entity": {
     "binary_sensor": {
+      "summer_mode": {
+        "name": "Summer mode"
+      },
+      "movement": {
+        "name": "Movement"
+      },
+      "rain": {
+        "name": "Rain"
+      },
+      "battery_low": {
+        "name": "Low battery"
+      },
+      "window_open": {
+        "name": "Window open"
+      },
+      "contact_open": {
+        "name": "Contact open"
+      },
+      "actuator_obstructed": {
+        "name": "Valve obstructed"
+      },
+      "temperature_sensor_failure": {
+        "name": "Temperature sensor fault"
+      },
       "fnsn_detection": {
+        "name": "Detection",
         "state": {
           "on": "Detection",
           "off": "No detection"
         }
+      }
+    },
+    "sensor": {
+      "last_message": {
+        "name": "Last message"
+      },
+      "pressed_button": {
+        "name": "Pressed button"
+      },
+      "button_position": {
+        "name": "Button position"
+      },
+      "signal_code": {
+        "name": "Signal code"
+      },
+      "dawn": {
+        "name": "Dawn"
+      },
+      "brightness_west": {
+        "name": "Brightness west"
+      },
+      "brightness_south": {
+        "name": "Brightness south"
+      },
+      "brightness_east": {
+        "name": "Brightness east"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "wind_speed": {
+        "name": "Wind speed"
+      },
+      "energy_total": {
+        "name": "Energy total"
+      },
+      "current_power": {
+        "name": "Current power"
+      },
+      "brightness": {
+        "name": "Brightness"
+      },
+      "movement_detection": {
+        "name": "Movement detection"
+      },
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "target_temperature": {
+        "name": "Target temperature"
+      },
+      "operating_mode": {
+        "name": "Operating mode"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "tvoc": {
+        "name": "TVOC"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "target_temperature_command": {
+        "name": "Target temperature command"
+      },
+      "valve_position_command": {
+        "name": "Valve position command"
+      },
+      "room_temperature_command": {
+        "name": "Room temperature command"
+      },
+      "control_raw": {
+        "name": "Raw control data"
+      },
+      "valve_position": {
+        "name": "Valve position"
       }
     }
   }
