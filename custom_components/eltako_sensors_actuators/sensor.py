@@ -1672,7 +1672,10 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
             # Keep the established unique_id/entity_id. Only the visible entity
             # name is delegated to Home Assistant's translation system.
             self._attr_translation_key = translation_key
-            self._attr_name = None
+            # EltakoBaseEntity creates _attr_name. Home Assistant only consults
+            # translation_key when _attr_name is absent, not when it is None.
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._value = None
         self._last_valid_numeric_value = None
         self._last_energy_sample_for_power = None
