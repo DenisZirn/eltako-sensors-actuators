@@ -116,7 +116,7 @@
         "name": "Temperaturfehler"
       },
       "fnsn_detection": {
-        "name": "Detektion",
+        "name": "Näherung",
         "state": {
           "on": "Detektion",
           "off": "Keine Detektion"
@@ -139,6 +139,18 @@
       },
       "frost_protection": {
         "name": "Frostschutz"
+      },
+      "rocker_left_top": {
+        "name": "Taste oben links"
+      },
+      "rocker_right_top": {
+        "name": "Taste oben rechts"
+      },
+      "rocker_left_bottom": {
+        "name": "Taste unten links"
+      },
+      "rocker_right_bottom": {
+        "name": "Taste unten rechts"
       }
     },
     "sensor": {
