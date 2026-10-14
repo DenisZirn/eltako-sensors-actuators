@@ -1728,8 +1728,11 @@ class EltakoGateway:
             )
         )
         inter_message_delay = (
-            0.02 if is_frgbw14 and len(messages) > 1
-            else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
+            0.25 if command == "f2l14_set_stage" and len(messages) > 1
+            else (
+                0.02 if is_frgbw14 and len(messages) > 1
+                else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
+            )
         )
         _LOGGER.info(
             "ELTAKO send start: command=%s device=%s device_id=%s eep=%s sender_id=%s effective_sender_ids=%s sender_eep=%s gateway=%s port=%s messages=%s payloads=%s role=%s delay=%.3fs",
@@ -2198,6 +2201,28 @@ def _fam_usb_4bs_rf_variants(address: bytes, data: bytes) -> list[Any]:
 
 
 
+def _is_f2l14_device(device: dict[str, Any]) -> bool:
+    """Return True for an F2L14 two-stage fan actor."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    family = str(device.get("device_family") or raw.get("device_family") or "").strip().upper()
+    if family == "F2L14":
+        return True
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+        )
+    ).upper()
+    return "F2L14" in text
+
+
 def _is_fms14_device(device: dict[str, Any]) -> bool:
     """Return True for an FMS14 channel definition.
 
@@ -2316,16 +2341,26 @@ def _series14_pct_offset_from_device(device: dict[str, Any]) -> int | None:
 def _fam_usb_effective_sender_id_for_device(device: dict[str, Any], sender_id: str, gateway_base_id: str | None) -> str:
     """FAM-USB sender mapping for Series-14 and wireless actors.
 
-    The YAML sender.id is the authoritative HA/controller sender.  Earlier
-    builds preferred a PCT/device address parsed from comments or names.  That
-    can produce a wrong RF sender for multi-channel cover actors, e.g. an
-    FSB entry named 00-00-00-0B being transmitted as FF-A6-07-4D.
-
-    For FAM-USB the EnOcean TCM can only send from its own base-id range, so
-    we keep the low byte of sender.id and replace only the prefix with the
-    FAM-USB base-id.  Only if sender.id is absent/invalid do we fall back to
-    a PCT address parsed from the device metadata.
+    F2L14 exports its already resolved FAM-USB radio address as stage_1_id.
+    For a base id such as FF-BF-5C-80 and PCT14 address 0x3C this is
+    FF-BF-5C-BC. Reusing only the low byte from 00-00-B0-3C would incorrectly
+    produce FF-BF-5C-3C, so prefer the explicit stage_1_id for this device.
     """
+    if _is_f2l14_device(device):
+        stage_1_id = str(
+            device.get("stage_1_id")
+            or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("stage_1_id")
+            or ""
+        ).strip()
+        if stage_1_id:
+            try:
+                return format_address(parse_address(stage_1_id))
+            except Exception:
+                pass
+
+    # Generic fallback for the remaining Series-14/wireless actors:
+    # sender.id is authoritative; for FAM-USB only its low byte is retained
+    # and mapped into the gateway base-id range.
     if not gateway_base_id:
         return _fam_usb_effective_sender_id(sender_id, gateway_base_id)
     try:
@@ -2554,6 +2589,60 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             gateway_type,
             gateway_base_id,
         )
+
+    if platform == "fan" and _is_f2l14_device(device):
+        if sender_eep != "F6-02-01" and device_eep != "F6-02-01":
+            raise UnsupportedEltakoCommand(
+                f"F2L14 requires F6-02-01 sender telegrams, got sender.eep {sender_eep}"
+            )
+        if command != "f2l14_set_stage":
+            raise UnsupportedEltakoCommand(f"F2L14 command {command} is not supported")
+
+        try:
+            stage = int(kwargs.get("stage", 0))
+        except (TypeError, ValueError):
+            stage = 0
+        stage = max(0, min(2, stage))
+        mode = str(kwargs.get("f2l14_mode") or device.get("f2l14_mode") or "exclusive").strip().lower()
+
+        # F6-02-01 rocker data bytes:
+        #   0x30 = stage 1 ON
+        #   0x10 = stage 1 OFF
+        #   0x70 = stage 2 ON
+        #   0x50 = stage 2 OFF
+        #
+        # build_f6_02_01_rocker encodes these as actions 1/0/3/2.
+        def _pulse(action: int) -> list[ESP2Message]:
+            return [
+                build_f6_02_01_rocker(sender_id, action=action, pressed=True, status=0x30),
+                build_f6_02_01_rocker(sender_id, action=0, pressed=False, status=0x20),
+            ]
+
+        # F2L14 learns the double-rocker semantics in the actuator:
+        #   top left  (0x30) = Stage 1
+        #   top right (0x70) = Stage 2
+        #   bottom    (0x10/0x50) = OFF
+        #
+        # In exclusive mode, Stage 2 closes only contact 3-4.
+        # In additive mode, the very same top-right command closes both
+        # contacts 1-2 and 3-4. Therefore never synthesize Stage 2 by sending
+        # a Stage-1 command first; the actuator itself applies the learned mode.
+        if stage == 0:
+            messages = _pulse(0)
+        elif stage == 1:
+            messages = _pulse(1)
+        else:
+            messages = _pulse(3)
+
+        _LOGGER.info(
+            "ELTAKO F2L14 fan path selected: device=%s device_id=%s sender_id=%s stage=%s mode=%s",
+            device.get("name"),
+            device.get("id"),
+            sender_id,
+            stage,
+            mode,
+        )
+        return messages
 
     if platform == "switch" and _is_fms14_device(device):
         # FMS14 is controlled like the working FSR14 Series-14 actors: use the

@@ -91,11 +91,178 @@
   },
   "entity": {
     "binary_sensor": {
+      "summer_mode": {
+        "name": "Sommerbetrieb"
+      },
+      "movement": {
+        "name": "Bewegung"
+      },
+      "rain": {
+        "name": "Regen"
+      },
+      "battery_low": {
+        "name": "Batterie niedrig"
+      },
+      "window_open": {
+        "name": "Fenster offen"
+      },
+      "contact_open": {
+        "name": "Kontakt offen"
+      },
+      "actuator_obstructed": {
+        "name": "Ventil blockiert"
+      },
+      "temperature_sensor_failure": {
+        "name": "Temperaturfehler"
+      },
       "fnsn_detection": {
+        "name": "Näherung",
         "state": {
           "on": "Detektion",
           "off": "Keine Detektion"
         }
+      },
+      "water_alarm": {
+        "name": "Wasseralarm"
+      },
+      "smoke_alarm": {
+        "name": "Rauchalarm"
+      },
+      "occupancy": {
+        "name": "Belegung"
+      },
+      "switch_state": {
+        "name": "Schaltzustand"
+      },
+      "heating_demand": {
+        "name": "Heizanforderung"
+      },
+      "frost_protection": {
+        "name": "Frostschutz"
+      },
+      "rocker_left_top": {
+        "name": "Taste oben links"
+      },
+      "rocker_right_top": {
+        "name": "Taste oben rechts"
+      },
+      "rocker_left_bottom": {
+        "name": "Taste unten links"
+      },
+      "rocker_right_bottom": {
+        "name": "Taste unten rechts"
+      }
+    },
+    "sensor": {
+      "last_message": {
+        "name": "Letztes Telegramm"
+      },
+      "pressed_button": {
+        "name": "Gedrückte Taste",
+        "state": {
+          "left_top": "Oben links",
+          "right_top": "Oben rechts",
+          "left_bottom": "Unten links",
+          "right_bottom": "Unten rechts",
+          "released": "Losgelassen"
+        }
+      },
+      "button_position": {
+        "name": "Tastenposition",
+        "state": {
+          "left_top": "Oben links",
+          "right_top": "Oben rechts",
+          "left_bottom": "Unten links",
+          "right_bottom": "Unten rechts",
+          "released": "Losgelassen"
+        }
+      },
+      "signal_code": {
+        "name": "Signalcode"
+      },
+      "dawn": {
+        "name": "Dämmerung"
+      },
+      "brightness_west": {
+        "name": "Helligkeit West"
+      },
+      "brightness_south": {
+        "name": "Helligkeit Süd"
+      },
+      "brightness_east": {
+        "name": "Helligkeit Ost"
+      },
+      "temperature": {
+        "name": "Temperatur"
+      },
+      "wind_speed": {
+        "name": "Windgeschwindigkeit"
+      },
+      "energy_total": {
+        "name": "Zählerstand"
+      },
+      "current_power": {
+        "name": "Aktuelle Leistung"
+      },
+      "brightness": {
+        "name": "Helligkeit"
+      },
+      "movement_detection": {
+        "name": "Bewegungserkennung"
+      },
+      "battery_voltage": {
+        "name": "Batteriespannung"
+      },
+      "target_temperature": {
+        "name": "Solltemperatur"
+      },
+      "operating_mode": {
+        "name": "Betriebsart"
+      },
+      "humidity": {
+        "name": "Luftfeuchtigkeit"
+      },
+      "tvoc": {
+        "name": "TVOC"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "target_temperature_command": {
+        "name": "Solltemperaturvorgabe"
+      },
+      "valve_position_command": {
+        "name": "Ventilvorgabe"
+      },
+      "room_temperature_command": {
+        "name": "Raumtemperaturvorgabe"
+      },
+      "control_raw": {
+        "name": "Steuerdaten Rohwert"
+      },
+      "valve_position": {
+        "name": "Ventilstellung"
+      },
+      "enocean_id": {
+        "name": "EnOcean-ID"
+      },
+      "window_state": {
+        "name": "Fensterzustand",
+        "state": {
+          "geschlossen": "Geschlossen",
+          "gekippt": "Gekippt",
+          "offen": "Offen"
+        }
+      }
+    },
+    "button": {
+      "send_teach_in": {
+        "name": "Lerntelegramm senden"
+      }
+    },
+    "fan": {
+      "f2l14": {
+        "name": "Lüfter"
       }
     }
   }

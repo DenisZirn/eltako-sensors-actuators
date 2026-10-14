@@ -91,11 +91,178 @@
   },
   "entity": {
     "binary_sensor": {
+      "summer_mode": {
+        "name": "Summer mode"
+      },
+      "movement": {
+        "name": "Movement"
+      },
+      "rain": {
+        "name": "Rain"
+      },
+      "battery_low": {
+        "name": "Low battery"
+      },
+      "window_open": {
+        "name": "Window open"
+      },
+      "contact_open": {
+        "name": "Contact open"
+      },
+      "actuator_obstructed": {
+        "name": "Valve obstructed"
+      },
+      "temperature_sensor_failure": {
+        "name": "Temperature sensor fault"
+      },
       "fnsn_detection": {
+        "name": "Proximity",
         "state": {
           "on": "Detection",
           "off": "No detection"
         }
+      },
+      "water_alarm": {
+        "name": "Water alarm"
+      },
+      "smoke_alarm": {
+        "name": "Smoke alarm"
+      },
+      "occupancy": {
+        "name": "Occupancy"
+      },
+      "switch_state": {
+        "name": "Switch state"
+      },
+      "heating_demand": {
+        "name": "Heating demand"
+      },
+      "frost_protection": {
+        "name": "Frost protection"
+      },
+      "rocker_left_top": {
+        "name": "Top left"
+      },
+      "rocker_right_top": {
+        "name": "Top right"
+      },
+      "rocker_left_bottom": {
+        "name": "Bottom left"
+      },
+      "rocker_right_bottom": {
+        "name": "Bottom right"
+      }
+    },
+    "sensor": {
+      "last_message": {
+        "name": "Last message"
+      },
+      "pressed_button": {
+        "name": "Pressed button",
+        "state": {
+          "left_top": "Top left",
+          "right_top": "Top right",
+          "left_bottom": "Bottom left",
+          "right_bottom": "Bottom right",
+          "released": "Released"
+        }
+      },
+      "button_position": {
+        "name": "Button position",
+        "state": {
+          "left_top": "Top left",
+          "right_top": "Top right",
+          "left_bottom": "Bottom left",
+          "right_bottom": "Bottom right",
+          "released": "Released"
+        }
+      },
+      "signal_code": {
+        "name": "Signal code"
+      },
+      "dawn": {
+        "name": "Dawn"
+      },
+      "brightness_west": {
+        "name": "Brightness west"
+      },
+      "brightness_south": {
+        "name": "Brightness south"
+      },
+      "brightness_east": {
+        "name": "Brightness east"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "wind_speed": {
+        "name": "Wind speed"
+      },
+      "energy_total": {
+        "name": "Energy total"
+      },
+      "current_power": {
+        "name": "Current power"
+      },
+      "brightness": {
+        "name": "Brightness"
+      },
+      "movement_detection": {
+        "name": "Movement detection"
+      },
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "target_temperature": {
+        "name": "Target temperature"
+      },
+      "operating_mode": {
+        "name": "Operating mode"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "tvoc": {
+        "name": "TVOC"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "target_temperature_command": {
+        "name": "Target temperature command"
+      },
+      "valve_position_command": {
+        "name": "Valve position command"
+      },
+      "room_temperature_command": {
+        "name": "Room temperature command"
+      },
+      "control_raw": {
+        "name": "Raw control data"
+      },
+      "valve_position": {
+        "name": "Valve position"
+      },
+      "enocean_id": {
+        "name": "EnOcean ID"
+      },
+      "window_state": {
+        "name": "Window state",
+        "state": {
+          "geschlossen": "Closed",
+          "gekippt": "Tilted",
+          "offen": "Open"
+        }
+      }
+    },
+    "button": {
+      "send_teach_in": {
+        "name": "Send teach-in telegram"
+      }
+    },
+    "fan": {
+      "f2l14": {
+        "name": "Fan"
       }
     }
   }

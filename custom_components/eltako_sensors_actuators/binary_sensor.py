@@ -15,6 +15,32 @@ from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+_BINARY_SENSOR_TRANSLATION_KEYS = {
+    "summer_mode": "summer_mode",
+    "movement": "movement",
+    "rain": "rain",
+    "battery_low": "battery_low",
+    "window_open": "window_open",
+    "contact_open": "contact_open",
+    "actuator_obstructed": "actuator_obstructed",
+    "temperature_sensor_failure": "temperature_sensor_failure",
+}
+
+_BINARY_SENSOR_SUFFIX_TRANSLATION_KEYS = {
+    "Fenster offen": "window_open",
+    "Kontakt offen": "contact_open",
+    "Wasseralarm": "water_alarm",
+    "Rauchalarm": "smoke_alarm",
+    "Bewegung": "movement",
+    "Belegung": "occupancy",
+    "Schaltzustand": "switch_state",
+    "Heizanforderung": "heating_demand",
+    "Frostschutz": "frost_protection",
+    "Batterie niedrig": "battery_low",
+    "Ventil blockiert": "actuator_obstructed",
+    "Temperaturfehler": "temperature_sensor_failure",
+}
+
 
 def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     """Return True for F2T55, FT55 and F4T55E wall rockers."""
@@ -218,13 +244,18 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             # Custom state labels override Home Assistant's generic presence
             # wording (Zuhause/Abwesend) for this proximity detector.
             fnsn_entity._attr_translation_key = "fnsn_detection"
+            if hasattr(fnsn_entity, "_attr_name"):
+                del fnsn_entity._attr_name
             entities.append(fnsn_entity)
         elif platform == "binary_sensor":
-            device_class = _device_class_from_yaml(device.get("device_class")) or _device_class_for_eep(eep)
-            key = "open" if device_class in (BinarySensorDeviceClass.DOOR, BinarySensorDeviceClass.WINDOW, BinarySensorDeviceClass.OPENING) else "pressed"
-            entities.append(EltakoYamlBinarySensor(gateway, device, key, device_class))
-            if eep in ("F6-02-01",):
+            if eep == "F6-02-01":
+                # RPS wall rockers expose the four real physical positions.
+                # Do not create an additional unsuffixed generic binary entity.
                 entities.extend(_rocker_position_entities(gateway, device))
+            else:
+                device_class = _device_class_from_yaml(device.get("device_class")) or _device_class_for_eep(eep)
+                key = "open" if device_class in (BinarySensorDeviceClass.DOOR, BinarySensorDeviceClass.WINDOW, BinarySensorDeviceClass.OPENING) else "pressed"
+                entities.append(EltakoYamlBinarySensor(gateway, device, key, device_class))
         elif platform == "sensor" and eep == "A5-13-01":
             entities.append(EltakoYamlBinarySensor(gateway, device, "rain", BinarySensorDeviceClass.MOISTURE, suffix="Regen"))
         elif eep == "A5-20-01":
@@ -259,7 +290,7 @@ def _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices: list[dict
         return
 
     for device in devices or []:
-        if not isinstance(device, dict) or not _is_wall_rocker_device(device):
+        if not isinstance(device, dict):
             continue
         if normalize_eep(device.get("eep")) != "F6-02-01":
             continue
@@ -461,6 +492,16 @@ class EltakoYamlBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        translation_key = _BINARY_SENSOR_SUFFIX_TRANSLATION_KEYS.get(
+            str(suffix or "")
+        ) or _BINARY_SENSOR_TRANSLATION_KEYS.get(key)
+        if translation_key:
+            # Preserve unique_id/entity_id; translate only the visible name.
+            self._attr_translation_key = translation_key
+            # EltakoBaseEntity creates _attr_name. Home Assistant only consults
+            # translation_key when _attr_name is absent, not when it is None.
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._inverted = bool(inverted)
         self._state = None
         self._attr_device_class = device_class
@@ -670,6 +711,10 @@ class EltakoF4USM61BInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
         telegram_code: int,
     ) -> None:
         super().__init__(gateway, device, suffix=f"Eingang E{input_number}")
+        self._attr_translation_key = "input"
+        self._attr_translation_placeholders = {"input": str(input_number)}
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._telegram_code = int(telegram_code)
         self._state = False
         self._attr_device_class = None
@@ -714,6 +759,9 @@ class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
 
     def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
         super().__init__(gateway, device, suffix=label)
+        self._attr_translation_key = f"rocker_{position}"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self.position = position
         self._state = False
         self._reset_handle = None

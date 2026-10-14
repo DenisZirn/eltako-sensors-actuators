@@ -8,7 +8,7 @@ Home-Assistant-Custom-Integration für die unten aufgeführten ELTAKO-Geräte.
 
 Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
 
-## Freigegebener Gerätekatalog (v0.1.161)
+## Freigegebener Gerätekatalog (v0.1.162)
 
 - F2T55 – Taster 2-Kanal EU
 - FT55, F4T55E – Taster 4-Kanal EU
@@ -46,6 +46,7 @@ Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, i
 - FRGBW71L – RGBW-Aktor
 - FRGBW14 – RGBW-Aktor (noch im Test)
 - FMS14 – 2-Kanal-Multifunktions-Stromstoßschalter
+- F2L14 – 2-Stufen-Lüfteraktor (exclusive / addierend)
 - FSR14-2x, FSR14-4x, FSR14M-2x, FSR14SSR
 - FSR71, FSR71-2x-230V, FSR71NP-2x-230V, FSR71NP-4x-230V
 - FMZ14, FSR61-230V, FSR61NP-230V, FSR61/8-24V UC, FSR61G-230V, FSR61LN-230V, FSR62, FLC61NP-230V
@@ -65,6 +66,39 @@ Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Upda
 ## Manuelle Installation
 
 Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopieren und Home Assistant neu laden beziehungsweise neu starten.
+
+## Änderungen in v0.1.162
+
+### F2L14
+
+- F2L14 als Home-Assistant-`fan`-Entity integriert.
+- Zwei Lüfterstufen werden als 50 % / 100 % abgebildet, 0 % entspricht Aus.
+- Unterstützung für beide PCT14-Schaltfolgen:
+  - `exclusive`: Stufe 1 schaltet nur Kontakt 1, Stufe 2 nur Kontakt 2.
+  - `additive`: Stufe 1 schaltet Kontakt 1, Stufe 2 beide Kontakte.
+- Native F6-02-01-Tastertelegramme werden verwendet:
+  - `0x30` = Stufe 1
+  - `0x70` = Stufe 2
+  - untere Taste = Aus
+- Die F2L14-Betriebsart wird über `f2l14_mode` aus der EEDTOY-YAML übernommen.
+- `stage_1_id` und `stage_2_id` werden für die Rückmeldung der beiden Relais verwendet.
+- FAM-USB- und FGW14-USB-/FAM14-Konfigurationen werden unterstützt.
+- Für zuverlässige F2L14-Tastersequenzen wurde ein definiertes Telegramm-Timing ergänzt.
+- Die F2L14-Ansteuerung wurde praktisch mit PCT14 und realem Aktor getestet.
+
+### Deutsche / englische Oberfläche
+
+- Sichtbare Entity-Namen werden schrittweise über Home Assistants Übersetzungssystem bereitgestellt.
+- Deutsche und englische Bezeichnungen für zahlreiche Sensoren, Binärsensoren und Diagnose-Entities ergänzt.
+- FNSN55EB/FNS65EB: `Näherung` / `Proximity` inklusive übersetzter Zustände.
+- F6-02-01-Taster: Tastenpositionen und Diagnosewerte deutsch/englisch.
+- Redundante generische F6-02-01-`Unknown`-Entity entfernt.
+- EnOcean-ID, Letztes Telegramm, Batterie-/Fenster-/Bewegungs- und weitere Entity-Namen lokalisiert.
+
+### Kompatibilität
+
+- Bestehende Unique-IDs und Entity-IDs bleiben erhalten.
+- Die Änderungen betreffen die Darstellung und die neue F2L14-Funktion; bestehende EnOcean-Gerätepfade bleiben unverändert.
 
 ## Änderungen in v0.1.161
 

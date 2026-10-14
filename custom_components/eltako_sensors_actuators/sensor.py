@@ -97,6 +97,52 @@ VOC_DEVICE_CLASS = getattr(
 )
 CO2_DEVICE_CLASS = getattr(SensorDeviceClass, "CO2", None)
 
+_ROCKER_POSITION_ALIASES = {
+    "oben links": "left_top",
+    "oben rechts": "right_top",
+    "unten links": "left_bottom",
+    "unten rechts": "right_bottom",
+    "losgelassen": "released",
+    "released": "released",
+    "left_top": "left_top",
+    "right_top": "right_top",
+    "left_bottom": "left_bottom",
+    "right_bottom": "right_bottom",
+}
+
+def _normalize_rocker_position(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return _ROCKER_POSITION_ALIASES.get(value.strip().casefold(), value)
+
+_SENSOR_TRANSLATION_KEYS = {
+    "last_seen": "last_message",
+    "button_label_de": "pressed_button",
+    "button_position": "button_position",
+    "signal_code": "signal_code",
+    "dawn_sensor": "dawn",
+    "sun_west": "brightness_west",
+    "sun_south": "brightness_south",
+    "sun_east": "brightness_east",
+    "temperature": "temperature",
+    "wind_speed": "wind_speed",
+    "energy_total": "energy_total",
+    "current_power": "current_power",
+    "brightness": "brightness",
+    "movement_detection_mode": "movement_detection",
+    "battery_voltage": "battery_voltage",
+    "target_temperature": "target_temperature",
+    "hvac_mode": "operating_mode",
+    "humidity": "humidity",
+    "tvoc": "tvoc",
+    "carbon_dioxide": "co2",
+    "target_temperature_command": "target_temperature_command",
+    "valve_position_command": "valve_position_command",
+    "room_temperature_command": "room_temperature_command",
+    "control_raw": "control_raw",
+    "valve_position": "valve_position",
+}
+
 def _is_fbht_device(device: dict[str, Any]) -> bool:
     """Return True for the temperature-capable FBHT variant of A5-08-01.
 
@@ -414,6 +460,9 @@ class EltakoDeviceAddressSensor(EltakoYamlEntity, SensorEntity):
 
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device, suffix="EnOcean-ID")
+        self._attr_translation_key = "enocean_id"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_icon = "mdi:identifier"
 
@@ -905,9 +954,11 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {3, 6}:
         # F4USM61B modes 3/6 carry the battery/supply voltage in the normal
         # A5-08-01 data telegram. Keep the existing unique ID (..._spannung)
-        # so current HA entities/history are preserved; only correct the
-        # displayed entity name to "Batteriespannung".
-        voltage_sensor._attr_name = f"{str(device.get('name') or 'F4USM61B')} Batteriespannung"
+        # so current HA entities/history are preserved, but let Home Assistant
+        # translate the visible label.
+        voltage_sensor._attr_translation_key = "battery_voltage"
+        if hasattr(voltage_sensor, "_attr_name"):
+            del voltage_sensor._attr_name
 
     entities: list[SensorEntity] = [
         EltakoYamlValueSensor(gateway, device, "brightness", "Helligkeit", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
@@ -1459,6 +1510,10 @@ class EltakoYamlEnumSensor(EltakoYamlEntity, SensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        if key == "window_state":
+            self._attr_translation_key = "window_state"
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._value = None
         self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
         self._attr_options = list(options)
@@ -1522,6 +1577,9 @@ class EltakoF4USM61BBatterySensor(EltakoYamlEntity, SensorEntity):
         battery_device["platform"] = "sensor"
         battery_device["name"] = str(device.get("name") or "F4USM61B").split(" Kanal ")[0]
         super().__init__(gateway, battery_device, suffix="Batteriespannung")
+        self._attr_translation_key = "battery_voltage"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self._physical_unique_id = physical_unique_id.upper()
         self._value = None
         self._attr_device_class = SensorDeviceClass.VOLTAGE
@@ -1639,6 +1697,15 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     ) -> None:
         super().__init__(gateway, device, suffix=suffix)
         self.key = key
+        translation_key = _SENSOR_TRANSLATION_KEYS.get(key)
+        if translation_key:
+            # Keep the established unique_id/entity_id. Only the visible entity
+            # name is delegated to Home Assistant's translation system.
+            self._attr_translation_key = translation_key
+            # EltakoBaseEntity creates _attr_name. Home Assistant only consults
+            # translation_key when _attr_name is absent, not when it is None.
+            if hasattr(self, "_attr_name"):
+                del self._attr_name
         self._value = None
         self._last_valid_numeric_value = None
         self._last_energy_sample_for_power = None
@@ -1648,6 +1715,16 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
+
+        if key in {"button_label_de", "button_position"}:
+            self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
+            self._attr_options = [
+                "left_top",
+                "right_top",
+                "left_bottom",
+                "right_bottom",
+                "released",
+            ]
 
         # "Letztes Telegramm" is diagnostic metadata, not a measurement.
         # Keep the existing sensor entity and unique ID, but let Home Assistant
@@ -1687,6 +1764,8 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 value = float(value)
         except (TypeError, ValueError):
             pass
+        if self.key in {"button_label_de", "button_position"}:
+            value = _normalize_rocker_position(value)
         self._value = value
         if normalize_eep(self.device_config.get("eep")) == "A5-12-01" and self.key in {"energy_total", "counter"}:
             try:
@@ -1835,6 +1914,8 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
             return
 
         new_value = telegram.decoded[self.key]
+        if self.key in {"button_label_de", "button_position"}:
+            new_value = _normalize_rocker_position(new_value)
 
         if self.key == "last_seen":
             new_value = _format_timestamp_seconds(new_value)
