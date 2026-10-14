@@ -94,6 +94,10 @@ Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopi
 - F6-02-01-Taster: Tastenpositionen und Diagnosewerte deutsch/englisch.
 - Redundante generische F6-02-01-`Unknown`-Entity entfernt.
 - EnOcean-ID, Letztes Telegramm, Batterie-/Fenster-/Bewegungs- und weitere Entity-Namen lokalisiert.
+- F4USM61B: Eingänge E1 bis E4 werden korrekt als `Input E1` bis `Input E4` bzw. `Eingang E1` bis `Eingang E4` angezeigt.
+- Spannungs-Sensoren verwenden `Voltage` / `Spannung` statt gemischter Sprachbezeichnungen.
+- FBH55/FBH55ESB erzeugt keine Temperatur-Entity mehr, da diese Gerätevariante keine Temperatur überträgt.
+- FBHT55/FBHT55ESB behält die Temperatur-Entity.
 
 ### Kompatibilität
 
