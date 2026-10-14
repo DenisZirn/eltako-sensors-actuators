@@ -2618,14 +2618,21 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                 build_f6_02_01_rocker(sender_id, action=0, pressed=False, status=0x20),
             ]
 
+        # F2L14 learns the double-rocker semantics in the actuator:
+        #   top left  (0x30) = Stage 1
+        #   top right (0x70) = Stage 2
+        #   bottom    (0x10/0x50) = OFF
+        #
+        # In exclusive mode, Stage 2 closes only contact 3-4.
+        # In additive mode, the very same top-right command closes both
+        # contacts 1-2 and 3-4. Therefore never synthesize Stage 2 by sending
+        # a Stage-1 command first; the actuator itself applies the learned mode.
         if stage == 0:
-            messages = _pulse(0) + _pulse(2)
+            messages = _pulse(0)
         elif stage == 1:
-            messages = _pulse(2) + _pulse(1)
-        elif mode == "additive":
-            messages = _pulse(1) + _pulse(3)
+            messages = _pulse(1)
         else:
-            messages = _pulse(0) + _pulse(3)
+            messages = _pulse(3)
 
         _LOGGER.info(
             "ELTAKO F2L14 fan path selected: device=%s device_id=%s sender_id=%s stage=%s mode=%s",
