@@ -42,6 +42,7 @@ PLATFORMS = [
     "cover",
     "climate",
     "button",
+    "fan",
 ]
 
 SIGNAL_TELEGRAM = "eltako_sensors_actuators_telegram"
