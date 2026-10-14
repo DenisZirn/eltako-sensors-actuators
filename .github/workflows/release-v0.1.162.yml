@@ -4,6 +4,11 @@ on:
   push:
     paths:
       - .github/workflows/release-v0.1.162.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/release-trigger-v0.1.162.txt
 
 permissions:
   contents: write
@@ -15,6 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Validate release version and syntax
