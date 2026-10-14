@@ -1,0 +1,95 @@
+name: Release v0.1.162
+
+on:
+  push:
+    paths:
+      - .github/workflows/release-v0.1.162.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release version and syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          root = Path('custom_components/eltako_sensors_actuators')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.162'
+
+          for path in root.rglob('*.py'):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+
+          assert (root / 'fan.py').exists()
+
+          gateway = (root / 'gateway.py').read_text(encoding='utf-8')
+          fan = (root / 'fan.py').read_text(encoding='utf-8')
+          yaml_config = (root / 'yaml_config.py').read_text(encoding='utf-8')
+
+          assert 'F2L14' in fan
+          assert 'f2l14_set_stage' in gateway
+          assert 'stage_1_id' in yaml_config
+          assert 'stage_2_id' in yaml_config
+          assert 'f2l14_mode' in yaml_config
+
+          print('Release validation OK')
+          PY
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v0.1.162 -m "ELTAKO Sensors & Actuators v0.1.162"
+          git push origin v0.1.162
+
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.162
+
+          ### F2L14
+
+          - F2L14 als Home-Assistant-`fan`-Entity integriert.
+          - Zwei Lüfterstufen werden als 50 % / 100 % abgebildet; 0 % entspricht Aus.
+          - Unterstützung für die PCT14-Schaltfolgen `exclusive` und `additive`.
+          - Native F6-02-01-Tastertelegramme für die Stufensteuerung:
+            - `0x30` = Stufe 1
+            - `0x70` = Stufe 2
+            - untere Taste = Aus
+          - `f2l14_mode`, `stage_1_id`, `stage_2_id` und `speed_count` werden aus der EEDTOY-YAML übernommen.
+          - Rückmeldung der beiden F2L14-Stufen wird ausgewertet.
+          - Unterstützung für FAM-USB und FGW14-USB/FAM14.
+          - FAM-USB-Sender-ID-Mapping für bereits aufgelöste F2L14-Adressen korrigiert.
+          - Telegramm-Timing für zuverlässige Stufenwechsel stabilisiert.
+          - Steuerung praktisch mit realem F2L14 und PCT14 getestet.
+
+          ### Deutsche / englische Oberfläche
+
+          - Deutsche und englische Entity-Bezeichnungen erweitert.
+          - FNSN55EB/FNS65EB: `Näherung` / `Proximity` inklusive übersetzter Zustände.
+          - F6-02-01-Taster: Tastenpositionen und Diagnosewerte deutsch/englisch.
+          - Redundante generische F6-02-01-`Unknown`-Entity entfernt.
+          - EnOcean-ID, Letztes Telegramm und weitere sichtbare Entity-Namen lokalisiert.
+
+          ### Kompatibilität
+
+          - Bestehende Unique-IDs und Entity-IDs bleiben erhalten.
+          - Bestehende EnOcean- und Series-14-Gerätepfade bleiben erhalten.
+          - Python-Syntax und Release-Manifest werden vor dem Release automatisch validiert.
+
+          ### Hinweis zum F2L14
+
+          Beim Wechsel zwischen `exclusive` und `additive` muss in PCT14 darauf geachtet werden, dass für dieselbe Sender-ID nicht gleichzeitig ein alter Eintrag mit der jeweils anderen Schaltfolge bestehen bleibt.
+          EOF
+
+          gh release create v0.1.162             --title "ELTAKO Sensors & Actuators v0.1.162"             --notes-file /tmp/release-notes.md
