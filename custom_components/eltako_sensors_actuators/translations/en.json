@@ -116,7 +116,7 @@
         "name": "Temperature sensor fault"
       },
       "fnsn_detection": {
-        "name": "Detection",
+        "name": "Proximity",
         "state": {
           "on": "Detection",
           "off": "No detection"
@@ -139,6 +139,18 @@
       },
       "frost_protection": {
         "name": "Frost protection"
+      },
+      "rocker_left_top": {
+        "name": "Top left"
+      },
+      "rocker_right_top": {
+        "name": "Top right"
+      },
+      "rocker_left_bottom": {
+        "name": "Bottom left"
+      },
+      "rocker_right_bottom": {
+        "name": "Bottom right"
       }
     },
     "sensor": {
