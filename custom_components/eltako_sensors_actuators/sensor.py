@@ -131,6 +131,7 @@ _SENSOR_TRANSLATION_KEYS = {
     "brightness": "brightness",
     "movement_detection_mode": "movement_detection",
     "battery_voltage": "battery_voltage",
+    "voltage": "voltage",
     "target_temperature": "target_temperature",
     "hvac_mode": "operating_mode",
     "humidity": "humidity",
@@ -144,16 +145,31 @@ _SENSOR_TRANSLATION_KEYS = {
 }
 
 def _is_fbht_device(device: dict[str, Any]) -> bool:
-    """Return True for the temperature-capable FBHT variant of A5-08-01.
+    """Return True only for the temperature-capable FBHT variant of A5-08-01.
 
-    FBH55ESB uses DB1 as unused. FBHT55ESB uses the same motion/brightness
-    telegram but additionally encodes 0..50 °C in DB1 (0..255). New EEDTOY
-    exports set ``fbht_temperature: true``; the name check keeps older YAML
-    files compatible.
+    FBH55/FBH55ESB has no temperature channel. FBHT55/FBHT55ESB does.
+    The model name is authoritative because older EEDTOY YAML could contain
+    fbht_temperature=true for both variants.
     """
     if not isinstance(device, dict):
         return False
+
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    name_text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            raw.get("name"),
+            device.get("device_family"),
+            raw.get("device_family"),
+        )
+    ).upper()
+
+    if "FBHT" in name_text:
+        return True
+    if "FBH55" in name_text or "FBH55ESB" in name_text:
+        return False
+
     explicit = device.get("fbht_temperature")
     if explicit is None:
         explicit = raw.get("fbht_temperature")
@@ -161,12 +177,7 @@ def _is_fbht_device(device: dict[str, Any]) -> bool:
         explicit = explicit.strip().lower() in {"1", "true", "yes", "on", "ja"}
     if explicit is not None:
         return bool(explicit)
-    name_text = " ".join(
-        str(value or "")
-        for value in (device.get("name"), raw.get("name"))
-    ).upper()
-    return "FBHT" in name_text
-
+    return False
 
 
 def _is_fsm60b_mode4(device: dict[str, Any]) -> bool:
