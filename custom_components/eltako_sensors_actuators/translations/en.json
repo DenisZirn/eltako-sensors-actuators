@@ -259,6 +259,11 @@
       "send_teach_in": {
         "name": "Send teach-in telegram"
       }
+    },
+    "fan": {
+      "f2l14": {
+        "name": "Fan"
+      }
     }
   }
 }
