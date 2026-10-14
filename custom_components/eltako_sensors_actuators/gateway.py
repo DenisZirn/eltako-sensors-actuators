@@ -1728,8 +1728,11 @@ class EltakoGateway:
             )
         )
         inter_message_delay = (
-            0.02 if is_frgbw14 and len(messages) > 1
-            else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
+            0.25 if command == "f2l14_set_stage" and len(messages) > 1
+            else (
+                0.02 if is_frgbw14 and len(messages) > 1
+                else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
+            )
         )
         _LOGGER.info(
             "ELTAKO send start: command=%s device=%s device_id=%s eep=%s sender_id=%s effective_sender_ids=%s sender_eep=%s gateway=%s port=%s messages=%s payloads=%s role=%s delay=%.3fs",
