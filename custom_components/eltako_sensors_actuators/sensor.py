@@ -131,6 +131,7 @@ _SENSOR_TRANSLATION_KEYS = {
     "brightness": "brightness",
     "movement_detection_mode": "movement_detection",
     "battery_voltage": "battery_voltage",
+    "voltage": "voltage",
     "target_temperature": "target_temperature",
     "hvac_mode": "operating_mode",
     "humidity": "humidity",
