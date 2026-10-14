@@ -151,6 +151,9 @@
       },
       "rocker_right_bottom": {
         "name": "Taste unten rechts"
+      },
+      "input": {
+        "name": "Eingang E{input}"
       }
     },
     "sensor": {
@@ -253,6 +256,9 @@
           "gekippt": "Gekippt",
           "offen": "Offen"
         }
+      },
+      "voltage": {
+        "name": "Spannung"
       }
     },
     "button": {
