@@ -2338,6 +2338,25 @@ def _series14_pct_offset_from_device(device: dict[str, Any]) -> int | None:
 def _fam_usb_effective_sender_id_for_device(device: dict[str, Any], sender_id: str, gateway_base_id: str | None) -> str:
     """FAM-USB sender mapping for Series-14 and wireless actors.
 
+    F2L14 exports its already resolved FAM-USB radio address as stage_1_id.
+    For a base id such as FF-BF-5C-80 and PCT14 address 0x3C this is
+    FF-BF-5C-BC. Reusing only the low byte from 00-00-B0-3C would incorrectly
+    produce FF-BF-5C-3C, so prefer the explicit stage_1_id for this device.
+    """
+    if _is_f2l14_device(device):
+        stage_1_id = str(
+            device.get("stage_1_id")
+            or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("stage_1_id")
+            or ""
+        ).strip()
+        if stage_1_id:
+            try:
+                return format_address(parse_address(stage_1_id))
+            except Exception:
+                pass
+
+    """FAM-USB sender mapping for Series-14 and wireless actors.
+
     The YAML sender.id is the authoritative HA/controller sender.  Earlier
     builds preferred a PCT/device address parsed from comments or names.  That
     can produce a wrong RF sender for multi-channel cover actors, e.g. an
