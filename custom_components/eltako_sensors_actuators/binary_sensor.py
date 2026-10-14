@@ -244,13 +244,18 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             # Custom state labels override Home Assistant's generic presence
             # wording (Zuhause/Abwesend) for this proximity detector.
             fnsn_entity._attr_translation_key = "fnsn_detection"
+            if hasattr(fnsn_entity, "_attr_name"):
+                del fnsn_entity._attr_name
             entities.append(fnsn_entity)
         elif platform == "binary_sensor":
-            device_class = _device_class_from_yaml(device.get("device_class")) or _device_class_for_eep(eep)
-            key = "open" if device_class in (BinarySensorDeviceClass.DOOR, BinarySensorDeviceClass.WINDOW, BinarySensorDeviceClass.OPENING) else "pressed"
-            entities.append(EltakoYamlBinarySensor(gateway, device, key, device_class))
-            if eep in ("F6-02-01",):
+            if eep == "F6-02-01":
+                # RPS wall rockers expose the four real physical positions.
+                # Do not create an additional unsuffixed generic binary entity.
                 entities.extend(_rocker_position_entities(gateway, device))
+            else:
+                device_class = _device_class_from_yaml(device.get("device_class")) or _device_class_for_eep(eep)
+                key = "open" if device_class in (BinarySensorDeviceClass.DOOR, BinarySensorDeviceClass.WINDOW, BinarySensorDeviceClass.OPENING) else "pressed"
+                entities.append(EltakoYamlBinarySensor(gateway, device, key, device_class))
         elif platform == "sensor" and eep == "A5-13-01":
             entities.append(EltakoYamlBinarySensor(gateway, device, "rain", BinarySensorDeviceClass.MOISTURE, suffix="Regen"))
         elif eep == "A5-20-01":
@@ -285,7 +290,7 @@ def _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices: list[dict
         return
 
     for device in devices or []:
-        if not isinstance(device, dict) or not _is_wall_rocker_device(device):
+        if not isinstance(device, dict):
             continue
         if normalize_eep(device.get("eep")) != "F6-02-01":
             continue
@@ -754,6 +759,9 @@ class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
 
     def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
         super().__init__(gateway, device, suffix=label)
+        self._attr_translation_key = f"rocker_{position}"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
         self.position = position
         self._state = False
         self._reset_handle = None
