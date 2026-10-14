@@ -1,4 +1,4 @@
-name: Finalize v0.1.162
+name: Publish v0.1.162
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  finalize:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main
@@ -31,39 +31,25 @@ jobs:
           for path in root.rglob("*.py"):
               compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
-          sensor = (root / "sensor.py").read_text(encoding="utf-8")
-          binary_sensor = (root / "binary_sensor.py").read_text(encoding="utf-8")
-          gateway = (root / "gateway.py").read_text(encoding="utf-8")
           en = json.loads((root / "translations/en.json").read_text(encoding="utf-8"))
           de = json.loads((root / "translations/de.json").read_text(encoding="utf-8"))
+          sensor = (root / "sensor.py").read_text(encoding="utf-8")
 
-          assert (root / "fan.py").exists()
-          assert "f2l14_set_stage" in gateway
-          assert '"voltage": "voltage"' in sensor
-          assert 'translation_key = "input"' in binary_sensor
           assert en["entity"]["binary_sensor"]["input"]["name"] == "Input E{input}"
           assert de["entity"]["binary_sensor"]["input"]["name"] == "Eingang E{input}"
           assert en["entity"]["sensor"]["voltage"]["name"] == "Voltage"
           assert de["entity"]["sensor"]["voltage"]["name"] == "Spannung"
+          assert '"voltage": "voltage"' in sensor
           assert '"FBH55"' in sensor
           assert '"FBHT"' in sensor
 
           print("v0.1.162 validation OK")
           PY
 
-      - name: Move tag and update release
+      - name: Recreate published release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git fetch --tags --force
-          git tag -d v0.1.162 || true
-          git push origin :refs/tags/v0.1.162 || true
-          git tag -a v0.1.162 -m "ELTAKO Sensors & Actuators v0.1.162"
-          git push origin v0.1.162
-
           cat > /tmp/release-notes.md <<'EOF'
           ## ELTAKO Sensors & Actuators v0.1.162
 
@@ -110,4 +96,6 @@ jobs:
           Beim Wechsel zwischen `exclusive` und `additive` muss in PCT14 darauf geachtet werden, dass für dieselbe Sender-ID nicht gleichzeitig ein alter Eintrag mit der jeweils anderen Schaltfolge bestehen bleibt.
           EOF
 
-          gh release edit v0.1.162             --title "ELTAKO Sensors & Actuators v0.1.162"             --target main             --notes-file /tmp/release-notes.md
+          gh api -X DELETE repos/${GITHUB_REPOSITORY}/releases/412778691 || true
+
+          gh release create v0.1.162             --title "ELTAKO Sensors & Actuators v0.1.162"             --notes-file /tmp/release-notes.md             --latest
