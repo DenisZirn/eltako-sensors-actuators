@@ -590,6 +590,10 @@ def _extract_devices(gateway: dict[str, Any]) -> list[dict[str, Any]]:
                 "summer_mode": item.get("summer_mode"),
                 "controller_group": _clean_string(item.get("controller_group")),
                 "allow_shared_sender": item.get("allow_shared_sender"),
+                "stage_1_id": _clean_string(item.get("stage_1_id")),
+                "stage_2_id": _clean_string(item.get("stage_2_id")),
+                "speed_count": item.get("speed_count"),
+                "f2l14_mode": _clean_string(item.get("f2l14_mode")),
                 "gateway": gateway_info,
                 "raw": _json_safe(item),
             }
