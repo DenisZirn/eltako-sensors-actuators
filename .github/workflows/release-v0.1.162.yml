@@ -1,62 +1,66 @@
-name: Release v0.1.162
+name: Finalize v0.1.162
 
 on:
   push:
     paths:
       - .github/workflows/release-v0.1.162.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .github/release-trigger-v0.1.162.txt
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  finalize:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Validate release version and syntax
+      - name: Validate v0.1.162
         run: |
           python - <<'PY'
           from pathlib import Path
           import json
 
-          root = Path('custom_components/eltako_sensors_actuators')
-          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
-          assert manifest['version'] == '0.1.162'
+          root = Path("custom_components/eltako_sensors_actuators")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest["version"] == "0.1.162"
 
-          for path in root.rglob('*.py'):
-              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          for path in root.rglob("*.py"):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
-          assert (root / 'fan.py').exists()
+          sensor = (root / "sensor.py").read_text(encoding="utf-8")
+          binary_sensor = (root / "binary_sensor.py").read_text(encoding="utf-8")
+          gateway = (root / "gateway.py").read_text(encoding="utf-8")
+          en = json.loads((root / "translations/en.json").read_text(encoding="utf-8"))
+          de = json.loads((root / "translations/de.json").read_text(encoding="utf-8"))
 
-          gateway = (root / 'gateway.py').read_text(encoding='utf-8')
-          fan = (root / 'fan.py').read_text(encoding='utf-8')
-          yaml_config = (root / 'yaml_config.py').read_text(encoding='utf-8')
+          assert (root / "fan.py").exists()
+          assert "f2l14_set_stage" in gateway
+          assert '"voltage": "voltage"' in sensor
+          assert 'translation_key = "input"' in binary_sensor
+          assert en["entity"]["binary_sensor"]["input"]["name"] == "Input E{input}"
+          assert de["entity"]["binary_sensor"]["input"]["name"] == "Eingang E{input}"
+          assert en["entity"]["sensor"]["voltage"]["name"] == "Voltage"
+          assert de["entity"]["sensor"]["voltage"]["name"] == "Spannung"
+          assert '"FBH55"' in sensor
+          assert '"FBHT"' in sensor
 
-          assert 'F2L14' in fan
-          assert 'f2l14_set_stage' in gateway
-          assert 'stage_1_id' in yaml_config
-          assert 'stage_2_id' in yaml_config
-          assert 'f2l14_mode' in yaml_config
-
-          print('Release validation OK')
+          print("v0.1.162 validation OK")
           PY
 
-      - name: Create tag and GitHub release
+      - name: Move tag and update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch --tags --force
+          git tag -d v0.1.162 || true
+          git push origin :refs/tags/v0.1.162 || true
           git tag -a v0.1.162 -m "ELTAKO Sensors & Actuators v0.1.162"
           git push origin v0.1.162
 
@@ -68,7 +72,7 @@ jobs:
           - F2L14 als Home-Assistant-`fan`-Entity integriert.
           - Zwei Lüfterstufen werden als 50 % / 100 % abgebildet; 0 % entspricht Aus.
           - Unterstützung für die PCT14-Schaltfolgen `exclusive` und `additive`.
-          - Native F6-02-01-Tastertelegramme für die Stufensteuerung:
+          - Native F6-02-01-Tastertelegramme:
             - `0x30` = Stufe 1
             - `0x70` = Stufe 2
             - untere Taste = Aus
@@ -77,7 +81,7 @@ jobs:
           - Unterstützung für FAM-USB und FGW14-USB/FAM14.
           - FAM-USB-Sender-ID-Mapping für bereits aufgelöste F2L14-Adressen korrigiert.
           - Telegramm-Timing für zuverlässige Stufenwechsel stabilisiert.
-          - Steuerung praktisch mit realem F2L14 und PCT14 getestet.
+          - Praktisch mit realem F2L14 und PCT14 getestet.
 
           ### Deutsche / englische Oberfläche
 
@@ -85,17 +89,25 @@ jobs:
           - FNSN55EB/FNS65EB: `Näherung` / `Proximity` inklusive übersetzter Zustände.
           - F6-02-01-Taster: Tastenpositionen und Diagnosewerte deutsch/englisch.
           - Redundante generische F6-02-01-`Unknown`-Entity entfernt.
+          - F4USM61B Modus 1: Eingänge werden korrekt als `Input E1` bis `Input E4` bzw. `Eingang E1` bis `Eingang E4` angezeigt.
+          - Spannungs-Sensoren verwenden `Voltage` / `Spannung`.
           - EnOcean-ID, Letztes Telegramm und weitere sichtbare Entity-Namen lokalisiert.
+
+          ### FBH55 / FBHT55
+
+          - FBH55/FBH55ESB erzeugt keine Temperatur-Entity mehr, da diese Variante keine Temperatur überträgt.
+          - FBHT55/FBHT55ESB behält die Temperatur-Entity.
+          - Bewegung, Helligkeit und Spannung bleiben unverändert erhalten.
 
           ### Kompatibilität
 
           - Bestehende Unique-IDs und Entity-IDs bleiben erhalten.
           - Bestehende EnOcean- und Series-14-Gerätepfade bleiben erhalten.
-          - Python-Syntax und Release-Manifest werden vor dem Release automatisch validiert.
+          - Python-Syntax und Release-Manifest wurden vor Veröffentlichung validiert.
 
           ### Hinweis zum F2L14
 
           Beim Wechsel zwischen `exclusive` und `additive` muss in PCT14 darauf geachtet werden, dass für dieselbe Sender-ID nicht gleichzeitig ein alter Eintrag mit der jeweils anderen Schaltfolge bestehen bleibt.
           EOF
 
-          gh release create v0.1.162             --title "ELTAKO Sensors & Actuators v0.1.162"             --notes-file /tmp/release-notes.md
+          gh release edit v0.1.162             --title "ELTAKO Sensors & Actuators v0.1.162"             --target main             --notes-file /tmp/release-notes.md
