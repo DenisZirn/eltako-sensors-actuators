@@ -256,6 +256,9 @@
           "gekippt": "Gekippt",
           "offen": "Offen"
         }
+      },
+      "voltage": {
+        "name": "Spannung"
       }
     },
     "button": {
