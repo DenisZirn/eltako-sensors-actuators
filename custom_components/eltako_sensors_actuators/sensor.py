@@ -954,8 +954,11 @@ def _a5_08_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     if _is_f4usm61b_device(device) and _f4usm61b_mode(device) in {3, 6}:
         # F4USM61B modes 3/6 carry the battery/supply voltage in the normal
         # A5-08-01 data telegram. Keep the existing unique ID (..._spannung)
-        # so current HA entities/history are preserved; only correct the
-        # displayed entity name to "Batteriespannung".
+        # so current HA entities/history are preserved, but let Home Assistant
+        # translate the visible label.
+        voltage_sensor._attr_translation_key = "battery_voltage"
+        if hasattr(voltage_sensor, "_attr_name"):
+            del voltage_sensor._attr_name
 
     entities: list[SensorEntity] = [
         EltakoYamlValueSensor(gateway, device, "brightness", "Helligkeit", SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement"),
