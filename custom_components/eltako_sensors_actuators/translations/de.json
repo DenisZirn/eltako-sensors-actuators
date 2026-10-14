@@ -259,6 +259,11 @@
       "send_teach_in": {
         "name": "Lerntelegramm senden"
       }
+    },
+    "fan": {
+      "f2l14": {
+        "name": "Lüfter"
+      }
     }
   }
 }
