@@ -2355,18 +2355,9 @@ def _fam_usb_effective_sender_id_for_device(device: dict[str, Any], sender_id: s
             except Exception:
                 pass
 
-    """FAM-USB sender mapping for Series-14 and wireless actors.
-
-    The YAML sender.id is the authoritative HA/controller sender.  Earlier
-    builds preferred a PCT/device address parsed from comments or names.  That
-    can produce a wrong RF sender for multi-channel cover actors, e.g. an
-    FSB entry named 00-00-00-0B being transmitted as FF-A6-07-4D.
-
-    For FAM-USB the EnOcean TCM can only send from its own base-id range, so
-    we keep the low byte of sender.id and replace only the prefix with the
-    FAM-USB base-id.  Only if sender.id is absent/invalid do we fall back to
-    a PCT address parsed from the device metadata.
-    """
+    # Generic fallback for the remaining Series-14/wireless actors:
+    # sender.id is authoritative; for FAM-USB only its low byte is retained
+    # and mapped into the gateway base-id range.
     if not gateway_base_id:
         return _fam_usb_effective_sender_id(sender_id, gateway_base_id)
     try:
