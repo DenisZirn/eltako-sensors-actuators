@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - test/v0.1.162-i18n
+  pull_request:
+    branches:
+      - test/v0.1.162-i18n
 
 jobs:
   package:
