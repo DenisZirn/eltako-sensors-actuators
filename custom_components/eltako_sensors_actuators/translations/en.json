@@ -151,6 +151,9 @@
       },
       "rocker_right_bottom": {
         "name": "Bottom right"
+      },
+      "input": {
+        "name": "Input E{input}"
       }
     },
     "sensor": {
