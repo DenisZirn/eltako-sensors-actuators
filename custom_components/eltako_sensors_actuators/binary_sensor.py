@@ -41,34 +41,74 @@ _BINARY_SENSOR_SUFFIX_TRANSLATION_KEYS = {
 }
 
 
+def _device_identity_values(device: dict[str, Any]) -> tuple[str, ...]:
+    """Return technical EEDTOY identity values, excluding the display name."""
+    if not isinstance(device, dict):
+        return ()
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    values = (
+        device.get("profile_key"),
+        device.get("device_type"),
+        device.get("model"),
+        device.get("device_family"),
+        device.get("eltako"),
+        raw.get("profile_key"),
+        raw.get("device_type"),
+        raw.get("model"),
+        raw.get("device_family"),
+        raw.get("eltako"),
+    )
+    return tuple(str(value or "").strip().upper() for value in values if str(value or "").strip())
+
+
+def _legacy_device_name_text(device: dict[str, Any]) -> str:
+    """Return legacy name text used only for old EEDTOY YAML compatibility."""
+    if not isinstance(device, dict):
+        return ""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return " ".join(str(value or "") for value in (device.get("name"), raw.get("name"))).upper()
+
+
 def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     """Return True for F2T55, FT55 and F4T55E wall rockers."""
+    technical = " ".join(_device_identity_values(device))
+    if any(model in technical for model in ("F2T55", "F4T55E", "FT55", "F6-02-01-2CH", "F6-02-01-4CH")):
+        return True
+    # Legacy fallback for old YAML without technical identity metadata.
+    legacy = _legacy_device_name_text(device)
+    return any(model in legacy for model in ("F2T55", "F4T55E", "FT55"))
+
+
+def _rocker_position_count(device: dict[str, Any]) -> int | None:
+    """Return the explicit EEDTOY rocker position count when available."""
     if not isinstance(device, dict):
-        return False
+        return None
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
-    text = " ".join(str(value or "") for value in (device.get("name"), device.get("device_type"), device.get("model"), device.get("device_family"), raw.get("name"), raw.get("device_type"), raw.get("model"), raw.get("device_family"))).upper()
-    return any(model in text for model in ("F2T55", "F4T55E", "FT55"))
+    value = device.get("rocker_positions", raw.get("rocker_positions"))
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = None
+    if count in {2, 4}:
+        return count
+
+    technical = " ".join(_device_identity_values(device))
+    if "F6-02-01-2CH" in technical or "F2T55" in technical:
+        return 2
+    if "F6-02-01-4CH" in technical or "F4T55E" in technical or "FT55" in technical:
+        return 4
+
+    legacy = _legacy_device_name_text(device)
+    if "F2T55" in legacy:
+        return 2
+    if "F4T55E" in legacy or "FT55" in legacy:
+        return 4
+    return None
 
 
 def _is_two_channel_wall_rocker(device: dict[str, Any]) -> bool:
     """Return True for F2T55-family single-rocker, two-signal buttons."""
-    if not isinstance(device, dict):
-        return False
-    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
-    text = " ".join(
-        str(value or "")
-        for value in (
-            device.get("name"),
-            device.get("device_type"),
-            device.get("model"),
-            device.get("device_family"),
-            raw.get("name"),
-            raw.get("device_type"),
-            raw.get("model"),
-            raw.get("device_family"),
-        )
-    ).upper()
-    return "F2T55" in text
+    return _rocker_position_count(device) == 2
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
