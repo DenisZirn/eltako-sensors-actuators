@@ -154,6 +154,27 @@ def _device_family(device: dict[str, Any]) -> str:
     explicit = device.get("device_family") or raw.get("device_family")
     if explicit:
         return str(explicit).strip().upper()
+
+    # New EEDTOY exports carry stable technical identity metadata. Prefer it
+    # over the freely editable display name.
+    technical = " ".join(
+        str(value or "")
+        for value in (
+            device.get("profile_key"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("eltako"),
+            raw.get("profile_key"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("eltako"),
+        )
+    ).upper()
+    for family in ("FTS14EM", "FAE14LPR", "F4USM61B"):
+        if family in technical:
+            return family
+
+    # Legacy fallback for old YAML files without technical metadata.
     text = " ".join(str(value or "") for value in (device.get("name"), raw.get("name"))).upper()
     for family in ("FTS14EM", "FAE14LPR", "F4USM61B"):
         if family in text:
@@ -390,7 +411,16 @@ class EltakoBaseEntity(RestoreEntity):
             device_id = str(self.device_config.get("id") or self.sender_id).upper()
             name = str(self.device_config.get("name") or f"ELTAKO {device_id}")
             eep = self.device_config.get("eep")
-            model = f"EEP {eep}" if eep else "ELTAKO Device"
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            technical_model = (
+                self.device_config.get("device_type")
+                or self.device_config.get("model")
+                or self.device_config.get("device_family")
+                or raw.get("device_type")
+                or raw.get("model")
+                or raw.get("device_family")
+            )
+            model = str(technical_model).strip() if technical_model else (f"EEP {eep}" if eep else "ELTAKO Device")
 
             # FLGTF sends TVOC and temperature/humidity as two EnOcean IDs
             # (A5-09-0C and A5-04-02, usually ID + 1).  In Home Assistant this
@@ -493,7 +523,12 @@ class EltakoYamlEntity(EltakoBaseEntity):
             "gateway": device.get("gateway"),
         }
         for option in (
+            "profile_key",
+            "device_type",
+            "model",
+            "eltako",
             "device_family",
+            "rocker_positions",
             "unique_id",
             "operating_mode",
             "base_id",
