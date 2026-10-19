@@ -86,7 +86,7 @@ binary_sensor:
 
 Bei Geräten mit mehreren Betriebsarten bleiben zusätzlich die erforderlichen Profilparameter wie `operating_mode`, `room_controller_mode` oder `f2l14_mode` relevant. Der Gerätetyp allein ersetzt nicht die Einstellung der Betriebsart.
 
-Für neue EEDTOY-Exporte sollte `device_type` mitgeliefert werden. Alte YAML-Dateien ohne dieses Feld bleiben über die bisherigen Kompatibilitätsregeln importierbar; bei Geräten mit gemeinsamem EEP ist die Zuordnung ohne technische Kennung jedoch nicht in allen Fällen eindeutig.
+Für neue EEDTOY-Exporte sollte `device_type` mitgeliefert werden. 
 
 ## Änderungen in v0.1.163
 
@@ -111,10 +111,6 @@ Für neue EEDTOY-Exporte sollte `device_type` mitgeliefert werden. Alte YAML-Dat
 - **FTS14EM:** ein gemeinsamer Diagnose-Zeitstempel für die Eingänge des physischen Moduls.
 - Veraltete Taster-Hilfsentitäten `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden entfernt; `Letztes Telegramm` bleibt als Diagnose-Entity erhalten.
 
-### Prüfung und Kompatibilität
-
-- Python-Dateien, JSON-Konfigurationen und die statischen Geräte-/Modus-Zuordnungspfade wurden über GitHub Actions geprüft.
-- Bestehende Sensor-, Aktor- und Betriebsartenfunktionen bleiben vorgesehen; nicht sämtliche Geräte- und Moduskombinationen wurden mit realer Hardware Ende-zu-Ende getestet.
 
 ## Änderungen in v0.1.162
 
