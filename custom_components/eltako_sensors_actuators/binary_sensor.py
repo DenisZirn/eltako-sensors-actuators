@@ -1,80 +1,3 @@
-class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
-    """Binary sensor for one physical position of an ELTAKO rocker button."""
-
-    def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
-        super().__init__(gateway, device, suffix=label)
-        self._attr_translation_key = f"rocker_{position}"
-        if hasattr(self, "_attr_name"):
-            del self._attr_name
-        self.position = position
-        self._state = False
-        self._attr_device_class = None
-        self._attr_icon = "mdi:gesture-tap-button"
-        self._remove_listener = gateway.register_listener(self._handle_telegram)
-
-    @property
-    def is_on(self):
-        return self._state
-
-    def _handle_telegram(self, telegram) -> None:
-        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
-            return
-
-        position = telegram.decoded.get("button_position")
-        pressed = bool(telegram.decoded.get("pressed", False))
-        if not position:
-            return
-
-        if position == "released" or not pressed:
-            if self._state:
-                self._state = False
-                self.schedule_update_ha_state()
-            return
-
-        new_state = position == self.position
-        if new_state == self._state:
-            return
-        self._state = new_state
-        self.schedule_update_ha_state()
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._remove_listener:
-            self._remove_listener()
-
-
-class EltakoRockerAnyPressedBinarySensor(EltakoYamlEntity, BinarySensorEntity):
-    """Aggregate rocker state: on while any position is physically held."""
-
-    def __init__(self, gateway, device: dict[str, Any]) -> None:
-        super().__init__(gateway, device, suffix="Taster gedrückt")
-        self._attr_translation_key = "rocker_pressed"
-        if hasattr(self, "_attr_name"):
-            del self._attr_name
-        self._state = False
-        self._attr_device_class = None
-        self._attr_icon = "mdi:gesture-tap-hold"
-        self._remove_listener = gateway.register_listener(self._handle_telegram)
-
-    @property
-    def is_on(self):
-        return self._state
-
-    def _handle_telegram(self, telegram) -> None:
-        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
-            return
-
-        if "pressed" not in telegram.decoded:
-            return
-
-        new_state = bool(telegram.decoded.get("pressed", False))
-        if new_state == self._state:
-            return
-        self._state = new_state
-        self.schedule_update_ha_state()
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._remove_listener:
-            self._remove_listener()
 from __future__ import annotations
 
 import asyncio
@@ -437,6 +360,7 @@ ROCKER_POSITION_LABELS = {
     "left_bottom": "Taste unten links",
     "right_bottom": "Taste unten rechts",
 }
+
 
 def _f4usm61b_channel_number(device: dict[str, Any]) -> int | None:
     """Return the EEDTOY channel number for a F4USM61B YAML row."""
@@ -830,7 +754,7 @@ class EltakoF4USM61BInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
 
 
 class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
-    """Momentary binary sensor for one physical position of an ELTAKO rocker button."""
+    """Binary sensor for one physical position of an ELTAKO rocker button."""
 
     def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
         super().__init__(gateway, device, suffix=label)
@@ -839,7 +763,6 @@ class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
             del self._attr_name
         self.position = position
         self._state = False
-        self._reset_handle = None
         self._attr_device_class = None
         self._attr_icon = "mdi:gesture-tap-button"
         self._remove_listener = gateway.register_listener(self._handle_telegram)
@@ -853,39 +776,56 @@ class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
             return
 
         position = telegram.decoded.get("button_position")
+        pressed = bool(telegram.decoded.get("pressed", False))
         if not position:
             return
 
-        if position == self.position and bool(telegram.decoded.get("pressed", False)):
-            self._state = True
-            self.schedule_update_ha_state()
-            self._schedule_reset()
-            return
-
-        # A different button on the same rocker was pressed. Clear this one
-        # immediately so the visual state is unambiguous.
-        if position in ROCKER_POSITION_LABELS and self._state:
-            self._cancel_reset()
-            self._state = False
-            self.schedule_update_ha_state()
-
-    def _schedule_reset(self) -> None:
-        self._cancel_reset()
-
-        def _reset(_now) -> None:
-            self._reset_handle = None
+        if position == "released" or not pressed:
             if self._state:
                 self._state = False
                 self.schedule_update_ha_state()
+            return
 
-        self._reset_handle = async_call_later(self.hass, ROCKER_ACTIVE_TIME_SECONDS, _reset)
-
-    def _cancel_reset(self) -> None:
-        if self._reset_handle is not None:
-            self._reset_handle()
-            self._reset_handle = None
+        new_state = position == self.position
+        if new_state == self._state:
+            return
+        self._state = new_state
+        self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        self._cancel_reset()
+        if self._remove_listener:
+            self._remove_listener()
+
+
+class EltakoRockerAnyPressedBinarySensor(EltakoYamlEntity, BinarySensorEntity):
+    """Aggregate rocker state: on while any physical rocker position is held."""
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(gateway, device, suffix="Taster gedrückt")
+        self._attr_translation_key = "rocker_pressed"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
+        self._state = False
+        self._attr_device_class = None
+        self._attr_icon = "mdi:gesture-tap-hold"
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    @property
+    def is_on(self):
+        return self._state
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+        if "pressed" not in telegram.decoded:
+            return
+
+        new_state = bool(telegram.decoded.get("pressed", False))
+        if new_state == self._state:
+            return
+        self._state = new_state
+        self.schedule_update_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
