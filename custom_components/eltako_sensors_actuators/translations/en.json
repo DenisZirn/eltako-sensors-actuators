@@ -154,6 +154,9 @@
       },
       "input": {
         "name": "Input E{input}"
+      },
+      "rocker_pressed": {
+        "name": "Button pressed"
       }
     },
     "sensor": {
