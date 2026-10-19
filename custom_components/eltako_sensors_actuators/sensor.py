@@ -368,6 +368,12 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     for group_devices in flgtf_groups.values():
         entities.append(EltakoFlgtfLastSeenSensor(gateway, group_devices))
 
+    # Every imported device must have "Letztes Telegramm" in its Diagnose
+    # section. Specialized sensors above keep their established unique_ids;
+    # only create a missing timestamp entity. FLGTF and FTS14EM are physical
+    # multi-sender devices, so they receive one shared timestamp per device.
+    _ensure_last_telegram_diagnostics(gateway, devices, entities)
+
     if not devices and not entities:
         entities.extend(
             [
@@ -396,6 +402,66 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     )
     async_add_entities(entities)
 
+
+
+
+def _fts14em_physical_key(device: dict[str, Any]) -> str:
+    """Group the FTS14EM YAML inputs using the same physical identity as DeviceInfo."""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return str(
+        device.get("base_id")
+        or raw.get("base_id")
+        or device.get("id_range")
+        or raw.get("id_range")
+        or device.get("id")
+        or ""
+    ).strip().upper()
+
+
+def _ensure_last_telegram_diagnostics(
+    gateway,
+    devices: list[dict[str, Any]],
+    entities: list[SensorEntity],
+) -> None:
+    """Expose exactly one timestamp for each ordinary YAML entry.
+
+    Never duplicate an existing device-specific last-seen implementation.
+    FLGTF already has a shared two-ID sensor. FTS14EM has one physical
+    module with multiple input IDs, so its timestamp is also shared.
+    """
+    existing_ids = {
+        str(getattr(entity, "_attr_unique_id", "")).lower()
+        for entity in entities
+        if getattr(entity, "_attr_unique_id", None)
+    }
+    fts14em_groups: dict[str, list[dict[str, Any]]] = {}
+
+    for device in devices:
+        if not isinstance(device, dict) or not device.get("id") or not device.get("eep"):
+            continue
+        if _is_flgtf_device(device):
+            continue
+        if _is_fts14em_device(device):
+            group_key = _fts14em_physical_key(device)
+            if group_key:
+                fts14em_groups.setdefault(group_key, []).append(device)
+            continue
+
+        unique_id = _yaml_entity_unique_id(gateway.entry_id, device, "Letztes Telegramm").lower()
+        if unique_id in existing_ids:
+            continue
+        sensor = EltakoYamlValueSensor(
+            gateway, device, "last_seen", "Letztes Telegramm", None, None
+        )
+        entities.append(sensor)
+        existing_ids.add(str(sensor._attr_unique_id).lower())
+
+    for group_key, group_devices in fts14em_groups.items():
+        sensor = EltakoFTS14EMLastSeenSensor(gateway, group_devices, group_key)
+        unique_id = str(sensor._attr_unique_id).lower()
+        if unique_id not in existing_ids:
+            entities.append(sensor)
+            existing_ids.add(unique_id)
 
 
 _FLGTF_ENTITY_SUFFIXES: dict[str, tuple[tuple[str, str], ...]] = {
@@ -677,7 +743,7 @@ def _remove_obsolete_fts14em_rocker_entities(hass, entry, devices: list[dict[str
 
 
 def _remove_obsolete_wall_rocker_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
-    """Remove legacy generic RPS helper sensors from F2T55/FT55/F4T55E."""
+    """Remove old RPS debug helpers, but retain "Letztes Telegramm" in Diagnose."""
     try:
         registry = er.async_get(hass)
     except Exception:
@@ -688,7 +754,6 @@ def _remove_obsolete_wall_rocker_entities(hass, entry, devices: list[dict[str, A
         "Gedrückte Taste",
         "Tastenposition",
         "Signalcode",
-        "Letztes Telegramm",
     )
     suffix_tokens = {
         str(suffix).lower().replace(" ", "_").replace("/", "_")
@@ -2034,6 +2099,32 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
+
+
+class EltakoFTS14EMLastSeenSensor(EltakoYamlValueSensor):
+    """Shared diagnostic timestamp for all input IDs of one FTS14EM."""
+
+    def __init__(
+        self,
+        gateway,
+        devices: list[dict[str, Any]],
+        physical_key: str,
+    ) -> None:
+        super().__init__(gateway, devices[0], "last_seen", "Letztes Telegramm", None, None)
+        self._sender_ids = {
+            str(device.get("id") or "").strip().upper()
+            for device in devices
+            if device.get("id")
+        }
+        self._attr_unique_id = (
+            f"{DOMAIN}_{gateway.entry_id}_fts14em_{slugify(physical_key)}_last_seen"
+        )
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() not in self._sender_ids:
+            return
+        self._value = _format_timestamp_seconds(datetime.now().astimezone())
+        self.schedule_update_ha_state()
 
 
 class EltakoF4USM61BMode8ValueSensor(EltakoYamlValueSensor):
