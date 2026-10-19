@@ -1,14 +1,12 @@
 # Eltako Sensors & Actuators
 
-Home-Assistant-Custom-Integration für untenstehende ELTAKO-Geräte.
+Home-Assistant-Custom-Integration für ausgewählte ELTAKO EnOcean-Sensoren, Taster und Aktoren.
 
 [![Home Assistant öffnen und dieses Repository in HACS anzeigen](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
 
-Home-Assistant-Custom-Integration für die unten aufgeführten ELTAKO-Geräte.
-
 Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
 
-## Freigegebener Gerätekatalog (v0.1.162)
+## Freigegebener Gerätekatalog (v0.1.163)
 
 - F2T55 – Taster 2-Kanal EU
 - FT55, F4T55E – Taster 4-Kanal EU
@@ -61,11 +59,62 @@ Nicht aufgeführte Produktbezeichnungen gehören nicht zum freigegebenen Katalog
 
 [![Home Assistant öffnen und dieses Repository in HACS anzeigen](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
 
-Danach in HACS **Eltako Sensors & Actuators** herunterladen. Bei einem HACS-Update kann Home Assistant einen Neustart verlangen, damit neuer Integrationscode geladen wird. Änderungen an Gateway oder EEDTOY-YAML werden dagegen durch einen Integrations-Reload übernommen.
+Danach in HACS **Eltako Sensors & Actuators** herunterladen. Nach einem Code-Update Home Assistant neu starten, damit der neue Integrationscode geladen wird. Nach Änderungen an Gateway-Einstellungen oder dem EEDTOY-YAML-Import die Integration bei Bedarf manuell neu laden. Der YAML-Import führt nicht automatisch einen Reload aus.
 
 ## Manuelle Installation
 
 Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopieren und Home Assistant neu laden beziehungsweise neu starten.
+
+## Gerätezuordnung aus EEDTOY-YAML
+
+Ab v0.1.163 übernimmt die Integration das technische Feld `device_type` aus EEDTOY. Damit lassen sich unterschiedliche ELTAKO-Geräte unterscheiden, auch wenn sie dasselbe EnOcean-EEP verwenden oder der Benutzer einen beliebigen Anzeigenamen vergibt.
+
+Beispiel (Ausschnitt aus der EEDTOY-Geräteliste):
+
+```yaml
+binary_sensor:
+  - id: "FE-EF-D6-FC"
+    eep: "F6-02-01"
+    name: "Schlafzimmer Licht"
+    device_type: "F2T55"
+```
+
+- `id`: physische bzw. konfigurierte EnOcean-Adresse
+- `eep`: EnOcean-Profil für die Telegrammauswertung
+- `name`: frei wählbarer Anzeigename in Home Assistant
+- `device_type`: stabiler technischer Gerätetyp für die gerätespezifische Zuordnung
+
+Bei Geräten mit mehreren Betriebsarten bleiben zusätzlich die erforderlichen Profilparameter wie `operating_mode`, `room_controller_mode` oder `f2l14_mode` relevant. Der Gerätetyp allein ersetzt nicht die Einstellung der Betriebsart.
+
+Für neue EEDTOY-Exporte sollte `device_type` mitgeliefert werden. Alte YAML-Dateien ohne dieses Feld bleiben über die bisherigen Kompatibilitätsregeln importierbar; bei Geräten mit gemeinsamem EEP ist die Zuordnung ohne technische Kennung jedoch nicht in allen Fällen eindeutig.
+
+## Änderungen in v0.1.163
+
+### Geräteerkennung über `device_type`
+
+- Der YAML-Import übernimmt die technische Gerätekennung getrennt vom frei änderbaren Namen.
+- Geräte mit demselben EEP lassen sich zuverlässiger unterscheiden; insbesondere werden nicht alle `F6-02-01`-Geräte automatisch als Vierfachtaster behandelt.
+- Die bestehenden Betriebsarten- und Kanalparameter bleiben erhalten. Die statischen Zuordnungen für F4USM61B wurden für die Betriebsarten 1–8 überprüft.
+- Ältere YAML-Konfigurationen ohne `device_type` werden weiterhin unterstützt.
+
+### F2T55, FT55 und F4T55E
+
+- **F2T55:** `Taste oben`, `Taste unten` und `Taster gedrückt`.
+- **FT55/F4T55E:** vier einzelne Tastenpositionen und `Taster gedrückt`.
+- Der jeweilige Tastenzustand bleibt während des Drückens auf `Ein` und wird erst beim echten Loslass-Telegramm zurückgesetzt; der bisherige automatische Zeitreset entfällt.
+- Deutsche und englische Entity-Bezeichnungen wurden ergänzt.
+
+### Diagnose „Letztes Telegramm“
+
+- Die Diagnose-Entity `Letztes Telegramm` ist wieder bei Tastern vorhanden und wird für andere importierte Geräte ergänzt, sofern noch kein passender Zeitstempel-Sensor besteht.
+- **FLGTF:** ein gemeinsamer Diagnose-Zeitstempel für die zusammengehörigen Telegrammprofile.
+- **FTS14EM:** ein gemeinsamer Diagnose-Zeitstempel für die Eingänge des physischen Moduls.
+- Veraltete Taster-Hilfsentitäten `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden entfernt; `Letztes Telegramm` bleibt als Diagnose-Entity erhalten.
+
+### Prüfung und Kompatibilität
+
+- Python-Dateien, JSON-Konfigurationen und die statischen Geräte-/Modus-Zuordnungspfade wurden über GitHub Actions geprüft.
+- Bestehende Sensor-, Aktor- und Betriebsartenfunktionen bleiben vorgesehen; nicht sämtliche Geräte- und Moduskombinationen wurden mit realer Hardware Ende-zu-Ende getestet.
 
 ## Änderungen in v0.1.162
 
@@ -150,7 +199,7 @@ Den Ordner `custom_components/eltako_sensors_actuators` nach Home Assistant kopi
 - Zustände von Sensoren, Binärsensoren, Schaltern, Licht, Cover und Klima werden nach einem Home-Assistant-Neustart wiederhergestellt, ohne dabei Schalttelegramme auszulösen.
 - Technische Unique-IDs der YAML-Entitäten wurden stabilisiert. Bestehende Registry-Einträge werden migriert, ohne vorhandene `entity_id` umzubenennen.
 - Temperaturmesswerte werden mit einer leichten EMA-Glättung (`alpha=0.25`) beruhigt. Der unveränderte Rohwert bleibt als Attribut `raw_temperature` erhalten. Solltemperaturen werden nicht geglättet.
-- F4T55E bereinigt: Die vier echten Tasten bleiben erhalten; ältere generische Hilfsentitäten wie `Gedrückte Taste`, `Tastenposition`, `Signalcode` und `Letztes Telegramm` werden entfernt.
+- F4T55E bereinigt: Die vier echten Tasten bleiben erhalten; ältere generische Hilfsentitäten wie `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden entfernt. Der Diagnose-Zeitstempel `Letztes Telegramm`, der in dieser älteren Version ebenfalls entfiel, wurde mit v0.1.163 wiederhergestellt.
 - FKS-B als Klimagerät mit bidirektionalem EEP `A5-20-04` ergänzt.
 - FKS-B Modus 02: Solltemperaturen von 10–30 °C werden im Empfangsfenster des Ventils nach dem praktisch ermittelten MiniSafe2-Telegrammmuster beantwortet.
 - Der FKS-B-Teach-In-Pfad wurde hinsichtlich Nutzdaten, Status und Antwortzeit an den erfolgreichen MiniSafe2-Mitschnitt angeglichen.
@@ -189,7 +238,7 @@ Der FTS14EM wird als 10-Kanal-Eingabemodul unterstützt.
 
 Die Eingänge E1 bis E10 werden als eigene Home-Assistant-Entitäten angelegt.
 
-Technische Zusatzinformationen zu empfangenen Telegrammen werden nicht mehr als separate Geräteentitäten erzeugt. Telegrammdetails stehen ausschließlich über die Funk-/Bus-Diagnose zur Verfügung.
+Die Eingänge E1 bis E10 bleiben eigenständige Binärsensoren. Ab v0.1.163 wird der Zeitstempel `Letztes Telegramm` für das physische FTS14EM gemeinsam im Bereich **Diagnose** angezeigt. Weitergehende Telegrammdetails stehen in der Funk-/Bus-Diagnose zur Verfügung.
 
 ## FSM60B
 
@@ -270,7 +319,7 @@ Seit v0.1.156 verwendet das Frontend die Datei:
 
 `frontend/diagnostics-panel.js`
 
-Technische Telegrammdetails werden bevorzugt in dieser Diagnose dargestellt und nicht als zusätzliche Geräteentitäten angelegt.
+Ausführliche Telegrammdetails werden in der Funk-/Bus-Diagnose dargestellt. Zusätzlich besitzt jedes unterstützte importierte Gerät den Diagnose-Zeitstempel **Letztes Telegramm**, der beim Empfang eines passenden Telegramms aktualisiert wird. Bei zusammengehörigen FLGTF-Profilen sowie beim FTS14EM wird er pro physischem Gerät zusammengefasst.
 
 Seit v0.1.161 werden Zeitstempel in der lokalen Home-Assistant-Zeitzone dargestellt.
 
