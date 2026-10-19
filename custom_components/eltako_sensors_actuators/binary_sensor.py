@@ -1,3 +1,80 @@
+class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
+    """Binary sensor for one physical position of an ELTAKO rocker button."""
+
+    def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
+        super().__init__(gateway, device, suffix=label)
+        self._attr_translation_key = f"rocker_{position}"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
+        self.position = position
+        self._state = False
+        self._attr_device_class = None
+        self._attr_icon = "mdi:gesture-tap-button"
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    @property
+    def is_on(self):
+        return self._state
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        position = telegram.decoded.get("button_position")
+        pressed = bool(telegram.decoded.get("pressed", False))
+        if not position:
+            return
+
+        if position == "released" or not pressed:
+            if self._state:
+                self._state = False
+                self.schedule_update_ha_state()
+            return
+
+        new_state = position == self.position
+        if new_state == self._state:
+            return
+        self._state = new_state
+        self.schedule_update_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener:
+            self._remove_listener()
+
+
+class EltakoRockerAnyPressedBinarySensor(EltakoYamlEntity, BinarySensorEntity):
+    """Aggregate rocker state: on while any position is physically held."""
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(gateway, device, suffix="Taster gedrückt")
+        self._attr_translation_key = "rocker_pressed"
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
+        self._state = False
+        self._attr_device_class = None
+        self._attr_icon = "mdi:gesture-tap-hold"
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    @property
+    def is_on(self):
+        return self._state
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+
+        if "pressed" not in telegram.decoded:
+            return
+
+        new_state = bool(telegram.decoded.get("pressed", False))
+        if new_state == self._state:
+            return
+        self._state = new_state
+        self.schedule_update_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener:
+            self._remove_listener()
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +82,6 @@ import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICES, DOMAIN
@@ -362,9 +438,6 @@ ROCKER_POSITION_LABELS = {
     "right_bottom": "Taste unten rechts",
 }
 
-ROCKER_ACTIVE_TIME_SECONDS = 0.7
-
-
 def _f4usm61b_channel_number(device: dict[str, Any]) -> int | None:
     """Return the EEDTOY channel number for a F4USM61B YAML row."""
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
@@ -397,10 +470,12 @@ def _f4usm61b_input_entities(
 
 
 def _rocker_position_entities(gateway, device: dict[str, Any]) -> list[BinarySensorEntity]:
-    return [
+    entities: list[BinarySensorEntity] = [
         EltakoRockerPositionBinarySensor(gateway, device, position, label)
         for position, label in ROCKER_POSITION_LABELS.items()
     ]
+    entities.append(EltakoRockerAnyPressedBinarySensor(gateway, device))
+    return entities
 
 def _device_class_from_yaml(value: Any) -> BinarySensorDeviceClass | None:
     """Return a Home Assistant binary-sensor device class from YAML.
