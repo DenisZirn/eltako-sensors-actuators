@@ -157,6 +157,12 @@
       },
       "rocker_pressed": {
         "name": "Button pressed"
+      },
+      "rocker_top": {
+        "name": "Top"
+      },
+      "rocker_bottom": {
+        "name": "Bottom"
       }
     },
     "sensor": {
