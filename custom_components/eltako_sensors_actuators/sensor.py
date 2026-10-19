@@ -324,7 +324,9 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 # FTS14EM inputs already have their dedicated E1..En binary
                 # entities in binary_sensor.py. Do not recreate the old generic
                 # rocker helper sensors (button, position, signal code, last seen).
-                if not _is_fts14em_device(device) and not _is_wall_rocker_device(device):
+                raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+                declared_type = str(device.get("device_type") or raw.get("device_type") or "").strip()
+                if not declared_type and not _is_fts14em_device(device) and not _is_wall_rocker_device(device):
                     entities.extend(_rocker_button_entities(gateway, device))
             elif eep == "D5-00-01":
                 entities.extend(_d5_00_01_entities(gateway, device))
