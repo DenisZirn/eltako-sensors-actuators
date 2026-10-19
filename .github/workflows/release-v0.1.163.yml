@@ -1,0 +1,70 @@
+name: Release v0.1.163
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v0.1.163.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Verify release contents
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("custom_components/eltako_sensors_actuators")
+          assert json.loads((root/"manifest.json").read_text())["version"] == "0.1.163"
+          for file in root.rglob("*.py"):
+              compile(file.read_text(encoding="utf-8"), str(file), "exec")
+          for file in root.rglob("*.json"):
+              json.loads(file.read_text(encoding="utf-8"))
+          source=(root/"binary_sensor.py").read_text()
+          assert "def _explicit_device_type" in source
+          assert "class EltakoRockerAnyPressedBinarySensor" in source
+          assert "_rocker_position_entities" in source
+          sensor=(root/"sensor.py").read_text()
+          assert "def _ensure_last_telegram_diagnostics" in sensor
+          PY
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes-v0.1.163.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.163
+          
+          ### EEDTOY-Geräteidentität und Kompatibilität
+          - Der YAML-Import übernimmt `device_type` als technische, vom frei änderbaren Gerätenamen getrennte Gerätekennung.
+          - Gerätespezifische Erkennung priorisiert technische Kennungen; ältere YAML-Exporte ohne `device_type` bleiben über Legacy-Fallbacks kompatibel.
+          - Geräte mit identischem EEP können anhand ihres Gerätetyps unterschieden werden; andere `F6-02-01`-Geräte werden nicht mehr pauschal als Vierfachtaster behandelt.
+          
+          ### F2T55 / FT55 / F4T55E
+          - F2T55: zwei getrennte Tastenpositionen (oben/unten) sowie Gesamtstatus `Taster gedrückt`.
+          - FT55 / F4T55E: vier getrennte Tastenpositionen plus Gesamtstatus.
+          - Gedrückt-Zustände bleiben bis zum echten Loslass-Telegramm erhalten; der frühere Zeitreset wurde entfernt.
+          - Deutsche und englische Übersetzungen ergänzt.
+          
+          ### Diagnose: Letztes Telegramm
+          - `Letztes Telegramm` wird wieder in der Diagnose angezeigt, insbesondere bei den Tastern.
+          - Fehlende Diagnose-Zeitstempel werden bei importierten Geräten ergänzend angelegt, ohne vorhandene Sensoren zu duplizieren.
+          - FLGTF verwendet weiterhin einen gemeinsam zugeordneten Zeitstempel; FTS14EM fasst seine Eingangstelegramme gerätebezogen zusammen.
+          - Redundante Taster-Hilfssensoren `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden bereinigt, nicht jedoch `Letztes Telegramm`.
+          
+          ### Qualitätssicherung
+          - Python-Syntax, JSON-Dateien, Versionsstand, mehrkanalige Gerätetyp-Zuordnung, F4USM61B-Mode-Routing (1–8) und die Diagnose-/Tasterbehandlung wurden mittels GitHub Actions geprüft.
+          - Verschiedene Geräte wurden bereits praktisch getestet. Nicht alle Hardware- und Betriebsarten-Kombinationen konnten als automatisierte End-to-End-Tests geprüft werden.
+          
+          ### Hinweis
+          - Für eine eindeutige Zuordnung sollte die EEDTOY-YAML den stabilen technischen Schlüssel `device_type` enthalten.
+          - Bestehende konfigurierte Sender-IDs und EEPs bleiben unverändert.
+          
+          EOF
+          gh release create v0.1.163 --target main --title "ELTAKO Sensors & Actuators v0.1.163" --notes-file release-notes-v0.1.163.md --latest
