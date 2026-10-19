@@ -50,6 +50,27 @@ def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     return any(model in text for model in ("F2T55", "F4T55E", "FT55"))
 
 
+def _is_two_channel_wall_rocker(device: dict[str, Any]) -> bool:
+    """Return True for F2T55-family single-rocker, two-signal buttons."""
+    if not isinstance(device, dict):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("name"),
+            device.get("device_type"),
+            device.get("model"),
+            device.get("device_family"),
+            raw.get("name"),
+            raw.get("device_type"),
+            raw.get("model"),
+            raw.get("device_family"),
+        )
+    ).upper()
+    return "F2T55" in text
+
+
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     data = {**entry.data, **entry.options}
     gateway = hass.data[DOMAIN][entry.entry_id]
@@ -394,10 +415,28 @@ def _f4usm61b_input_entities(
 
 
 def _rocker_position_entities(gateway, device: dict[str, Any]) -> list[BinarySensorEntity]:
-    entities: list[BinarySensorEntity] = [
-        EltakoRockerPositionBinarySensor(gateway, device, position, label)
-        for position, label in ROCKER_POSITION_LABELS.items()
-    ]
+    if _is_two_channel_wall_rocker(device):
+        entities: list[BinarySensorEntity] = [
+            EltakoRockerPositionBinarySensor(
+                gateway,
+                device,
+                ("left_top", "right_top"),
+                "Taste oben",
+                translation_key="rocker_top",
+            ),
+            EltakoRockerPositionBinarySensor(
+                gateway,
+                device,
+                ("left_bottom", "right_bottom"),
+                "Taste unten",
+                translation_key="rocker_bottom",
+            ),
+        ]
+    else:
+        entities = [
+            EltakoRockerPositionBinarySensor(gateway, device, position, label)
+            for position, label in ROCKER_POSITION_LABELS.items()
+        ]
     entities.append(EltakoRockerAnyPressedBinarySensor(gateway, device))
     return entities
 
@@ -756,12 +795,21 @@ class EltakoF4USM61BInputBinarySensor(EltakoYamlEntity, BinarySensorEntity):
 class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     """Binary sensor for one physical position of an ELTAKO rocker button."""
 
-    def __init__(self, gateway, device: dict[str, Any], position: str, label: str) -> None:
+    def __init__(
+        self,
+        gateway,
+        device: dict[str, Any],
+        position: str | tuple[str, ...],
+        label: str,
+        *,
+        translation_key: str | None = None,
+    ) -> None:
         super().__init__(gateway, device, suffix=label)
-        self._attr_translation_key = f"rocker_{position}"
+        positions = (position,) if isinstance(position, str) else tuple(position)
+        self._positions = frozenset(positions)
+        self._attr_translation_key = translation_key or f"rocker_{positions[0]}"
         if hasattr(self, "_attr_name"):
             del self._attr_name
-        self.position = position
         self._state = False
         self._attr_device_class = None
         self._attr_icon = "mdi:gesture-tap-button"
@@ -786,7 +834,7 @@ class EltakoRockerPositionBinarySensor(EltakoYamlEntity, BinarySensorEntity):
                 self.schedule_update_ha_state()
             return
 
-        new_state = position == self.position
+        new_state = position in self._positions
         if new_state == self._state:
             return
         self._state = new_state
