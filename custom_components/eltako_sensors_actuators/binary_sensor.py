@@ -61,6 +61,14 @@ def _device_identity_values(device: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(value or "").strip().upper() for value in values if str(value or "").strip())
 
 
+def _explicit_device_type(device: dict[str, Any]) -> str:
+    """Stable model identity exported by EEDTOY; never derive from name."""
+    if not isinstance(device, dict):
+        return ""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return str(device.get("device_type") or raw.get("device_type") or "").strip().upper()
+
+
 def _legacy_device_name_text(device: dict[str, Any]) -> str:
     """Return legacy name text used only for old EEDTOY YAML compatibility."""
     if not isinstance(device, dict):
@@ -71,10 +79,14 @@ def _legacy_device_name_text(device: dict[str, Any]) -> str:
 
 def _is_wall_rocker_device(device: dict[str, Any]) -> bool:
     """Return True for F2T55, FT55 and F4T55E wall rockers."""
+    identity = _explicit_device_type(device)
+    models = ("F2T55", "F4T55E", "FT55", "F6-02-01-2CH", "F6-02-01-4CH")
+    if identity:
+        return any(model in identity for model in models)
     technical = " ".join(_device_identity_values(device))
-    if any(model in technical for model in ("F2T55", "F4T55E", "FT55", "F6-02-01-2CH", "F6-02-01-4CH")):
+    if any(model in technical for model in models):
         return True
-    # Legacy fallback for old YAML without technical identity metadata.
+    # Legacy only when EEDTOY supplies no explicit device_type.
     legacy = _legacy_device_name_text(device)
     return any(model in legacy for model in ("F2T55", "F4T55E", "FT55"))
 
@@ -83,6 +95,14 @@ def _rocker_position_count(device: dict[str, Any]) -> int | None:
     """Return the explicit EEDTOY rocker position count when available."""
     if not isinstance(device, dict):
         return None
+    identity = _explicit_device_type(device)
+    if identity:
+        if "F2T55" in identity or "F6-02-01-2CH" in identity:
+            return 2
+        if any(model in identity for model in ("F4T55E", "FT55", "F6-02-01-4CH")):
+            return 4
+        return None
+
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
     value = device.get("rocker_positions", raw.get("rocker_positions"))
     try:
@@ -308,9 +328,9 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 del fnsn_entity._attr_name
             entities.append(fnsn_entity)
         elif platform == "binary_sensor":
-            if eep == "F6-02-01":
-                # RPS wall rockers expose the four real physical positions.
-                # Do not create an additional unsuffixed generic binary entity.
+            if eep == "F6-02-01" and not _explicit_device_type(device):
+                # Legacy YAML without model identity: retain the previous
+                # four-position fallback for generic F6-02-01 rockers.
                 entities.extend(_rocker_position_entities(gateway, device))
             else:
                 device_class = _device_class_from_yaml(device.get("device_class")) or _device_class_for_eep(eep)
@@ -353,6 +373,8 @@ def _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices: list[dict
         if not isinstance(device, dict):
             continue
         if normalize_eep(device.get("eep")) != "F6-02-01":
+            continue
+        if _explicit_device_type(device) and not _is_wall_rocker_device(device):
             continue
         known_unique_ids = {
             f"{DOMAIN}_{entry.entry_id}_{device_key(device)}".lower(),
