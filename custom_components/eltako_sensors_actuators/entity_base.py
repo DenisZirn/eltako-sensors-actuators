@@ -134,11 +134,22 @@ def _bool_option(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _technical_device_type(device: dict[str, Any]) -> str:
+    """Technical EEDTOY model, never inferred from a user-supplied name."""
+    if not isinstance(device, dict):
+        return ""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return str(device.get("device_type") or raw.get("device_type") or "").strip().upper()
+
+
 def _is_f4usm61b_device(device: dict[str, Any]) -> bool:
     """Return True for EEDTOY F4USM61B channel definitions."""
     if not isinstance(device, dict):
         return False
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    technical = _technical_device_type(device)
+    if technical:
+        return "F4USM61B" in technical
     explicit = device.get("device_family") or raw.get("device_family")
     if str(explicit or "").strip().upper() == "F4USM61B":
         return True
@@ -151,6 +162,10 @@ def _device_family(device: dict[str, Any]) -> str:
     if not isinstance(device, dict):
         return ""
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    technical_type = _technical_device_type(device)
+    for family in ("FTS14EM", "FAE14LPR", "F4USM61B"):
+        if family in technical_type:
+            return family
     explicit = device.get("device_family") or raw.get("device_family")
     if explicit:
         return str(explicit).strip().upper()
@@ -229,6 +244,9 @@ def _is_frwb_device(device: dict[str, Any]) -> bool:
     if not isinstance(device, dict) or normalize_eep(device.get("eep")) != "A5-30-03":
         return False
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    technical = _technical_device_type(device)
+    if technical:
+        return "FRWB" in technical
     text = " ".join(
         str(value or "")
         for value in (
