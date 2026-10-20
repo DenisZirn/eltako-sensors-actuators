@@ -28,7 +28,8 @@
         "menu_options": {
           "connection": "Change gateway / serial connection",
           "yaml": "Import or replace EEDTOY YAML",
-          "diagnostics": "Radio / bus diagnostics"
+          "diagnostics": "Radio / bus diagnostics",
+          "fks_sv_room_temperature": "FKS-SV room temperature sensor"
         }
       },
       "connection": {
@@ -74,6 +75,27 @@
         "data": {
           "diagnostics_enabled": "Show diagnostics"
         }
+      },
+      "fks_sv_room_temperature": {
+        "title": "FKS-SV room temperature sensor",
+        "description": "Select the FKS-SV whose room temperature source should be configured. The mapping uses the physical EnOcean ID internally and survives device renaming.",
+        "data": {
+          "fks_sv_device_id": "FKS-SV"
+        }
+      },
+      "fks_sv_room_temperature_source": {
+        "title": "Select temperature source",
+        "description": "Choose whether the internal FKS-SV temperature or an external Home Assistant temperature sensor should be used for control.",
+        "data": {
+          "fks_sv_temperature_source": "Temperature source"
+        }
+      },
+      "fks_sv_room_temperature_entity": {
+        "title": "Select external temperature sensor",
+        "description": "Select a Home Assistant sensor entity that provides temperature. Sensors with device_class temperature and suitable °C/°F sensors are accepted. If the external sensor fails, the integration automatically falls back to the internal FKS-SV temperature.",
+        "data": {
+          "fks_sv_external_temperature_entity": "External temperature sensor"
+        }
       }
     },
     "error": {
@@ -86,7 +108,11 @@
       "yaml_source_required": "Please specify a YAML file path or paste the EEDTOY YAML export into the text field.",
       "yaml_file_required": "Please specify a YAML file path.",
       "sender_id_collision": "At least one FKS-SV sender.id is already assigned to another device or controller. Each independently controlled FKS-SV requires its own free sender ID.",
-      "invalid_yaml_tabs": "The YAML code contains invalid tab characters in the indentation. Use spaces for YAML indentation."
+      "invalid_yaml_tabs": "The YAML code contains invalid tab characters in the indentation. Use spaces for YAML indentation.",
+      "no_fks_sv_devices": "No FKS-SV was found in this gateway configuration.",
+      "missing_fks_sv": "Please select a valid FKS-SV.",
+      "invalid_temperature_source": "Please select a valid temperature source.",
+      "invalid_temperature_entity": "The selected entity is not a suitable temperature sensor. Use a sensor with temperature device class, °C/°F unit, or a valid numeric Celsius value."
     }
   },
   "entity": {
