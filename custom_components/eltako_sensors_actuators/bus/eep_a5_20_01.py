@@ -9,6 +9,7 @@ controller direction and status flags in the valve direction.
 """
 
 from collections.abc import Iterable
+import math
 from typing import Any
 
 from .esp2 import ESP2Message, build_regular_4bs
@@ -32,15 +33,62 @@ def _encode_temp_0_40(value: float | int | None, default: float = 20.0, *, avoid
 
 
 def _encode_inverse_room_temperature(value: float | int | None) -> int:
-    """Encode the RCU actual room temperature for Direction-2 DB2.
+    """Encode actual room temperature for Direction-2 DB2 strictly.
 
-    EEP A5-20-01 defines DB2 inversely: 255..0 represents 0..40 °C.
-    Therefore DB2=0x00 represents 40 °C and must not be used as a sentinel for
-    "use internal sensor". Callers should provide a valid room temperature.
+    DB2=0x00 is the *valid* encoding for 40 °C. Missing/invalid values must
+    therefore raise instead of silently becoming 0x00.
     """
     if value is None:
-        return 0x00
-    return 255 - _encode_temp_0_40(value, default=20.0)
+        raise ValueError("A5-20-01 controller reply requires a room temperature")
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError) as err:
+        raise ValueError("Invalid A5-20-01 room temperature") from err
+    if not math.isfinite(temperature) or not 0.0 <= temperature <= 40.0:
+        raise ValueError(
+            f"A5-20-01 room temperature outside 0..40 °C: {value!r}"
+        )
+    return 255 - _encode_temp_0_40(temperature, default=20.0)
+
+
+def encode_a5_20_01_temperature_setpoint_data(
+    *,
+    target_temperature: float | int | None,
+    room_temperature: float | int | None,
+    summer_mode: bool = False,
+    inverse_setpoint: bool = False,
+) -> bytes:
+    """Return DB3..DB0 for the normal temperature-controller reply."""
+    db3 = _encode_temp_0_40(target_temperature, default=20.0, avoid_ff=True)
+    db2 = _encode_inverse_room_temperature(room_temperature)
+    db1 = SPS_TEMPERATURE
+    if inverse_setpoint:
+        db1 |= 0x02
+    if summer_mode:
+        db1 |= SUMMER_MODE
+    return bytes((db3, db2, db1, DATA_TELEGRAM))
+
+
+def encode_a5_20_01_valve_position_data(
+    *,
+    valve_position: float | int,
+    room_temperature: float | int | None,
+    summer_mode: bool = False,
+    inverse_setpoint: bool = False,
+) -> bytes:
+    """Return DB3..DB0 for a direct valve-position controller reply."""
+    try:
+        valve = int(round(float(valve_position)))
+    except (TypeError, ValueError):
+        valve = 0
+    valve = max(0, min(100, valve))
+    db2 = _encode_inverse_room_temperature(room_temperature)
+    db1 = 0x00
+    if inverse_setpoint:
+        db1 |= 0x02
+    if summer_mode:
+        db1 |= SUMMER_MODE
+    return bytes((valve, db2, db1, DATA_TELEGRAM))
 
 
 def build_a5_20_01_temperature_setpoint(
@@ -53,17 +101,15 @@ def build_a5_20_01_temperature_setpoint(
     status: int = 0x00,
 ) -> ESP2Message:
     """Build the normal controller-to-valve temperature telegram."""
-    db3 = _encode_temp_0_40(target_temperature, default=20.0, avoid_ff=True)
-    db2 = _encode_inverse_room_temperature(room_temperature)
-    db1 = SPS_TEMPERATURE
-    if inverse_setpoint:
-        db1 |= 0x02
-    if summer_mode:
-        db1 |= SUMMER_MODE
-    db0 = DATA_TELEGRAM
+    data = encode_a5_20_01_temperature_setpoint_data(
+        target_temperature=target_temperature,
+        room_temperature=room_temperature,
+        summer_mode=summer_mode,
+        inverse_setpoint=inverse_setpoint,
+    )
     return build_regular_4bs(
         parse_address(sender_id),
-        bytes((db3, db2, db1, db0)),
+        data,
         status=status,
         outgoing=True,
     )
@@ -79,22 +125,15 @@ def build_a5_20_01_valve_position(
     status: int = 0x00,
 ) -> ESP2Message:
     """Build the normal controller-to-valve direct-position telegram."""
-    try:
-        valve = int(round(float(valve_position)))
-    except (TypeError, ValueError):
-        valve = 0
-    valve = max(0, min(100, valve))
-    db3 = valve
-    db2 = _encode_inverse_room_temperature(room_temperature)
-    db1 = 0x00
-    if inverse_setpoint:
-        db1 |= 0x02
-    if summer_mode:
-        db1 |= SUMMER_MODE
-    db0 = DATA_TELEGRAM
+    data = encode_a5_20_01_valve_position_data(
+        valve_position=valve_position,
+        room_temperature=room_temperature,
+        summer_mode=summer_mode,
+        inverse_setpoint=inverse_setpoint,
+    )
     return build_regular_4bs(
         parse_address(sender_id),
-        bytes((db3, db2, db1, db0)),
+        data,
         status=status,
         outgoing=True,
     )
@@ -212,9 +251,8 @@ def decode_a5_20_01_controller_telegram(data: bytes | bytearray | Iterable[int])
         {
             "temperature_control": temperature_mode,
             "summer_mode": bool(db1 & SUMMER_MODE),
-            "room_temperature_command": None
-            if db2 == 0x00
-            else round(((255 - db2) / 255.0) * 40.0, 1),
+            # DB2=0x00 is the valid inverse encoding of 40 °C.
+            "room_temperature_command": round(((255 - db2) / 255.0) * 40.0, 1),
         }
     )
     if temperature_mode:
