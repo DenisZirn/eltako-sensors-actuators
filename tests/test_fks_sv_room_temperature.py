@@ -135,6 +135,27 @@ class TestFksSvIdentityAndPersistence(unittest.TestCase):
             "sensor.schlafzimmer",
         )
 
+    def test_options_mapping_survives_json_roundtrip_and_device_rename(self):
+        options = fks.set_fks_sv_override(
+            {},
+            self.device["id"],
+            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.wohnzimmer",
+        )
+        restored_options = json.loads(json.dumps(options))
+        renamed_device = {**self.device, "name": "Komplett neuer Anzeigename"}
+        source, entity, origin = fks.resolve_fks_sv_temperature_config(
+            renamed_device, restored_options
+        )
+        self.assertEqual(
+            (source, entity, origin),
+            (
+                const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+                "sensor.wohnzimmer",
+                "ui",
+            ),
+        )
+
     def test_yaml_reimport_style_update_does_not_remove_override(self):
         options = fks.set_fks_sv_override(
             {"yaml_config": "old"},
