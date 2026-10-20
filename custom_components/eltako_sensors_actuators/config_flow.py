@@ -24,7 +24,6 @@ from .const import (
     CONF_DEVICES,
     CONF_FKS_SV_DEVICE_ID,
     CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY,
-    CONF_FKS_SV_ROOM_TEMPERATURE_OVERRIDES,
     CONF_FKS_SV_TEMPERATURE_SOURCE,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
@@ -43,7 +42,6 @@ from .const import (
     GATEWAY_TYPE_FAM_USB,
 )
 from .fks_sv_temperature import (
-    fks_sv_overrides,
     is_fks_sv_device,
     normalize_enocean_id,
     resolve_fks_sv_temperature_config,
