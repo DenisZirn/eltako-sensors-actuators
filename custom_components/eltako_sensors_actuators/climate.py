@@ -718,48 +718,50 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._pending_command = True
         self.schedule_update_ha_state()
 
-    def _external_room_temperature(self) -> float | None:
-        entity_id = _device_option(self.device_config, "room_temperature_entity")
-        if entity_id:
-            state = self.gateway.hass.states.get(str(entity_id))
-            if state is not None:
-                try:
-                    temperature = float(state.state)
-                except (TypeError, ValueError):
-                    temperature = None
-                if temperature is not None:
-                    attributes = getattr(state, "attributes", {}) or {}
-                    unit = str(attributes.get("unit_of_measurement") or "").strip().upper()
-                    if unit in {"°F", "F", "FAHRENHEIT"}:
-                        temperature = (temperature - 32.0) * 5.0 / 9.0
-                    elif 40.0 < temperature <= 104.0:
-                        # Compatibility fallback for older/custom sensors that expose a
-                        # Fahrenheit value without a unit attribute.
-                        temperature = (temperature - 32.0) * 5.0 / 9.0
-                    return max(0.0, min(40.0, temperature))
+    def _fks_sv_controller_data(self, room_temperature: float) -> bytes:
+        """Build exactly the DB3..DB0 payload that the gateway will transmit."""
+        hvac = str(self._attr_hvac_mode).lower()
+        if hvac.endswith("off") or hvac == "off":
+            return encode_a5_20_01_valve_position_data(
+                valve_position=0,
+                room_temperature=room_temperature,
+            )
+        return encode_a5_20_01_temperature_setpoint_data(
+            target_temperature=float(self._target_temperature or 20.0),
+            room_temperature=room_temperature,
+            summer_mode=bool(_device_option(self.device_config, "summer_mode", False)),
+        )
 
-        # A5-20-01 Direction-2 DB2 is always the actual room temperature from
-        # the controller, encoded inversely (255..0 => 0..40 °C). DB2=0x00
-        # therefore means 40 °C; it does NOT select the valve's internal sensor.
-        # If no external HA room sensor is configured, echo the temperature just
-        # reported by the FKS-SV so its internal PI controller receives a valid
-        # actual value together with the HA target setpoint.
-        if self._is_fks_sv and self._current_temperature is not None:
-            try:
-                return max(0.0, min(40.0, float(self._current_temperature)))
-            except (TypeError, ValueError):
-                pass
-        return None
+    def _mark_missing_fks_sv_room_temperature(self) -> None:
+        self._last_error = (
+            "Keine gueltige Raumtemperatur verfuegbar; "
+            "Controllerantwort aus Sicherheitsgruenden nicht gesendet"
+        )
+        self._pending_command = True
 
     async def _async_reply_fks_sv_control(self) -> None:
+        room_temperature = self._refresh_fks_sv_temperature_state()
+        if room_temperature is None:
+            # A5-20-01 DB2=0x00 means 40 °C. Never use it as a missing-value
+            # sentinel; skipping this receive-window reply is safer.
+            self._mark_missing_fks_sv_room_temperature()
+            self.schedule_update_ha_state()
+            return
+
+        controller_data = self._fks_sv_controller_data(room_temperature)
         ok = await self.gateway.async_send_fks_sv_control_response(
             self.device_config,
             target_temperature=float(self._target_temperature or 20.0),
-            room_temperature=self._external_room_temperature(),
+            room_temperature=room_temperature,
             hvac_mode=str(self._attr_hvac_mode),
         )
         if ok:
-            self._last_tx = _now_iso()
+            timestamp = _now_iso()
+            self._last_tx = timestamp
+            self._last_controller_response = timestamp
+            self._last_sent_room_temperature = room_temperature
+            self._last_sent_target_temperature = float(self._target_temperature or 20.0)
+            self._last_controller_telegram = controller_data.hex("-").upper()
             self._last_error = None
             self._pending_command = False
             self._successful_replies += 1
@@ -769,20 +771,35 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self.schedule_update_ha_state()
 
     async def _async_reply_fks_sv_teach_in(self, query_data: bytes) -> None:
+        room_temperature = self._refresh_fks_sv_temperature_state()
+        controller_data = (
+            self._fks_sv_controller_data(room_temperature)
+            if room_temperature is not None
+            else None
+        )
         ok = await self.gateway.async_send_fks_sv_teach_in_response(
             self.device_config,
             query_data=query_data,
             target_temperature=float(self._target_temperature or 20.0),
-            room_temperature=self._external_room_temperature(),
+            room_temperature=room_temperature,
             hvac_mode=str(self._attr_hvac_mode),
         )
         if ok:
             timestamp = _now_iso()
             self._last_teach_in = timestamp
             self._last_tx = timestamp
-            self._last_error = None
-            self._pending_command = False
-            self._successful_replies += 1
+            if room_temperature is not None and controller_data is not None:
+                self._last_controller_response = timestamp
+                self._last_sent_room_temperature = room_temperature
+                self._last_sent_target_temperature = float(self._target_temperature or 20.0)
+                self._last_controller_telegram = controller_data.hex("-").upper()
+                self._last_error = None
+                self._pending_command = False
+                self._successful_replies += 1
+            else:
+                # Teach-in succeeded, but gateway intentionally omitted the
+                # follow-up control telegram because no safe DB2 value existed.
+                self._mark_missing_fks_sv_room_temperature()
         else:
             self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
             self._pending_command = True
