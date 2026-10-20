@@ -130,7 +130,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device)
         self._eep = str(device.get("eep") or "").strip().upper()
-        self._is_fks_sv = is_fks_sv_device(device)
+        # Preserve the v0.1.163 A5-20-01 protocol path. The narrower flag is
+        # used only for the new FKS-SV room-temperature UI feature so other
+        # A5-20-01 climate profiles are not changed by this test version.
+        self._is_fks_sv = self._eep == "A5-20-01"
+        self._has_fks_sv_room_temperature_source = is_fks_sv_device(device)
         self._is_fks_hora = self._eep == "A5-20-04" and _futh55ed_mode(device) == "fks_hora"
         # ELTAKO setpoints and feedback are natively Celsius. Keep this explicit
         # on every instance so no legacy YAML temperature_unit value can replace it.
@@ -301,7 +305,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
                 self._last_controller_response = attrs.get("letzte_controllerantwort")
 
-        if self._is_fks_sv:
+        if self._has_fks_sv_room_temperature_source:
             self._remove_temperature_options_listener = async_dispatcher_connect(
                 self.hass,
                 SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
@@ -328,7 +332,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     def _refresh_fks_sv_temperature_state(self) -> float | None:
         """Resolve configured source, fallback and displayed/current temperature."""
-        if not self._is_fks_sv:
+        if not self._has_fks_sv_room_temperature_source:
             return self._current_temperature
 
         source, entity_id, origin = resolve_fks_sv_temperature_config(
@@ -359,7 +363,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._remove_external_temperature_listener()
             self._remove_external_temperature_listener = None
 
-        if not self._is_fks_sv:
+        if not self._has_fks_sv_room_temperature_source:
             return
         source, entity_id, _origin = resolve_fks_sv_temperature_config(
             self.device_config,
@@ -378,7 +382,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self.schedule_update_ha_state()
 
     def _handle_temperature_options_updated(self, entry_id: str) -> None:
-        if entry_id != self.gateway.entry_id or not self._is_fks_sv:
+        if entry_id != self.gateway.entry_id or not self._has_fks_sv_room_temperature_source:
             return
         self._rebind_external_temperature_listener()
         self._refresh_fks_sv_temperature_state()
