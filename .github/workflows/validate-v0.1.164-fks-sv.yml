@@ -1,0 +1,83 @@
+name: Validate v0.1.164 FKS-SV test
+
+on:
+  push:
+    branches:
+      - test/v0.1.164-fks-sv-room-temperature
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compile integration Python
+        run: |
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("custom_components/eltako_sensors_actuators")
+          for path in root.rglob("*.json"):
+              json.loads(path.read_text(encoding="utf-8"))
+              print("OK", path)
+          PY
+
+      - name: Run FKS-SV room-temperature tests
+        run: |
+          python tests/test_fks_sv_room_temperature.py
+
+      - name: Guard scope against v0.1.163
+        run: |
+          python - <<'PY'
+          import subprocess
+          allowed = {
+              ".github/workflows/validate-v0.1.164-fks-sv.yml",
+              "custom_components/eltako_sensors_actuators/__init__.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
+              "custom_components/eltako_sensors_actuators/climate.py",
+              "custom_components/eltako_sensors_actuators/config_flow.py",
+              "custom_components/eltako_sensors_actuators/const.py",
+              "custom_components/eltako_sensors_actuators/fks_sv_temperature.py",
+              "custom_components/eltako_sensors_actuators/gateway.py",
+              "custom_components/eltako_sensors_actuators/manifest.json",
+              "custom_components/eltako_sensors_actuators/strings.json",
+              "custom_components/eltako_sensors_actuators/translations/de.json",
+              "custom_components/eltako_sensors_actuators/translations/en.json",
+              "tests/test_fks_sv_room_temperature.py",
+          }
+          changed = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only", "v0.1.163...HEAD"],
+                  text=True,
+              ).splitlines()
+          )
+          unexpected = changed - allowed
+          if unexpected:
+              raise SystemExit(f"Unexpected files changed vs v0.1.163: {sorted(unexpected)}")
+          required = {
+              "custom_components/eltako_sensors_actuators/climate.py",
+              "custom_components/eltako_sensors_actuators/config_flow.py",
+              "custom_components/eltako_sensors_actuators/fks_sv_temperature.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
+          }
+          missing = required - changed
+          if missing:
+              raise SystemExit(f"Required files are not changed: {sorted(missing)}")
+          print("Changed-file scope OK:", sorted(changed))
+          PY
