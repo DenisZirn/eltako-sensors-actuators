@@ -582,7 +582,9 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            self._current_temperature = decoded.get("temperature")
+            self._internal_temperature = temperature_to_celsius(
+                decoded.get("temperature"), "°C"
+            )
         if "valve_position" in decoded:
             try:
                 self._valve_position = int(decoded.get("valve_position"))
@@ -600,6 +602,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if key in decoded:
                 setattr(self, attr, bool(decoded.get(key)))
 
+        self._refresh_fks_sv_temperature_state()
         self.schedule_update_ha_state()
         # Every genuine valve telegram opens the receive window. The controller
         # must answer every cycle, even when the HA target did not just change.
