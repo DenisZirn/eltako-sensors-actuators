@@ -150,6 +150,8 @@ jobs:
           rm -rf dist
           mkdir -p dist/custom_components
           cp -a custom_components/eltako_sensors_actuators dist/custom_components/
+          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
+          find dist -type f -name '*.pyc' -delete
           cd dist
           zip -qr ../ELTAKO_Sensors_Actuators_v0.1.164-TEST.zip custom_components
 
