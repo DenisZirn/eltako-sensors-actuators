@@ -54,3 +54,15 @@ SERVICE_RELOAD_CONFIG = "reload_config"
 CONF_RELOAD_AFTER_SAVE = "reload_after_save"
 
 CONF_DIAGNOSTICS_ENABLED = "diagnostics_enabled"
+
+# Persistent per-FKS-SV room-temperature source overrides. The top-level map
+# lives in ConfigEntry.options and is keyed by normalized physical EnOcean ID.
+CONF_FKS_SV_ROOM_TEMPERATURE_OVERRIDES = "fks_sv_room_temperature_overrides"
+CONF_FKS_SV_DEVICE_ID = "fks_sv_device_id"
+CONF_FKS_SV_TEMPERATURE_SOURCE = "fks_sv_temperature_source"
+CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY = "fks_sv_external_temperature_entity"
+
+FKS_SV_TEMPERATURE_SOURCE_INTERNAL = "internal"
+FKS_SV_TEMPERATURE_SOURCE_EXTERNAL = "external"
+
+SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED = f"{DOMAIN}_fks_sv_room_temperature_updated"
