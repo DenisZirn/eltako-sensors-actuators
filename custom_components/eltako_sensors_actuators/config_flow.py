@@ -669,9 +669,13 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data=options)
 
-        key = vol.Required(
-            CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY,
-            default=default_entity,
+        key = (
+            vol.Required(
+                CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY,
+                default=default_entity,
+            )
+            if default_entity
+            else vol.Required(CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY)
         )
         return self.async_show_form(
             step_id="fks_sv_room_temperature_entity",
