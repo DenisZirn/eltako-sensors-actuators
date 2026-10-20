@@ -903,5 +903,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         for task in (self._control_reply_task, self._teach_in_reply_task):
             if task is not None and not task.done():
                 task.cancel()
+        if self._remove_external_temperature_listener is not None:
+            self._remove_external_temperature_listener()
+            self._remove_external_temperature_listener = None
+        if self._remove_temperature_options_listener is not None:
+            self._remove_temperature_options_listener()
+            self._remove_temperature_options_listener = None
         if self._remove_listener:
             self._remove_listener()
