@@ -249,40 +249,140 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        if last_state is None:
-            return
-        attrs = last_state.attributes or {}
-        try:
-            restored_target = attrs.get("temperature")
-            if restored_target is not None:
-                value = float(restored_target)
-                if self._attr_min_temp <= value <= self._attr_max_temp:
-                    self._target_temperature = value
-        except (TypeError, ValueError):
-            pass
-        try:
-            restored_current = attrs.get("current_temperature")
-            restored_genuine = bool(attrs.get("genuine_current_temperature", False))
-            if restored_current is not None:
-                if self._is_fhk14 or self._is_fae14lpr:
-                    if restored_genuine:
-                        self._current_temperature = float(restored_current)
-                        self._has_genuine_current_temperature = True
+        if last_state is not None:
+            attrs = last_state.attributes or {}
+            try:
+                restored_target = attrs.get("temperature")
+                if restored_target is not None:
+                    value = float(restored_target)
+                    if self._attr_min_temp <= value <= self._attr_max_temp:
+                        self._target_temperature = value
+            except (TypeError, ValueError):
+                pass
+
+            try:
+                restored_current = attrs.get("current_temperature")
+                restored_genuine = bool(attrs.get("genuine_current_temperature", False))
+                if self._is_fks_sv:
+                    restored_internal = attrs.get("interne_fks_sv_temperatur", restored_current)
+                    self._internal_temperature = temperature_to_celsius(restored_internal, "°C")
+                elif restored_current is not None:
+                    if self._is_fhk14 or self._is_fae14lpr:
+                        if restored_genuine:
+                            self._current_temperature = float(restored_current)
+                            self._has_genuine_current_temperature = True
+                        else:
+                            self._current_temperature = 40.0 if self._is_fhk14 else 0.0
+                            self._has_genuine_current_temperature = False
                     else:
-                        self._current_temperature = 40.0 if self._is_fhk14 else 0.0
-                        self._has_genuine_current_temperature = False
-                else:
-                    self._current_temperature = float(restored_current)
-        except (TypeError, ValueError):
-            pass
-        restored_hvac = str(last_state.state or "").lower()
-        if restored_hvac in {str(HVACMode.HEAT), "heat"}:
-            self._attr_hvac_mode = HVACMode.HEAT
-        elif restored_hvac in {str(HVACMode.OFF), "off"}:
-            self._attr_hvac_mode = HVACMode.OFF
-        restored_preset = attrs.get("preset_mode")
-        if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
-            self._attr_preset_mode = restored_preset
+                        self._current_temperature = float(restored_current)
+            except (TypeError, ValueError):
+                pass
+
+            restored_hvac = str(last_state.state or "").lower()
+            if restored_hvac in {str(HVACMode.HEAT), "heat"}:
+                self._attr_hvac_mode = HVACMode.HEAT
+            elif restored_hvac in {str(HVACMode.OFF), "off"}:
+                self._attr_hvac_mode = HVACMode.OFF
+            restored_preset = attrs.get("preset_mode")
+            if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
+                self._attr_preset_mode = restored_preset
+
+            if self._is_fks_sv:
+                self._last_sent_room_temperature = temperature_to_celsius(
+                    attrs.get("zuletzt_gesendete_isttemperatur"), "°C"
+                )
+                try:
+                    restored_last_target = attrs.get("zuletzt_gesendete_solltemperatur")
+                    if restored_last_target is not None:
+                        self._last_sent_target_temperature = float(restored_last_target)
+                except (TypeError, ValueError):
+                    pass
+                self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
+                self._last_controller_response = attrs.get("letzte_controllerantwort")
+
+        if self._is_fks_sv:
+            self._remove_temperature_options_listener = async_dispatcher_connect(
+                self.hass,
+                SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+                self._handle_temperature_options_updated,
+            )
+            self._rebind_external_temperature_listener()
+            self._refresh_fks_sv_temperature_state()
+
+    def _entry_options(self) -> dict[str, Any]:
+        entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
+        return dict(entry.options) if entry is not None else {}
+
+    def _read_external_temperature(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        attributes = getattr(state, "attributes", {}) or {}
+        return temperature_to_celsius(
+            getattr(state, "state", None),
+            attributes.get("unit_of_measurement"),
+        )
+
+    def _refresh_fks_sv_temperature_state(self) -> float | None:
+        """Resolve configured source, fallback and displayed/current temperature."""
+        if not self._is_fks_sv:
+            return self._current_temperature
+
+        source, entity_id, origin = resolve_fks_sv_temperature_config(
+            self.device_config,
+            self._entry_options(),
+        )
+        external = self._read_external_temperature(entity_id)
+        internal = temperature_to_celsius(self._internal_temperature, "°C")
+        used, status, actual_source = select_fks_sv_room_temperature(
+            source,
+            external,
+            internal,
+        )
+
+        self._configured_temperature_source = source
+        self._temperature_config_origin = origin
+        self._external_temperature_entity = entity_id
+        self._external_temperature = external
+        self._internal_temperature = internal
+        self._used_room_temperature = used
+        self._temperature_source_status = status
+        self._actual_temperature_source = actual_source
+        self._current_temperature = used
+        return used
+
+    def _rebind_external_temperature_listener(self) -> None:
+        if self._remove_external_temperature_listener is not None:
+            self._remove_external_temperature_listener()
+            self._remove_external_temperature_listener = None
+
+        if not self._is_fks_sv:
+            return
+        source, entity_id, _origin = resolve_fks_sv_temperature_config(
+            self.device_config,
+            self._entry_options(),
+        )
+        if source != FKS_SV_TEMPERATURE_SOURCE_EXTERNAL or not entity_id:
+            return
+        self._remove_external_temperature_listener = async_track_state_change_event(
+            self.hass,
+            [entity_id],
+            self._handle_external_temperature_state_event,
+        )
+
+    def _handle_external_temperature_state_event(self, _event) -> None:
+        self._refresh_fks_sv_temperature_state()
+        self.schedule_update_ha_state()
+
+    def _handle_temperature_options_updated(self, entry_id: str) -> None:
+        if entry_id != self.gateway.entry_id or not self._is_fks_sv:
+            return
+        self._rebind_external_temperature_listener()
+        self._refresh_fks_sv_temperature_state()
+        self.schedule_update_ha_state()
 
     @property
     def current_temperature(self):
