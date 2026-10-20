@@ -2776,12 +2776,25 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             if command == "set_hvac_mode":
                 hvac_mode = str(kwargs.get("hvac_mode") or "heat")
                 raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+                current_temperature = kwargs.get("current_temperature")
                 if hvac_mode.endswith("off") or hvac_mode == "off":
-                    return build_a5_20_01_valve_position(sender_id, valve_position=0)
+                    return build_a5_20_01_valve_position(
+                        sender_id,
+                        valve_position=0,
+                        room_temperature=current_temperature,
+                    )
                 target = raw.get("target_temperature") or raw.get("min_target_temperature") or 20
-                return build_a5_20_01_temperature_setpoint(sender_id, target_temperature=target)
+                return build_a5_20_01_temperature_setpoint(
+                    sender_id,
+                    target_temperature=target,
+                    room_temperature=current_temperature,
+                )
             if command == "set_valve_position":
-                return build_a5_20_01_valve_position(sender_id, valve_position=kwargs.get("valve_position", 0))
+                return build_a5_20_01_valve_position(
+                    sender_id,
+                    valve_position=kwargs.get("valve_position", 0),
+                    room_temperature=kwargs.get("current_temperature"),
+                )
 
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
             raise UnsupportedEltakoCommand(f"Climate sender.eep {sender_eep} wird noch nicht unterstuetzt")
