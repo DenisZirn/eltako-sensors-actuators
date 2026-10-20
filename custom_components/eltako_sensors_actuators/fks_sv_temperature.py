@@ -165,7 +165,7 @@ def temperature_to_celsius(value: Any, unit: Any = None) -> float | None:
     they are never clamped because clamping could silently transmit a false
     controller room temperature.
     """
-    text = str(value or "").strip()
+    text = "" if value is None else str(value).strip()
     if not text or text.lower() in {"unknown", "unavailable", "none", "nan"}:
         return None
     try:
