@@ -1535,33 +1535,36 @@ class EltakoGateway:
                 teach_message = build_a5_20_01_teach_in_response(sender_id, query_data, status=status)
                 teach_frame = await self._async_send_esp2_message(teach_message)
 
-                # The valve is still awake after the teach-in response. Send the
-                # actual setpoint in the same receive window so it can start the
-                # reference run and immediately adopt the configured room value.
-                await asyncio.sleep(0.05)
-                if str(hvac_mode).lower().endswith("off") or str(hvac_mode).lower() == "off":
-                    control_message = build_a5_20_01_valve_position(
-                        sender_id,
-                        valve_position=0,
-                        room_temperature=room_temperature,
-                        status=status,
-                    )
-                else:
-                    control_message = build_a5_20_01_temperature_setpoint(
-                        sender_id,
-                        target_temperature=target_temperature,
-                        room_temperature=room_temperature,
-                        summer_mode=bool(_device_raw_option(device, "summer_mode", False)),
-                        status=status,
-                    )
-                control_frame = await self._async_send_esp2_message(control_message)
+                # The teach-in itself must remain possible even if no valid room
+                # temperature is currently available. Never encode missing room
+                # temperature as DB2=0x00 (40 °C). In that case send only the
+                # teach-in response and wait for a later regular receive window.
+                control_frame = None
+                if room_temperature is not None:
+                    await asyncio.sleep(0.05)
+                    if str(hvac_mode).lower().endswith("off") or str(hvac_mode).lower() == "off":
+                        control_message = build_a5_20_01_valve_position(
+                            sender_id,
+                            valve_position=0,
+                            room_temperature=room_temperature,
+                            status=status,
+                        )
+                    else:
+                        control_message = build_a5_20_01_temperature_setpoint(
+                            sender_id,
+                            target_temperature=target_temperature,
+                            room_temperature=room_temperature,
+                            summer_mode=bool(_device_raw_option(device, "summer_mode", False)),
+                            status=status,
+                        )
+                    control_frame = await self._async_send_esp2_message(control_message)
                 self._last_send_error = None
                 _LOGGER.info(
                     "FKS-SV teach-in completed: device_id=%s sender_id=%s teach_frame=%s control_frame=%s",
                     device.get("id"),
                     sender_id,
                     teach_frame.hex("-"),
-                    control_frame.hex("-"),
+                    control_frame.hex("-") if control_frame is not None else "skipped-no-valid-room-temperature",
                 )
                 return True
             except Exception as err:
