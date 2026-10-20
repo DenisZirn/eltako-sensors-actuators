@@ -28,7 +28,8 @@
         "menu_options": {
           "connection": "Gateway / seriellen Anschluss ändern",
           "yaml": "EEDTOY YAML importieren oder ersetzen",
-          "diagnostics": "Funk / Bus Diagnose"
+          "diagnostics": "Funk / Bus Diagnose",
+          "fks_sv_room_temperature": "FKS-SV Raumtemperatursensor"
         }
       },
       "connection": {
@@ -74,6 +75,27 @@
         "data": {
           "diagnostics_enabled": "Diagnose anzeigen"
         }
+      },
+      "fks_sv_room_temperature": {
+        "title": "FKS-SV Raumtemperatursensor",
+        "description": "Wähle den FKS-SV aus, dessen Raumtemperaturquelle konfiguriert werden soll. Die Zuordnung erfolgt intern über die physische EnOcean-ID und bleibt bei einer Umbenennung des Geräts erhalten.",
+        "data": {
+          "fks_sv_device_id": "FKS-SV"
+        }
+      },
+      "fks_sv_room_temperature_source": {
+        "title": "Temperaturquelle auswählen",
+        "description": "Wähle, ob die interne FKS-SV-Temperatur oder ein externer Home-Assistant-Temperatursensor für die Regelung verwendet werden soll.",
+        "data": {
+          "fks_sv_temperature_source": "Temperaturquelle"
+        }
+      },
+      "fks_sv_room_temperature_entity": {
+        "title": "Externen Temperatursensor auswählen",
+        "description": "Wähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Sensoren mit device_class temperature sowie geeignete °C/°F-Sensoren werden akzeptiert. Fällt der externe Sensor aus, verwendet die Integration automatisch die interne FKS-SV-Temperatur.",
+        "data": {
+          "fks_sv_external_temperature_entity": "Externer Temperatursensor"
+        }
       }
     },
     "error": {
@@ -86,7 +108,11 @@
       "yaml_source_required": "Bitte einen YAML-Dateipfad angeben oder den EEDTOY YAML-Export in das Textfeld einfuegen.",
       "yaml_file_required": "Bitte einen YAML-Dateipfad angeben.",
       "sender_id_collision": "Mindestens eine FKS-SV sender.id ist bereits einem anderen Gerät oder Regler zugeordnet. Jeder unabhängig geregelte FKS-SV benötigt eine eigene freie Sender-ID.",
-      "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung."
+      "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung.",
+      "no_fks_sv_devices": "In dieser Gateway-Konfiguration wurde kein FKS-SV gefunden.",
+      "missing_fks_sv": "Bitte einen gültigen FKS-SV auswählen.",
+      "invalid_temperature_source": "Bitte eine gültige Temperaturquelle auswählen.",
+      "invalid_temperature_entity": "Die ausgewählte Entity ist kein geeigneter Temperatursensor. Verwende einen Sensor mit Temperatur-Device-Class, °C/°F-Einheit oder einen gültigen numerischen Celsiuswert."
     }
   },
   "entity": {
