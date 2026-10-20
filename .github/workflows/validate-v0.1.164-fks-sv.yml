@@ -42,6 +42,23 @@ jobs:
         run: |
           python tests/test_fks_sv_room_temperature.py
 
+      - name: Validate Home Assistant 2026.10 API imports
+        run: |
+          python -m pip install --disable-pip-version-check --quiet "homeassistant==2026.10.1" pyserial
+          python - <<'PY'
+          from custom_components.eltako_sensors_actuators import config_flow, climate
+          from custom_components.eltako_sensors_actuators.fks_sv_temperature import (
+              temperature_to_celsius,
+          )
+
+          selector_obj = config_flow._temperature_entity_selector()
+          assert selector_obj is not str
+          assert config_flow.EltakoSensorsActuatorsOptionsFlow is not None
+          assert climate.EltakoClimate is not None
+          assert temperature_to_celsius(68, "°F") == 20.0
+          print("Home Assistant 2026.10.1 imports and selector API OK")
+          PY
+
       - name: Guard sender-ID and sleeping-valve paths against v0.1.163
         run: |
           python - <<'PY'
@@ -127,3 +144,19 @@ jobs:
               raise SystemExit(f"Required files are not changed: {sorted(missing)}")
           print("Changed-file scope OK:", sorted(changed))
           PY
+
+      - name: Build installable v0.1.164 test ZIP
+        run: |
+          rm -rf dist
+          mkdir -p dist/custom_components
+          cp -a custom_components/eltako_sensors_actuators dist/custom_components/
+          cd dist
+          zip -qr ../ELTAKO_Sensors_Actuators_v0.1.164-TEST.zip custom_components
+
+      - name: Upload v0.1.164 test ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_v0.1.164-TEST
+          path: ELTAKO_Sensors_Actuators_v0.1.164-TEST.zip
+          if-no-files-found: error
+          retention-days: 30
