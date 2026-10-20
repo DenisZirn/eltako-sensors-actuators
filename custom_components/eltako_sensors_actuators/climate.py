@@ -462,6 +462,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     "letztes_controllertelegramm": self._last_controller_telegram,
                     "letzte_controllerantwort": self._last_controller_response,
                     "temperaturquellen_status": status_label,
+                    "gemeldete_ventiloeffnung_prozent": self._valve_position,
                     "ventilstellung": self._valve_position,
                     "befehl_ausstehend": self._pending_command,
                     "ventil_blockiert": self._actuator_obstructed,
