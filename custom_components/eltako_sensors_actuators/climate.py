@@ -267,7 +267,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             try:
                 restored_current = attrs.get("current_temperature")
                 restored_genuine = bool(attrs.get("genuine_current_temperature", False))
-                if self._is_fks_sv:
+                if self._has_fks_sv_room_temperature_source:
                     restored_internal = attrs.get("interne_fks_sv_temperatur", restored_current)
                     self._internal_temperature = temperature_to_celsius(restored_internal, "°C")
                 elif restored_current is not None:
@@ -292,7 +292,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
                 self._attr_preset_mode = restored_preset
 
-            if self._is_fks_sv:
+            if self._has_fks_sv_room_temperature_source:
                 self._last_sent_room_temperature = temperature_to_celsius(
                     attrs.get("zuletzt_gesendete_isttemperatur"), "°C"
                 )
@@ -433,6 +433,30 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if self._is_fhk14 or self._is_fae14lpr:
             base["genuine_current_temperature"] = self._has_genuine_current_temperature
         if self._is_fks_sv:
+            base.update(
+                {
+                    "controller_sender_id": self.device_config.get("sender_id"),
+                    "room_temperature_entity": _device_option(
+                        self.device_config, "room_temperature_entity"
+                    ),
+                    "ventilstellung": self._valve_position,
+                    "befehl_ausstehend": self._pending_command,
+                    "ventil_blockiert": self._actuator_obstructed,
+                    "fenster_offen": self._window_open,
+                    "kontakt_offen": self._contact_open,
+                    "batterie_niedrig": self._battery_low,
+                    "temperaturfehler": self._temperature_sensor_failure,
+                    "energiespeicher_geladen": self._energy_storage_charged,
+                    "energiereserve_ausreichend": self._energy_storage_capacity_sufficient,
+                    "letzter_empfang": self._last_rx,
+                    "letzte_antwort": self._last_tx,
+                    "letztes_einlernen": self._last_teach_in,
+                    "letzter_fehler": self._last_error,
+                    "erfolgreiche_antworten": self._successful_replies,
+                    "kommunikationsstatus": "verbunden" if self._last_rx else "Warten auf erstes FKS-SV-Telegramm",
+                }
+            )
+        if self._has_fks_sv_room_temperature_source:
             configured_label = (
                 "Extern"
                 if self._configured_temperature_source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
@@ -587,9 +611,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            self._internal_temperature = temperature_to_celsius(
-                decoded.get("temperature"), "°C"
-            )
+            if self._has_fks_sv_room_temperature_source:
+                self._internal_temperature = temperature_to_celsius(
+                    decoded.get("temperature"), "°C"
+                )
+            else:
+                self._current_temperature = decoded.get("temperature")
         if "valve_position" in decoded:
             try:
                 self._valve_position = int(decoded.get("valve_position"))
@@ -723,6 +750,21 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._pending_command = True
         self.schedule_update_ha_state()
 
+    def _legacy_a5_20_01_room_temperature(self) -> float | None:
+        """Preserve v0.1.163 YAML behavior for non-FKS A5-20-01 profiles."""
+        entity_id = _device_option(self.device_config, "room_temperature_entity")
+        if entity_id:
+            state = self.gateway.hass.states.get(str(entity_id))
+            if state is not None:
+                attributes = getattr(state, "attributes", {}) or {}
+                value = temperature_to_celsius(
+                    getattr(state, "state", None),
+                    attributes.get("unit_of_measurement"),
+                )
+                if value is not None:
+                    return value
+        return temperature_to_celsius(self._current_temperature, "°C")
+
     def _fks_sv_controller_data(self, room_temperature: float) -> bytes:
         """Build exactly the DB3..DB0 payload that the gateway will transmit."""
         hvac = str(self._attr_hvac_mode).lower()
@@ -745,7 +787,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._pending_command = True
 
     async def _async_reply_fks_sv_control(self) -> None:
-        room_temperature = self._refresh_fks_sv_temperature_state()
+        room_temperature = (
+            self._refresh_fks_sv_temperature_state()
+            if self._has_fks_sv_room_temperature_source
+            else self._legacy_a5_20_01_room_temperature()
+        )
         if room_temperature is None:
             # A5-20-01 DB2=0x00 means 40 °C. Never use it as a missing-value
             # sentinel; skipping this receive-window reply is safer.
@@ -776,7 +822,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self.schedule_update_ha_state()
 
     async def _async_reply_fks_sv_teach_in(self, query_data: bytes) -> None:
-        room_temperature = self._refresh_fks_sv_temperature_state()
+        room_temperature = (
+            self._refresh_fks_sv_temperature_state()
+            if self._has_fks_sv_room_temperature_source
+            else self._legacy_a5_20_01_room_temperature()
+        )
         controller_data = (
             self._fks_sv_controller_data(room_temperature)
             if room_temperature is not None
