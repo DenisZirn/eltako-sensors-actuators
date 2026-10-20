@@ -42,6 +42,52 @@ jobs:
         run: |
           python tests/test_fks_sv_room_temperature.py
 
+      - name: Guard sender-ID and sleeping-valve paths against v0.1.163
+        run: |
+          python - <<'PY'
+          import ast
+          import subprocess
+          from pathlib import Path
+
+          def git_file(ref, path):
+              return subprocess.check_output(
+                  ["git", "show", f"{ref}:{path}"], text=True
+              )
+
+          def function_dump(source, name):
+              tree = ast.parse(source)
+              matches = [
+                  node for node in ast.walk(tree)
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.name == name
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected one {name}, found {len(matches)}")
+              return ast.dump(matches[0], include_attributes=False)
+
+          gateway_path = "custom_components/eltako_sensors_actuators/gateway.py"
+          climate_path = "custom_components/eltako_sensors_actuators/climate.py"
+          current_gateway = Path(gateway_path).read_text(encoding="utf-8")
+          old_gateway = git_file("v0.1.163", gateway_path)
+          for name in (
+              "_fks_sv_effective_sender_id",
+              "_get_sender_id",
+              "_effective_sender_id_for_gateway",
+          ):
+              if function_dump(current_gateway, name) != function_dump(old_gateway, name):
+                  raise SystemExit(f"Sender-ID function changed unexpectedly: {name}")
+
+          current_climate = Path(climate_path).read_text(encoding="utf-8")
+          old_climate = git_file("v0.1.163", climate_path)
+          if function_dump(current_climate, "async_set_temperature") != function_dump(
+              old_climate, "async_set_temperature"
+          ):
+              raise SystemExit(
+                  "FKS-SV set-temperature sleeping-valve path changed unexpectedly"
+              )
+          print("Sender-ID and sleeping-valve paths unchanged from v0.1.163")
+          PY
+
       - name: Guard scope against v0.1.163
         run: |
           python - <<'PY'
