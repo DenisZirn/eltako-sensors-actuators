@@ -429,10 +429,39 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if self._is_fhk14 or self._is_fae14lpr:
             base["genuine_current_temperature"] = self._has_genuine_current_temperature
         if self._is_fks_sv:
+            configured_label = (
+                "Extern"
+                if self._configured_temperature_source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
+                else "Intern"
+            )
+            actual_label = (
+                "Extern"
+                if self._actual_temperature_source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
+                else "Intern"
+                if self._actual_temperature_source == FKS_SV_TEMPERATURE_SOURCE_INTERNAL
+                else None
+            )
+            status_label = {
+                "normal": "Normalbetrieb",
+                "fallback": "Fallback",
+                "error": "Fehler",
+            }.get(self._temperature_source_status, "Fehler")
             base.update(
                 {
                     "controller_sender_id": self.device_config.get("sender_id"),
-                    "room_temperature_entity": _device_option(self.device_config, "room_temperature_entity"),
+                    "room_temperature_entity": self._external_temperature_entity,
+                    "temperaturquelle_konfiguriert": configured_label,
+                    "temperaturquelle_konfigurationsursprung": self._temperature_config_origin,
+                    "temperaturquelle_tatsaechlich": actual_label,
+                    "externe_temperatur_entity": self._external_temperature_entity,
+                    "aktuelle_externe_raumtemperatur": self._external_temperature,
+                    "interne_fks_sv_temperatur": self._internal_temperature,
+                    "verwendete_isttemperatur": self._used_room_temperature,
+                    "zuletzt_gesendete_isttemperatur": self._last_sent_room_temperature,
+                    "zuletzt_gesendete_solltemperatur": self._last_sent_target_temperature,
+                    "letztes_controllertelegramm": self._last_controller_telegram,
+                    "letzte_controllerantwort": self._last_controller_response,
+                    "temperaturquellen_status": status_label,
                     "ventilstellung": self._valve_position,
                     "befehl_ausstehend": self._pending_command,
                     "ventil_blockiert": self._actuator_obstructed,
