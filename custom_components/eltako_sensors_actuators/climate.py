@@ -222,9 +222,28 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._last_teach_in: str | None = None
         self._last_error: str | None = None
         self._successful_replies = 0
+
+        # FKS-SV room-temperature source state. _internal_temperature always
+        # stores the valve's own reported value, while _current_temperature is
+        # the effective value Home Assistant displays and the controller uses.
+        self._internal_temperature: float | None = None
+        self._external_temperature: float | None = None
+        self._used_room_temperature: float | None = None
+        self._configured_temperature_source = FKS_SV_TEMPERATURE_SOURCE_INTERNAL
+        self._actual_temperature_source: str | None = None
+        self._temperature_source_status = "error"
+        self._temperature_config_origin = "default"
+        self._external_temperature_entity: str | None = None
+        self._last_sent_room_temperature: float | None = None
+        self._last_sent_target_temperature: float | None = None
+        self._last_controller_telegram: str | None = None
+        self._last_controller_response: str | None = None
+
         self._control_reply_task = None
         self._teach_in_reply_task = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
+        self._remove_temperature_options_listener = None
+        self._remove_external_temperature_listener = None
 
 
     async def async_added_to_hass(self) -> None:
