@@ -22,6 +22,8 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 
 try:
     from homeassistant.components.climate import ClimateEntityFeature
@@ -31,8 +33,24 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
     _SUPPORT_PRESET_MODE = 16
 
-from .const import CONF_DEVICES, DOMAIN
+from .bus.eep_a5_20_01 import (
+    encode_a5_20_01_temperature_setpoint_data,
+    encode_a5_20_01_valve_position_data,
+)
+from .const import (
+    CONF_DEVICES,
+    DOMAIN,
+    FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+    FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
+    SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+)
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
+from .fks_sv_temperature import (
+    is_fks_sv_device,
+    resolve_fks_sv_temperature_config,
+    select_fks_sv_room_temperature,
+    temperature_to_celsius,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,7 +130,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device)
         self._eep = str(device.get("eep") or "").strip().upper()
-        self._is_fks_sv = self._eep == "A5-20-01"
+        self._is_fks_sv = is_fks_sv_device(device)
         self._is_fks_hora = self._eep == "A5-20-04" and _futh55ed_mode(device) == "fks_hora"
         # ELTAKO setpoints and feedback are natively Celsius. Keep this explicit
         # on every instance so no legacy YAML temperature_unit value can replace it.
