@@ -296,6 +296,19 @@ def _temperature_entity_selector() -> Any:
     return str
 
 
+def _temperature_source_choices(hass) -> dict[str, str]:
+    language = str(getattr(getattr(hass, "config", None), "language", "") or "").lower()
+    if language.startswith("de"):
+        return {
+            FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Interner Temperatursensor des FKS-SV",
+            FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Temperatursensor",
+        }
+    return {
+        FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Internal FKS-SV temperature sensor",
+        FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "External Home Assistant temperature sensor",
+    }
+
+
 def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
     """Accept temperature device_class, °C/°F units, or safe unitless values."""
     entity_id = str(entity_id or "").strip()
@@ -585,12 +598,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 step_id="fks_sv_room_temperature_source",
                 data_schema=vol.Schema(
                     {
-                        vol.Required(CONF_FKS_SV_TEMPERATURE_SOURCE): vol.In(
-                            {
-                                FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Interner Temperatursensor des FKS-SV",
-                                FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Temperatursensor",
-                            }
-                        )
+                        vol.Required(CONF_FKS_SV_TEMPERATURE_SOURCE): vol.In(_temperature_source_choices(self.hass))
                     }
                 ),
                 errors={CONF_FKS_SV_TEMPERATURE_SOURCE: "invalid_temperature_source"},
@@ -618,12 +626,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_FKS_SV_TEMPERATURE_SOURCE,
                         default=current_source,
-                    ): vol.In(
-                        {
-                            FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Interner Temperatursensor des FKS-SV",
-                            FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Temperatursensor",
-                        }
-                    )
+                    ): vol.In(_temperature_source_choices(self.hass))
                 }
             ),
         )
