@@ -528,6 +528,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_yaml_path: str = ""
         self._pending_gateway_choices: dict[str, str] = {}
         self._pending_room_temperature_device_id: str | None = None
+        self._room_temperature_menu_targets: dict[str, str] = {}
+        self._room_temperature_entity_menu_targets: dict[str, str] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
@@ -636,143 +638,173 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_room_temperature_assignment(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select a compatible physical climate actuator."""
+        """Show compatible climate actuators as directly clickable menu rows."""
         choices = self._room_temperature_choices()
-        if not choices:
-            return self.async_show_form(
+        device_choices = [(device_id, label) for device_id, label in choices.items() if device_id != _BACK]
+        if not device_choices:
+            return self.async_show_menu(
                 step_id="room_temperature_assignment",
-                data_schema=vol.Schema({}),
-                errors={"base": "no_room_temperature_devices"},
+                menu_options={
+                    "room_temperature_back_main": (
+                        "← Zurück zum Hauptmenü"
+                        if str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower().startswith("de")
+                        else "← Back to main menu"
+                    )
+                },
             )
 
-        if user_input is not None:
-            raw_selected = str(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID) or "")
-            if raw_selected == _BACK:
-                self._pending_room_temperature_device_id = None
-                return await self.async_step_init()
-            selected = normalize_enocean_id(raw_selected)
-            if selected not in choices:
-                return self.async_show_form(
-                    step_id="room_temperature_assignment",
-                    data_schema=vol.Schema(
-                        {vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID): vol.In(choices)}
-                    ),
-                    errors={CONF_ROOM_TEMPERATURE_DEVICE_ID: "missing_room_temperature_device"},
-                )
-            self._pending_room_temperature_device_id = selected
-            return await self.async_step_room_temperature_source()
+        self._room_temperature_menu_targets = {}
+        menu_options: dict[str, str] = {}
+        for index, (device_id, label) in enumerate(device_choices):
+            step_key = f"room_temperature_device_{index}"
+            self._room_temperature_menu_targets[step_key] = device_id
+            menu_options[step_key] = label
 
-        default_id = next((choice for choice in choices if choice != _BACK), _BACK)
-        return self.async_show_form(
-            step_id="room_temperature_assignment",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID, default=default_id): vol.In(choices)}
-            ),
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        menu_options["room_temperature_back_main"] = (
+            "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
         )
+        return self.async_show_menu(
+            step_id="room_temperature_assignment",
+            menu_options=menu_options,
+        )
+
+    async def async_step_room_temperature_back_main(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Return directly to the options main menu."""
+        self._pending_room_temperature_device_id = None
+        return await self.async_step_init()
+
+    async def _async_select_room_temperature_menu_device(self, step_key: str) -> FlowResult:
+        """Resolve one dynamic clickable actuator menu item."""
+        selected = normalize_enocean_id(self._room_temperature_menu_targets.get(step_key))
+        if selected is None or selected not in self._room_temperature_devices():
+            return await self.async_step_room_temperature_assignment()
+        self._pending_room_temperature_device_id = selected
+        return await self.async_step_room_temperature_source()
+
+    def __getattr__(self, name: str):
+        """Dispatch dynamic Home Assistant menu rows without an extra OK click."""
+        if name.startswith("async_step_room_temperature_device_"):
+            step_key = name.removeprefix("async_step_")
+
+            async def _device_step(user_input: dict[str, Any] | None = None) -> FlowResult:
+                return await self._async_select_room_temperature_menu_device(step_key)
+
+            return _device_step
+
+        if name.startswith("async_step_room_temperature_entity_"):
+            step_key = name.removeprefix("async_step_")
+
+            async def _entity_step(user_input: dict[str, Any] | None = None) -> FlowResult:
+                return await self._async_select_room_temperature_entity_menu(step_key)
+
+            return _entity_step
+
+        raise AttributeError(name)
 
     async def async_step_room_temperature_source(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Choose native or external temperature source."""
+        """Choose the temperature source with one directly clickable row."""
         device = self._selected_room_temperature_device()
         if device is None:
             return await self.async_step_room_temperature_assignment()
+
         kind = room_temperature_device_kind(device)
-
-        if user_input is not None:
-            source = str(user_input.get(CONF_ROOM_TEMPERATURE_SOURCE) or "").strip().lower()
-            if source == _BACK:
-                return await self.async_step_room_temperature_assignment()
-            if source == ROOM_TEMPERATURE_SOURCE_NATIVE:
-                options = set_room_temperature_override(
-                    self.config_entry.options,
-                    self._pending_room_temperature_device_id,
-                    ROOM_TEMPERATURE_SOURCE_NATIVE,
-                )
-                return self.async_create_entry(title="", data=options)
-            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
-                return await self.async_step_room_temperature_entity()
-            return self.async_show_form(
-                step_id="room_temperature_source",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required(CONF_ROOM_TEMPERATURE_SOURCE): vol.In(
-                            _temperature_source_choices(self.hass, kind)
-                        )
-                    }
-                ),
-                errors={CONF_ROOM_TEMPERATURE_SOURCE: "invalid_temperature_source"},
-            )
-
-        current_source, _entity_id, _origin = resolve_room_temperature_config(
-            device, self.config_entry.options
-        )
-        source_choices = dict(_temperature_source_choices(self.hass, kind))
+        choices = _temperature_source_choices(self.hass, kind)
         language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
-        source_choices[_BACK] = "← Zurück zur Aktorauswahl" if language.startswith("de") else "← Back to actuator selection"
-        return self.async_show_form(
+
+        return self.async_show_menu(
             step_id="room_temperature_source",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_ROOM_TEMPERATURE_SOURCE,
-                        default=current_source,
-                    ): vol.In(source_choices)
-                }
-            ),
+            menu_options={
+                "room_temperature_native": choices[ROOM_TEMPERATURE_SOURCE_NATIVE],
+                "room_temperature_external": choices[ROOM_TEMPERATURE_SOURCE_EXTERNAL],
+                "room_temperature_back_actuator": (
+                    "← Zurück zur Aktorauswahl" if language.startswith("de") else "← Back to actuator selection"
+                ),
+            },
             description_placeholders={
                 "current_assignment": self._room_temperature_assignment_text(device)
             },
         )
+
+    async def async_step_room_temperature_native(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Select the native/learned room-temperature source immediately."""
+        if self._selected_room_temperature_device() is None:
+            return await self.async_step_room_temperature_assignment()
+        options = set_room_temperature_override(
+            self.config_entry.options,
+            self._pending_room_temperature_device_id,
+            ROOM_TEMPERATURE_SOURCE_NATIVE,
+        )
+        return self.async_create_entry(title="", data=options)
+
+    async def async_step_room_temperature_external(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Continue directly to the external Home Assistant sensor list."""
+        return await self.async_step_room_temperature_entity()
+
+    async def async_step_room_temperature_back_actuator(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Return directly to actuator selection."""
+        return await self.async_step_room_temperature_assignment()
 
     async def async_step_room_temperature_entity(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select one Home Assistant temperature sensor for the chosen actuator."""
+        """Show compatible HA temperature sensors as directly clickable menu rows."""
         device = self._selected_room_temperature_device()
         if device is None:
             return await self.async_step_room_temperature_assignment()
 
-        errors: dict[str, str] = {}
-        default_entity = ""
-        source, entity_id, _origin = resolve_room_temperature_config(
-            device, self.config_entry.options
-        )
-        if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
-            default_entity = entity_id
-
-        entity_choices = _temperature_entity_choices(self.hass)
-        if default_entity and default_entity not in entity_choices:
-            entity_choices[default_entity] = default_entity
-
-        if user_input is not None:
-            entity_id = str(user_input.get(CONF_EXTERNAL_TEMPERATURE_ENTITY) or "").strip()
+        choices = _temperature_entity_choices(self.hass)
+        self._room_temperature_entity_menu_targets = {}
+        menu_options: dict[str, str] = {}
+        index = 0
+        for entity_id, label in choices.items():
             if entity_id == _BACK:
-                return await self.async_step_room_temperature_source()
-            if not _is_temperature_entity_compatible(self.hass, entity_id):
-                errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
-            else:
-                options = set_room_temperature_override(
-                    self.config_entry.options,
-                    self._pending_room_temperature_device_id,
-                    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
-                    entity_id,
-                )
-                return self.async_create_entry(title="", data=options)
+                continue
+            step_key = f"room_temperature_entity_{index}"
+            self._room_temperature_entity_menu_targets[step_key] = entity_id
+            menu_options[step_key] = label
+            index += 1
 
-        default_choice = default_entity if default_entity else next(
-            (choice for choice in entity_choices if choice != _BACK),
-            _BACK,
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        menu_options["room_temperature_back_source"] = (
+            "← Zurück zur Temperaturquelle" if language.startswith("de") else "← Back to temperature source"
         )
-        key = vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY, default=default_choice)
-        return self.async_show_form(
+        return self.async_show_menu(
             step_id="room_temperature_entity",
-            data_schema=vol.Schema({key: vol.In(entity_choices)}),
-            errors=errors,
+            menu_options=menu_options,
             description_placeholders={
                 "current_assignment": self._room_temperature_assignment_text(device)
             },
         )
+
+    async def _async_select_room_temperature_entity_menu(self, step_key: str) -> FlowResult:
+        """Save one external temperature sensor selected from a clickable menu row."""
+        entity_id = str(self._room_temperature_entity_menu_targets.get(step_key) or "").strip()
+        if not _is_temperature_entity_compatible(self.hass, entity_id):
+            return await self.async_step_room_temperature_entity()
+        options = set_room_temperature_override(
+            self.config_entry.options,
+            self._pending_room_temperature_device_id,
+            ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            entity_id,
+        )
+        return self.async_create_entry(title="", data=options)
+
+    async def async_step_room_temperature_back_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Return directly to temperature-source selection."""
+        return await self.async_step_room_temperature_source()
 
 
     async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None) -> FlowResult:
