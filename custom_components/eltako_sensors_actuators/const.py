@@ -55,14 +55,23 @@ CONF_RELOAD_AFTER_SAVE = "reload_after_save"
 
 CONF_DIAGNOSTICS_ENABLED = "diagnostics_enabled"
 
-# Persistent per-FKS-SV room-temperature source overrides. The top-level map
+# Persistent per-climate-device room-temperature source overrides. The map
 # lives in ConfigEntry.options and is keyed by normalized physical EnOcean ID.
+CONF_ROOM_TEMPERATURE_OVERRIDES = "room_temperature_overrides"
+CONF_ROOM_TEMPERATURE_DEVICE_ID = "room_temperature_device_id"
+CONF_ROOM_TEMPERATURE_SOURCE = "room_temperature_source"
+CONF_EXTERNAL_TEMPERATURE_ENTITY = "external_temperature_entity"
+
+ROOM_TEMPERATURE_SOURCE_NATIVE = "internal"
+ROOM_TEMPERATURE_SOURCE_EXTERNAL = "external"
+
+SIGNAL_ROOM_TEMPERATURE_UPDATED = f"{DOMAIN}_room_temperature_updated"
+
+# Compatibility aliases for the first v0.1.164 FKS-SV-only test build.
 CONF_FKS_SV_ROOM_TEMPERATURE_OVERRIDES = "fks_sv_room_temperature_overrides"
-CONF_FKS_SV_DEVICE_ID = "fks_sv_device_id"
-CONF_FKS_SV_TEMPERATURE_SOURCE = "fks_sv_temperature_source"
-CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY = "fks_sv_external_temperature_entity"
-
-FKS_SV_TEMPERATURE_SOURCE_INTERNAL = "internal"
-FKS_SV_TEMPERATURE_SOURCE_EXTERNAL = "external"
-
-SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED = f"{DOMAIN}_fks_sv_room_temperature_updated"
+CONF_FKS_SV_DEVICE_ID = CONF_ROOM_TEMPERATURE_DEVICE_ID
+CONF_FKS_SV_TEMPERATURE_SOURCE = CONF_ROOM_TEMPERATURE_SOURCE
+CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY = CONF_EXTERNAL_TEMPERATURE_ENTITY
+FKS_SV_TEMPERATURE_SOURCE_INTERNAL = ROOM_TEMPERATURE_SOURCE_NATIVE
+FKS_SV_TEMPERATURE_SOURCE_EXTERNAL = ROOM_TEMPERATURE_SOURCE_EXTERNAL
+SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED = SIGNAL_ROOM_TEMPERATURE_UPDATED
