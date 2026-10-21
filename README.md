@@ -118,7 +118,6 @@ Im Dropdown erscheinen ausschließlich geeignete Temperatursensoren mit Temperat
 
 - Übersichtliche, direkt anklickbare Menüs für die Temperaturquellen und eine einheitliche Zurück-Navigation.
 - **FAM-USB:** Die Erkennung des passenden EnOcean-Programmer-Anschlusses wurde robuster gestaltet. Dabei wird weiterhin die für FAM-USB erforderliche Schnittstelle **`if01`** bevorzugt.
-- Erweiterte automatische Tests für die Temperaturzuordnung, die Datenübertragung und die Bedienung.
 
 > **Hinweis:** Die Unterstützung hängt vom jeweiligen Gerätetyp und dessen Einrichtung ab. Nicht jede Hardwarekombination konnte praktisch getestet werden.
 
