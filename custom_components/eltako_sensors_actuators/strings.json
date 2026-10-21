@@ -45,7 +45,8 @@
         "description": "Choose exactly one import source. Manual YAML code and file paths are handled in separate dialogs so that a previously saved path can no longer block text input.",
         "menu_options": {
           "yaml_text": "Paste YAML code manually",
-          "yaml_file": "Use a YAML file from the configuration directory"
+          "yaml_file": "Use a YAML file from the configuration directory",
+          "init": "← Back to main menu"
         }
       },
       "yaml_gateway": {
@@ -85,14 +86,14 @@
       },
       "room_temperature_source": {
         "title": "Select temperature source",
-        "description": "Choose the existing device/native or learned temperature source, or an external Home Assistant room-temperature sensor.",
+        "description": "Current assignment: {current_assignment}\n\nChoose the existing device/native or learned temperature source, or an external Home Assistant room-temperature sensor.",
         "data": {
           "room_temperature_source": "Temperature source"
         }
       },
       "room_temperature_entity": {
         "title": "Select external room temperature sensor",
-        "description": "Select a Home Assistant sensor entity with a temperature value. Suitable °C/°F sensors are supported regardless of the providing integration.",
+        "description": "Current assignment: {current_assignment}\n\nSelect a Home Assistant sensor entity with a temperature value. Suitable °C/°F sensors are supported regardless of the providing integration.",
         "data": {
           "external_temperature_entity": "External room temperature sensor"
         }
