@@ -2802,9 +2802,10 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # The physical room sensor learned in the actuator remains
-                # authoritative. No synthetic room temperature is transmitted.
-                current_temperature=None,
+                # None preserves the established physical/native room-sensor
+                # path. A numeric value is supplied only for an explicit
+                # Home Assistant room-temperature assignment.
+                current_temperature=kwargs.get("current_temperature"),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
             )
