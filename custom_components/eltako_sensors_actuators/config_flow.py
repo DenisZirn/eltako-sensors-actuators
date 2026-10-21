@@ -530,7 +530,6 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_room_temperature_device_id: str | None = None
         self._room_temperature_menu_targets: dict[str, str] = {}
         self._room_temperature_entity_menu_targets: dict[str, str] = {}
-        self._gateway_port_menu_targets: dict[str, str] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
@@ -703,14 +702,6 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
 
             return _entity_step
 
-        if name.startswith("async_step_gateway_port_"):
-            step_key = name.removeprefix("async_step_")
-
-            async def _gateway_step(user_input: dict[str, Any] | None = None) -> FlowResult:
-                return await self._async_select_gateway_port_menu(step_key)
-
-            return _gateway_step
-
         raise AttributeError(name)
 
     async def async_step_room_temperature_source(
@@ -870,114 +861,78 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         return await self.async_step_init()
 
-    async def _async_save_gateway_port(self, port: str, connection_kind: str) -> FlowResult:
-        """Validate and save one selected gateway port."""
-        data = self._current_data()
-        gateway_type = _gateway_type_for_connection_kind(connection_kind)
-        yaml_text = str(data.get(CONF_YAML_CONFIG, "") or "")
-        selected_gateway_key = str(data.get(CONF_SELECTED_YAML_GATEWAY_KEY, "") or "")
-
-        try:
-            parsed = parse_eedtoy_yaml(
-                yaml_text,
-                connection_kind=connection_kind,
-                gateway_type=gateway_type,
-                selected_gateway_key=selected_gateway_key,
-            )
-        except EltakoYamlError as err:
-            _LOGGER.warning("EEDTOY YAML reparse after connection change failed: %s", err)
-            return self.async_show_menu(
-                step_id="connection",
-                menu_options={
-                    "connection_back_main": (
-                        "← Zurück zum Hauptmenü"
-                        if str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower().startswith("de")
-                        else "← Back to main menu"
-                    )
-                },
-                description_placeholders={"port_count": "0"},
-            )
-
-        return self.async_create_entry(
-            title="",
-            data=self._merged_options(
-                {
-                    CONF_PORT: port,
-                    CONF_CONNECTION_KIND: connection_kind,
-                    CONF_GATEWAY_TYPE: gateway_type,
-                    CONF_DEVICES: parsed.devices,
-                    CONF_SELECTED_YAML_GATEWAY: parsed.selected_gateway,
-                    CONF_RELOAD_AFTER_SAVE: True,
-                }
-            ),
-        )
-
     async def async_step_connection(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Show detected gateway ports as directly clickable menu rows."""
-        serial_ports = await self.hass.async_add_executor_job(_list_serial_ports)
-        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
-        is_de = language.startswith("de")
-
-        self._gateway_port_menu_targets = {}
-        menu_options: dict[str, str] = {}
-        for index, (port, meta) in enumerate(serial_ports.items()):
-            step_key = f"gateway_port_{index}"
-            self._gateway_port_menu_targets[step_key] = port
-            menu_options[step_key] = meta["label"]
-
-        menu_options["connection_manual"] = (
-            "Manuell eingeben / Netzwerkpfad" if is_de else "Enter manually / network path"
-        )
-        menu_options["connection_back_main"] = (
-            "← Zurück zum Hauptmenü" if is_de else "← Back to main menu"
-        )
-
-        return self.async_show_menu(
-            step_id="connection",
-            menu_options=menu_options,
-            description_placeholders={"port_count": str(len(serial_ports))},
-        )
-
-    async def _async_select_gateway_port_menu(self, step_key: str) -> FlowResult:
-        """Save a detected gateway port selected from a clickable menu row."""
-        port = str(self._gateway_port_menu_targets.get(step_key) or "").strip()
-        if not port:
-            return await self.async_step_connection()
-        serial_ports = await self.hass.async_add_executor_job(_list_serial_ports)
-        connection_kind = serial_ports.get(port, {}).get(
-            "connection_kind", CONNECTION_KIND_UNKNOWN
-        )
-        if connection_kind == CONNECTION_KIND_UNKNOWN:
-            connection_kind = _infer_connection_kind(port, port, port)
-        return await self._async_save_gateway_port(port, connection_kind)
-
-    async def async_step_connection_manual(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Enter a serial or network path manually."""
+        """Configure the gateway port using the established form-style UI."""
         errors: dict[str, str] = {}
-        current_port = str(self._current_data().get(CONF_PORT, "") or "")
-        default_manual = current_port if current_port else ""
+        serial_ports = await self.hass.async_add_executor_job(_list_serial_ports)
+        port_choices = {port: meta["label"] for port, meta in serial_ports.items()}
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        port_choices[MANUAL_PORT] = (
+            "Manuell eingeben / Netzwerkpfad"
+            if language.startswith("de")
+            else "Enter manually / network path"
+        )
+
+        data = self._current_data()
+        current_port = str(data.get(CONF_PORT, MANUAL_PORT))
+        default_port = current_port if current_port in port_choices else MANUAL_PORT
+        default_manual = _manual_port_default(current_port, port_choices)
 
         if user_input is not None:
-            port = str(user_input.get("manual_port", "") or "").strip()
-            if not port:
-                errors["manual_port"] = "missing_port"
-            else:
-                connection_kind = _infer_connection_kind(port, port, port)
-                return await self._async_save_gateway_port(port, connection_kind)
+            selected_port = str(user_input[CONF_PORT])
+            manual_port = str(user_input.get("manual_port", "")).strip()
+            port = manual_port if selected_port == MANUAL_PORT else selected_port.strip()
 
-        return self.async_show_form(
-            step_id="connection_manual",
-            data_schema=vol.Schema({vol.Required("manual_port", default=default_manual): str}),
-            errors=errors,
+            if not port:
+                errors[CONF_PORT] = "missing_port"
+            else:
+                connection_kind = serial_ports.get(selected_port, {}).get(
+                    "connection_kind", CONNECTION_KIND_UNKNOWN
+                )
+                if connection_kind == CONNECTION_KIND_UNKNOWN:
+                    connection_kind = _infer_connection_kind(port, port, port)
+                gateway_type = _gateway_type_for_connection_kind(connection_kind)
+
+                yaml_text = str(data.get(CONF_YAML_CONFIG, "") or "")
+                selected_gateway_key = str(data.get(CONF_SELECTED_YAML_GATEWAY_KEY, "") or "")
+                try:
+                    parsed = parse_eedtoy_yaml(
+                        yaml_text,
+                        connection_kind=connection_kind,
+                        gateway_type=gateway_type,
+                        selected_gateway_key=selected_gateway_key,
+                    )
+                except EltakoYamlError as err:
+                    _LOGGER.warning("EEDTOY YAML reparse after connection change failed: %s", err)
+                    errors["base"] = _yaml_error_key(err)
+                else:
+                    return self.async_create_entry(
+                        title="",
+                        data=self._merged_options(
+                            {
+                                CONF_PORT: port,
+                                CONF_CONNECTION_KIND: connection_kind,
+                                CONF_GATEWAY_TYPE: gateway_type,
+                                CONF_DEVICES: parsed.devices,
+                                CONF_SELECTED_YAML_GATEWAY: parsed.selected_gateway,
+                                CONF_RELOAD_AFTER_SAVE: True,
+                            }
+                        ),
+                    )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PORT, default=default_port): vol.In(port_choices),
+                vol.Optional("manual_port", default=default_manual): str,
+            }
         )
 
-    async def async_step_connection_back_main(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Return directly to the options main menu."""
-        return await self.async_step_init()
+        return self.async_show_form(
+            step_id="connection",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"port_count": str(len(serial_ports))},
+        )
 
 
     async def _process_yaml_submission(
