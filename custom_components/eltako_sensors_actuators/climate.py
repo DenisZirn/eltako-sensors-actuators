@@ -33,6 +33,7 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
     _SUPPORT_PRESET_MODE = 16
 
+from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data
 from .bus.eep_a5_20_01 import (
     encode_a5_20_01_temperature_setpoint_data,
     encode_a5_20_01_valve_position_data,
