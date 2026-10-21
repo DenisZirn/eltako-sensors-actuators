@@ -366,6 +366,26 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         self.assertIn("set_room_temperature_override", source)
         self.assertIn("EntitySelector", source)
 
+    def test_room_temperature_menu_one_click_navigation(self):
+        source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
+        source_method = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source")
+        self.assertIn("self.async_show_menu(", source_method)
+        self.assertIn('"room_temperature_source_native"', source_method)
+        self.assertIn('"room_temperature_source_external"', source_method)
+        self.assertIn('"room_temperature_back_actuators"', source_method)
+        self.assertIn("✓ ", source_method)
+        self.assertNotIn("self.async_show_form(", source_method)
+
+        save_native = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source_native")
+        self.assertIn("set_room_temperature_override(", save_native)
+        self.assertIn("ROOM_TEMPERATURE_SOURCE_NATIVE", save_native)
+        open_external = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source_external")
+        self.assertIn("async_step_room_temperature_entity()", open_external)
+        back = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_back_actuators")
+        self.assertIn("async_step_room_temperature_assignment()", back)
+        sensor = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_entity")
+        self.assertIn("vol.In(entity_choices)", sensor)
+
     def test_yaml_import_still_preserves_legacy_room_temperature_entity(self):
         source = (INTEGRATION / "yaml_config.py").read_text(encoding="utf-8")
         self.assertIn('"room_temperature_entity"', source)
