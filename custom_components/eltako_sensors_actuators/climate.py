@@ -594,11 +594,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 "Extern"
                 if self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
                 else "Intern"
+                if self._room_temperature_device_kind == "fks_sv"
+                else "Bestehend / eingelernt"
             )
             actual_label = (
                 "Extern"
                 if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
                 else "Intern"
+                if self._room_temperature_device_kind == "fks_sv"
+                and self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_NATIVE
+                else "Bestehend / eingelernt"
                 if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_NATIVE
                 else None
             )
@@ -616,31 +621,20 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     "temperaturquelle_tatsaechlich": actual_label,
                     "externe_temperatur_entity": self._external_temperature_entity,
                     "aktuelle_externe_raumtemperatur": self._external_temperature,
-                    "interne_fks_sv_temperatur": self._internal_temperature,
+                    "native_raumtemperatur": self._internal_temperature,
                     "verwendete_isttemperatur": self._used_room_temperature,
                     "zuletzt_gesendete_isttemperatur": self._last_sent_room_temperature,
                     "zuletzt_gesendete_solltemperatur": self._last_sent_target_temperature,
                     "letztes_controllertelegramm": self._last_controller_telegram,
                     "letzte_controllerantwort": self._last_controller_response,
                     "temperaturquellen_status": status_label,
-                    "gemeldete_ventiloeffnung_prozent": self._valve_position,
-                    "ventilstellung": self._valve_position,
-                    "befehl_ausstehend": self._pending_command,
-                    "ventil_blockiert": self._actuator_obstructed,
-                    "fenster_offen": self._window_open,
-                    "kontakt_offen": self._contact_open,
-                    "batterie_niedrig": self._battery_low,
-                    "temperaturfehler": self._temperature_sensor_failure,
-                    "energiespeicher_geladen": self._energy_storage_charged,
-                    "energiereserve_ausreichend": self._energy_storage_capacity_sufficient,
-                    "letzter_empfang": self._last_rx,
-                    "letzte_antwort": self._last_tx,
-                    "letztes_einlernen": self._last_teach_in,
-                    "letzter_fehler": self._last_error,
-                    "erfolgreiche_antworten": self._successful_replies,
-                    "kommunikationsstatus": "verbunden" if self._last_rx else "Warten auf erstes FKS-SV-Telegramm",
                 }
             )
+            if self._room_temperature_device_kind == "fks_sv":
+                base["interne_fks_sv_temperatur"] = self._internal_temperature
+            elif self._room_temperature_device_kind == "a5_10_06":
+                base["interne_aktor_temperatur"] = self._internal_temperature
+
         return base
 
     def _matches_physical_device(self, telegram) -> bool:
