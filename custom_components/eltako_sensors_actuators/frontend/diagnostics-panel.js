@@ -60,6 +60,57 @@ class EltakoDiagnosticsPanel extends HTMLElement {
     await this._load();
   }
 
+  _diagnosticsText() {
+    const filtered = this._filtered();
+    const lines = [
+      "ELTAKO Sensors & Actuators - Funk / Bus Diagnose",
+      `Erstellt: ${new Date().toLocaleString()}`,
+      `Einträge: ${filtered.length} von ${this._events.length}`,
+      `Filter: ${this._filter || "-"} | Stufe: ${this._level || "alle"} | Gateway: ${this._gateway || "alle"}`,
+      "",
+    ];
+
+    for (const event of filtered) {
+      const details = {};
+      for (const [key, value] of Object.entries(event)) {
+        if (["sequence", "timestamp", "type", "level"].includes(key)) continue;
+        details[key] = value;
+      }
+      const renderedDetails = Object.keys(details).length ? ` ${JSON.stringify(details)}` : "";
+      lines.push(
+        `${event.timestamp || "-"} [${String(event.level || "info").toUpperCase()}] ${event.type || "event"}${renderedDetails}`
+      );
+    }
+    return lines.join("\n");
+  }
+
+  async _copyDiagnostics() {
+    const text = this._diagnosticsText();
+    const button = this.shadowRoot?.getElementById("copy");
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      if (button) {
+        const oldLabel = button.textContent;
+        button.textContent = "Kopiert ✓";
+        window.setTimeout(() => { button.textContent = oldLabel; }, 1600);
+      }
+    } catch (err) {
+      this._error = `Diagnose konnte nicht kopiert werden: ${String(err)}`;
+      this._updateView();
+    }
+  }
+
   _filtered() {
     const q = this._filter.toLowerCase().trim();
     return this._events.filter((event) => {
@@ -96,7 +147,7 @@ class EltakoDiagnosticsPanel extends HTMLElement {
       h1 { margin:0; font-size:24px; }
       .live { display:flex; align-items:center; gap:7px; color:var(--secondary-text-color); font-size:13px; }
       .live-dot { width:9px; height:9px; border-radius:50%; background:#2e7d32; box-shadow:0 0 0 3px rgba(46,125,50,.18); }
-      .controls { display:grid; grid-template-columns:minmax(260px,1fr) 150px 190px 150px auto auto; gap:10px; margin-top:14px; }
+      .controls { display:grid; grid-template-columns:minmax(260px,1fr) 150px 190px 150px auto auto auto; gap:10px; margin-top:14px; }
       input, select, button {
         box-sizing:border-box;
         min-height:42px;
@@ -178,6 +229,7 @@ class EltakoDiagnosticsPanel extends HTMLElement {
           <option value="10000">10 Sekunden</option>
         </select>
         <button id="refresh" class="primary">Aktualisieren</button>
+        <button id="copy">Diagnose kopieren</button>
         <button id="clear" class="danger">Puffer leeren</button>
       </div>
       <div id="summary" class="summary"></div>
@@ -203,6 +255,7 @@ class EltakoDiagnosticsPanel extends HTMLElement {
       this._updateView();
     });
     this.shadowRoot.getElementById("refresh").addEventListener("click", () => this._load());
+    this.shadowRoot.getElementById("copy").addEventListener("click", () => this._copyDiagnostics());
     this.shadowRoot.getElementById("clear").addEventListener("click", () => this._clear());
     this._rendered = true;
   }
