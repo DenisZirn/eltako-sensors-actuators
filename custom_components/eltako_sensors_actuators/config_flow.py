@@ -54,6 +54,7 @@ from .yaml_config import EltakoYamlError, list_eedtoy_yaml_gateways, parse_eedto
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_NAME = "ELTAKO Sensors & Actuators"
 MANUAL_PORT = "manual"
+_BACK = "__back__"
 
 _TTYS_RE = re.compile(r"^/dev/ttyS\d+$")
 
@@ -550,6 +551,39 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             result[normalized_id] = device
         return result
 
+    def _room_temperature_assignment_text(self, device: dict[str, Any]) -> str:
+        """Return a concise human-readable summary of the effective assignment."""
+        source, entity_id, origin = resolve_room_temperature_config(
+            device, self.config_entry.options
+        )
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
+
+        if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
+            state = self.hass.states.get(str(entity_id))
+            friendly_name = ""
+            if state is not None:
+                friendly_name = str((getattr(state, "attributes", {}) or {}).get("friendly_name") or "").strip()
+            sensor_label = f"{friendly_name} ({entity_id})" if friendly_name else str(entity_id)
+            return (
+                f"Externer Sensor: {sensor_label}"
+                if is_de
+                else f"External sensor: {sensor_label}"
+            )
+
+        kind = room_temperature_device_kind(device)
+        if kind == "fks_sv":
+            return (
+                "Interner Temperatursensor des FKS-SV"
+                if is_de
+                else "Internal FKS-SV temperature sensor"
+            )
+        return (
+            "Bestehende / eingelernte Raumtemperaturquelle"
+            if is_de
+            else "Existing / learned room-temperature source"
+        )
+
     def _room_temperature_choices(self) -> dict[str, str]:
         devices = self._room_temperature_devices()
         raw_choices: list[tuple[str, str]] = []
@@ -561,15 +595,19 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 or ""
             ).strip()
             label = f"{name} – {type_name}" if type_name and type_name.upper() not in name.upper() else name
-            raw_choices.append((device_id, label))
+            assignment = self._room_temperature_assignment_text(device)
+            raw_choices.append((device_id, f"{label} | {assignment}"))
 
         counts: dict[str, int] = {}
         for _device_id, label in raw_choices:
             counts[label] = counts.get(label, 0) + 1
-        return {
+        choices = {
             device_id: (f"{label} ({device_id})" if counts.get(label, 0) > 1 else label)
             for device_id, label in raw_choices
         }
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        choices[_BACK] = "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
+        return choices
 
     def _selected_room_temperature_device(self) -> dict[str, Any] | None:
         if not self._pending_room_temperature_device_id:
@@ -589,7 +627,11 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             )
 
         if user_input is not None:
-            selected = normalize_enocean_id(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID))
+            raw_selected = str(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID) or "")
+            if raw_selected == _BACK:
+                self._pending_room_temperature_device_id = None
+                return await self.async_step_init()
+            selected = normalize_enocean_id(raw_selected)
             if selected not in choices:
                 return self.async_show_form(
                     step_id="room_temperature_assignment",
@@ -601,7 +643,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             self._pending_room_temperature_device_id = selected
             return await self.async_step_room_temperature_source()
 
-        default_id = next(iter(choices))
+        default_id = next((choice for choice in choices if choice != _BACK), _BACK)
         return self.async_show_form(
             step_id="room_temperature_assignment",
             data_schema=vol.Schema(
@@ -620,6 +662,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             source = str(user_input.get(CONF_ROOM_TEMPERATURE_SOURCE) or "").strip().lower()
+            if source == _BACK:
+                return await self.async_step_room_temperature_assignment()
             if source == ROOM_TEMPERATURE_SOURCE_NATIVE:
                 options = set_room_temperature_override(
                     self.config_entry.options,
@@ -644,6 +688,9 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         current_source, _entity_id, _origin = resolve_room_temperature_config(
             device, self.config_entry.options
         )
+        source_choices = dict(_temperature_source_choices(self.hass, kind))
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        source_choices[_BACK] = "← Zurück zur Aktorauswahl" if language.startswith("de") else "← Back to actuator selection"
         return self.async_show_form(
             step_id="room_temperature_source",
             data_schema=vol.Schema(
@@ -651,9 +698,12 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_ROOM_TEMPERATURE_SOURCE,
                         default=current_source,
-                    ): vol.In(_temperature_source_choices(self.hass, kind))
+                    ): vol.In(source_choices)
                 }
             ),
+            description_placeholders={
+                "current_assignment": self._room_temperature_assignment_text(device)
+            },
         )
 
     async def async_step_room_temperature_entity(
@@ -694,6 +744,9 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             step_id="room_temperature_entity",
             data_schema=vol.Schema({key: _temperature_entity_selector()}),
             errors=errors,
+            description_placeholders={
+                "current_assignment": self._room_temperature_assignment_text(device)
+            },
         )
 
 
@@ -855,7 +908,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         """Choose one unambiguous YAML import source."""
         return self.async_show_menu(
             step_id="yaml",
-            menu_options=["yaml_text", "yaml_file"],
+            menu_options=["yaml_text", "yaml_file", "init"],
         )
 
     async def async_step_yaml_text(self, user_input: dict[str, Any] | None = None) -> FlowResult:
