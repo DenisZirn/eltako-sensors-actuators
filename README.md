@@ -1,4 +1,4 @@
-# Eltako Sensors & Actuators
+# ELTAKO Sensors & Actuators
 
 Home-Assistant-Custom-Integration für ausgewählte ELTAKO EnOcean-Sensoren, Taster und Aktoren.
 
@@ -6,7 +6,7 @@ Home-Assistant-Custom-Integration für ausgewählte ELTAKO EnOcean-Sensoren, Tas
 
 Wichtiger Hinweis: Dieses Projekt ist eine ausschließlich privat entwickelte, inoffizielle Home-Assistant-Integration. Es besteht keinerlei geschäftliche, organisatorische oder sonstige Verbindung zu ELTAKO. Die Integration wurde weder von ELTAKO entwickelt noch beauftragt, geprüft, unterstützt oder offiziell freigegeben. „ELTAKO“ sowie die genannten Produktbezeichnungen und Marken sind Eigentum ihrer jeweiligen Rechteinhaber.
 
-## Freigegebener Gerätekatalog (v0.1.163)
+## Freigegebener Gerätekatalog (v0.1.164)
 
 - F2T55 – Taster 2-Kanal EU
 - FT55, F4T55E – Taster 4-Kanal EU
@@ -59,7 +59,7 @@ Nicht aufgeführte Produktbezeichnungen gehören nicht zum freigegebenen Katalog
 
 [![Home Assistant öffnen und dieses Repository in HACS anzeigen](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
 
-Danach in HACS **Eltako Sensors & Actuators** herunterladen. Nach einem Code-Update Home Assistant neu starten, damit der neue Integrationscode geladen wird. Nach Änderungen an Gateway-Einstellungen oder dem EEDTOY-YAML-Import die Integration bei Bedarf manuell neu laden. Der YAML-Import führt nicht automatisch einen Reload aus.
+Danach in HACS **ELTAKO Sensors & Actuators** herunterladen oder auf **v0.1.164** aktualisieren. Anschließend **Home Assistant neu starten**, damit die neue Version geladen wird. Nach dem Speichern eines neuen EEDTOY-YAML-Imports oder einer geänderten Gateway-Verbindung lädt sich die Integration automatisch neu.
 
 ## Manuelle Installation
 
@@ -87,6 +87,40 @@ binary_sensor:
 Bei Geräten mit mehreren Betriebsarten bleiben zusätzlich die erforderlichen Profilparameter wie `operating_mode`, `room_controller_mode` oder `f2l14_mode` relevant. Der Gerätetyp allein ersetzt nicht die Einstellung der Betriebsart.
 
 Für neue EEDTOY-Exporte sollte `device_type` mitgeliefert werden. 
+
+## Neu in v0.1.164: Raumtemperatursensoren zuweisen
+
+Du kannst jetzt bei unterstützten Heizungsaktoren festlegen, **welcher Temperatursensor für die Heizungsregelung verwendet werden soll**. Beispielsweise lässt sich ein bereits vorhandenes Raumthermometer aus Home Assistant zuweisen.
+
+Diese Funktion unterstützt **FKS-SV, FHK14, F4HK14** und kompatible **FAE14-Heizungsaktoren mit dem EnOcean-Profil A5-10-06**.
+
+### So richtest du einen Raumtemperatursensor ein
+
+1. Öffne in Home Assistant **Einstellungen → Geräte & Dienste → ELTAKO Sensors & Actuators → Konfigurieren**.
+2. Klicke auf **Raumtemperatursensor zuweisen**.
+3. Wähle den gewünschten Heizungsaktor aus der Liste aus. Die derzeitige Zuordnung steht bereits neben dem Gerät.
+4. Wähle die **bisherige/interne Temperaturquelle** oder **Externer Home-Assistant-Raumtemperatursensor**.
+5. Bei einem externen Sensor wählst du dein Raumthermometer im Dropdown aus und bestätigst die Auswahl.
+
+Ein **✓** markiert die aktive Temperaturquelle. Zurück zur bisherigen Quelle kannst du jederzeit über dasselbe Menü wechseln.
+
+Im Dropdown erscheinen ausschließlich geeignete Temperatursensoren mit Temperatur-Geräteklasse oder °C-/°F-Einheit. Gateway-IDs, Zählerstände und andere Zahlenwerte werden nicht angeboten.
+
+### Was passiert mit den Einstellungen?
+
+- **Bleibt gespeichert:** Deine Auswahl bleibt nach einem Neustart und nach einem erneuten EEDTOY-YAML-Import erhalten.
+- **Vorrang für deine Auswahl:** Eine in Home Assistant vorgenommene Zuordnung hat Vorrang vor einer Temperaturquelle aus dem YAML-Export.
+- **Bei Sensorausfall:** Ist der externe Sensor vorübergehend nicht verfügbar, verwendet die Integration nach Möglichkeit die bisherige Temperaturquelle des Aktors.
+- **FKS-SV:** Weil der Stellantrieb batteriebetrieben ist, wird die Temperatur beim nächsten regulären Kommunikationsvorgang übertragen – nicht sofort beim Umstellen.
+- **FHK14 / F4HK14 / FAE14:** Die Temperaturübertragung erfolgt weiterhin über das jeweils vorgesehene Aktorprotokoll.
+
+### Weitere Verbesserungen in v0.1.164
+
+- Übersichtliche, direkt anklickbare Menüs für die Temperaturquellen und eine einheitliche Zurück-Navigation.
+- **FAM-USB:** Die Erkennung des passenden EnOcean-Programmer-Anschlusses wurde robuster gestaltet. Dabei wird weiterhin die für FAM-USB erforderliche Schnittstelle **`if01`** bevorzugt.
+- Erweiterte automatische Tests für die Temperaturzuordnung, die Datenübertragung und die Bedienung.
+
+> **Hinweis:** Die Unterstützung hängt vom jeweiligen Gerätetyp und dessen Einrichtung ab. Nicht jede Hardwarekombination konnte praktisch getestet werden.
 
 ## Änderungen in v0.1.163
 
