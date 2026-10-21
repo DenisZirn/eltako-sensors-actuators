@@ -200,9 +200,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             )
 
         self._fhk_heater_mode = "normal"
+        raw_device = device.get("raw") if isinstance(device.get("raw"), dict) else {}
         model_text = " ".join(
-            str(device.get(key) or "")
-            for key in ("type", "model", "name", "description")
+            str(value or "")
+            for value in (
+                device.get("type"),
+                device.get("model"),
+                device.get("name"),
+                device.get("description"),
+                device.get("device_type"),
+                device.get("eltako"),
+                raw_device.get("device_type"),
+                raw_device.get("eltako"),
+            )
         ).upper()
         self._is_fhk14 = (
             self._eep == "A5-10-06"
@@ -230,10 +240,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._last_error: str | None = None
         self._successful_replies = 0
 
-        # FKS-SV room-temperature source state. _internal_temperature always
-        # stores the valve's own reported value, while _current_temperature is
-        # the effective value Home Assistant displays and the controller uses.
-        self._internal_temperature: float | None = None
+        # Shared room-temperature state. For FKS-SV, _internal_temperature is
+        # the valve's own sensor. For A5-10-06 heating actuators it stores only
+        # a genuine actuator-reported temperature; the established native/
+        # learned room-sensor path itself is represented by current_temperature=None
+        # in outgoing controller telegrams.
+        self._internal_temperature: float | None = (
+            self._current_temperature
+            if self._room_temperature_device_kind == "a5_10_06"
+            and self._has_genuine_current_temperature
+            else None
+        )
         self._external_temperature: float | None = None
         self._used_room_temperature: float | None = None
         self._configured_temperature_source = ROOM_TEMPERATURE_SOURCE_NATIVE
@@ -248,6 +265,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
         self._control_reply_task = None
         self._teach_in_reply_task = None
+        self._room_temperature_push_task = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
