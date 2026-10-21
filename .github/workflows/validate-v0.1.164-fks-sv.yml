@@ -1,4 +1,4 @@
-name: Validate v0.1.164 FKS-SV test
+name: Validate v0.1.164 room-temperature assignment test
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
               print("OK", path)
           PY
 
-      - name: Run FKS-SV room-temperature tests
+      - name: Run room-temperature assignment tests
         run: |
           python tests/test_fks_sv_room_temperature.py
 
@@ -47,7 +47,8 @@ jobs:
           python -m pip install --disable-pip-version-check --quiet "homeassistant==2026.10.1" pyserial
           python - <<'PY'
           from custom_components.eltako_sensors_actuators import config_flow, climate
-          from custom_components.eltako_sensors_actuators.fks_sv_temperature import (
+          from custom_components.eltako_sensors_actuators.room_temperature import (
+              is_room_temperature_assignable_device,
               temperature_to_celsius,
           )
 
@@ -56,7 +57,13 @@ jobs:
           assert config_flow.EltakoSensorsActuatorsOptionsFlow is not None
           assert climate.EltakoClimate is not None
           assert temperature_to_celsius(68, "°F") == 20.0
-          print("Home Assistant 2026.10.1 imports and selector API OK")
+          assert is_room_temperature_assignable_device({
+              "platform": "climate",
+              "id": "01-02-03-04",
+              "eep": "A5-10-06",
+              "device_type": "FHK14",
+          })
+          print("Home Assistant 2026.10.1 imports, selector API and generalized assignment OK")
           PY
 
       - name: Guard sender-ID and sleeping-valve paths against v0.1.163
@@ -95,14 +102,19 @@ jobs:
                   raise SystemExit(f"Sender-ID function changed unexpectedly: {name}")
 
           current_climate = Path(climate_path).read_text(encoding="utf-8")
-          old_climate = git_file("v0.1.163", climate_path)
-          if function_dump(current_climate, "async_set_temperature") != function_dump(
-              old_climate, "async_set_temperature"
+          set_temperature = function_dump(current_climate, "async_set_temperature")
+          source = current_climate
+          function_text = source[
+              source.index("    async def async_set_temperature"):
+              source.index("    async def async_will_remove_from_hass")
+          ]
+          if "if self._is_fks_sv or self._is_fks_hora:" not in function_text:
+              raise SystemExit("FKS-SV sleeping-valve guard is missing")
+          if function_text.index("if self._is_fks_sv or self._is_fks_hora:") > function_text.index(
+              "async_send_actuator_command"
           ):
-              raise SystemExit(
-                  "FKS-SV set-temperature sleeping-valve path changed unexpectedly"
-              )
-          print("Sender-ID and sleeping-valve paths unchanged from v0.1.163")
+              raise SystemExit("FKS-SV sleeping-valve guard no longer precedes direct send")
+          print("Sender-ID paths unchanged and FKS-SV sleeping-valve guard preserved")
           PY
 
       - name: Guard scope against v0.1.163
@@ -112,11 +124,13 @@ jobs:
           allowed = {
               ".github/workflows/validate-v0.1.164-fks-sv.yml",
               "custom_components/eltako_sensors_actuators/__init__.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_10_06.py",
               "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
               "custom_components/eltako_sensors_actuators/climate.py",
               "custom_components/eltako_sensors_actuators/config_flow.py",
               "custom_components/eltako_sensors_actuators/const.py",
               "custom_components/eltako_sensors_actuators/fks_sv_temperature.py",
+              "custom_components/eltako_sensors_actuators/room_temperature.py",
               "custom_components/eltako_sensors_actuators/gateway.py",
               "custom_components/eltako_sensors_actuators/manifest.json",
               "custom_components/eltako_sensors_actuators/strings.json",
@@ -136,7 +150,8 @@ jobs:
           required = {
               "custom_components/eltako_sensors_actuators/climate.py",
               "custom_components/eltako_sensors_actuators/config_flow.py",
-              "custom_components/eltako_sensors_actuators/fks_sv_temperature.py",
+              "custom_components/eltako_sensors_actuators/room_temperature.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_10_06.py",
               "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
           }
           missing = required - changed
