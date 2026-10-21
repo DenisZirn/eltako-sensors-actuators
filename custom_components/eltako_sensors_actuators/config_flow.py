@@ -743,6 +743,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 connection_kind = serial_ports.get(selected_port, {}).get(
                     "connection_kind", CONNECTION_KIND_UNKNOWN
                 )
+                if connection_kind == CONNECTION_KIND_UNKNOWN:
+                    connection_kind = _infer_connection_kind(port, port, port)
                 gateway_type = _gateway_type_for_connection_kind(connection_kind)
 
                 yaml_text = str(data.get(CONF_YAML_CONFIG, "") or "")
