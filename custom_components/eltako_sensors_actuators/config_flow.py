@@ -581,29 +581,12 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         is_de = language.startswith("de")
 
         if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
-            state = self.hass.states.get(str(entity_id))
-            friendly_name = ""
-            if state is not None:
-                friendly_name = str((getattr(state, "attributes", {}) or {}).get("friendly_name") or "").strip()
-            sensor_label = f"{friendly_name} ({entity_id})" if friendly_name else str(entity_id)
-            return (
-                f"Externer Sensor: {sensor_label}"
-                if is_de
-                else f"External sensor: {sensor_label}"
-            )
+            return "Externer Sensor" if is_de else "External sensor"
 
         kind = room_temperature_device_kind(device)
         if kind == "fks_sv":
-            return (
-                "Interner Temperatursensor des FKS-SV"
-                if is_de
-                else "Internal FKS-SV temperature sensor"
-            )
-        return (
-            "Bestehende / eingelernte Raumtemperaturquelle"
-            if is_de
-            else "Existing / learned room-temperature source"
-        )
+            return "Interner Sensor" if is_de else "Internal sensor"
+        return "Eingelernter Sensor" if is_de else "Learned sensor"
 
     def _room_temperature_choices(self) -> dict[str, str]:
         devices = self._room_temperature_devices()
@@ -617,7 +600,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             ).strip()
             label = f"{name} – {type_name}" if type_name and type_name.upper() not in name.upper() else name
             assignment = self._room_temperature_assignment_text(device)
-            raw_choices.append((device_id, f"{label} | {assignment}"))
+            raw_choices.append((device_id, f"{label} · {assignment}"))
 
         counts: dict[str, int] = {}
         for _device_id, label in raw_choices:
