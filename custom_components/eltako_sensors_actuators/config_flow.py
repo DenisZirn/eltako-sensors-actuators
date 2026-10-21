@@ -22,9 +22,9 @@ from .const import (
     CONF_CONNECTION_KIND,
     CONF_DIAGNOSTICS_ENABLED,
     CONF_DEVICES,
-    CONF_FKS_SV_DEVICE_ID,
-    CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY,
-    CONF_FKS_SV_TEMPERATURE_SOURCE,
+    CONF_EXTERNAL_TEMPERATURE_ENTITY,
+    CONF_ROOM_TEMPERATURE_DEVICE_ID,
+    CONF_ROOM_TEMPERATURE_SOURCE,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
     CONF_RELOAD_AFTER_SAVE,
@@ -36,16 +36,17 @@ from .const import (
     CONNECTION_KIND_RS485_BUS,
     CONNECTION_KIND_UNKNOWN,
     DOMAIN,
-    FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-    FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
+    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+    ROOM_TEMPERATURE_SOURCE_NATIVE,
     GATEWAY_TYPE_AUTO,
     GATEWAY_TYPE_FAM_USB,
 )
-from .fks_sv_temperature import (
-    is_fks_sv_device,
+from .room_temperature import (
+    is_room_temperature_assignable_device,
     normalize_enocean_id,
-    resolve_fks_sv_temperature_config,
-    set_fks_sv_override,
+    resolve_room_temperature_config,
+    room_temperature_device_kind,
+    set_room_temperature_override,
     temperature_to_celsius,
 )
 from .yaml_config import EltakoYamlError, list_eedtoy_yaml_gateways, parse_eedtoy_yaml
@@ -294,16 +295,26 @@ def _temperature_entity_selector() -> Any:
     return str
 
 
-def _temperature_source_choices(hass) -> dict[str, str]:
+def _temperature_source_choices(hass, device_kind: str | None) -> dict[str, str]:
     language = str(getattr(getattr(hass, "config", None), "language", "") or "").lower()
     if language.startswith("de"):
+        native = (
+            "Interner Temperatursensor des FKS-SV"
+            if device_kind == "fks_sv"
+            else "Bestehende / eingelernte Raumtemperaturquelle des Aktors"
+        )
         return {
-            FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Interner Temperatursensor des FKS-SV",
-            FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Temperatursensor",
+            ROOM_TEMPERATURE_SOURCE_NATIVE: native,
+            ROOM_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Raumtemperatursensor",
         }
+    native = (
+        "Internal FKS-SV temperature sensor"
+        if device_kind == "fks_sv"
+        else "Existing / learned actuator room-temperature source"
+    )
     return {
-        FKS_SV_TEMPERATURE_SOURCE_INTERNAL: "Internal FKS-SV temperature sensor",
-        FKS_SV_TEMPERATURE_SOURCE_EXTERNAL: "External Home Assistant temperature sensor",
+        ROOM_TEMPERATURE_SOURCE_NATIVE: native,
+        ROOM_TEMPERATURE_SOURCE_EXTERNAL: "External Home Assistant room-temperature sensor",
     }
 
 
@@ -488,12 +499,12 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_yaml_text: str | None = None
         self._pending_yaml_path: str = ""
         self._pending_gateway_choices: dict[str, str] = {}
-        self._pending_fks_sv_device_id: str | None = None
+        self._pending_room_temperature_device_id: str | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["connection", "yaml", "fks_sv_room_temperature", "diagnostics"],
+            menu_options=["connection", "yaml", "room_temperature_assignment", "diagnostics"],
         )
 
     def _current_data(self) -> dict[str, Any]:
@@ -519,166 +530,160 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         )
 
 
-    def _fks_sv_choices(self) -> dict[str, str]:
+    def _room_temperature_devices(self) -> dict[str, dict[str, Any]]:
         devices = self._current_data().get(CONF_DEVICES) or []
-        raw_choices: list[tuple[str, str]] = []
+        result: dict[str, dict[str, Any]] = {}
         for device in devices:
-            if not is_fks_sv_device(device):
+            if not is_room_temperature_assignable_device(device):
                 continue
             normalized_id = normalize_enocean_id(device.get("id"))
             if normalized_id is None:
                 continue
-            name = str(device.get("name") or normalized_id).strip() or normalized_id
-            raw_choices.append((normalized_id, name))
+            result[normalized_id] = device
+        return result
 
-        # If two valves intentionally share the same display name, append the
-        # physical ID only to those duplicate labels so selection remains clear.
+    def _room_temperature_choices(self) -> dict[str, str]:
+        devices = self._room_temperature_devices()
+        raw_choices: list[tuple[str, str]] = []
+        for device_id, device in devices.items():
+            name = str(device.get("name") or device_id).strip() or device_id
+            type_name = str(
+                device.get("device_type")
+                or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("device_type")
+                or ""
+            ).strip()
+            label = f"{name} – {type_name}" if type_name and type_name.upper() not in name.upper() else name
+            raw_choices.append((device_id, label))
+
         counts: dict[str, int] = {}
-        for _device_id, name in raw_choices:
-            counts[name] = counts.get(name, 0) + 1
+        for _device_id, label in raw_choices:
+            counts[label] = counts.get(label, 0) + 1
         return {
-            device_id: (f"{name} ({device_id})" if counts.get(name, 0) > 1 else name)
-            for device_id, name in raw_choices
+            device_id: (f"{label} ({device_id})" if counts.get(label, 0) > 1 else label)
+            for device_id, label in raw_choices
         }
 
-    async def async_step_fks_sv_room_temperature(
+    def _selected_room_temperature_device(self) -> dict[str, Any] | None:
+        if not self._pending_room_temperature_device_id:
+            return None
+        return self._room_temperature_devices().get(self._pending_room_temperature_device_id)
+
+    async def async_step_room_temperature_assignment(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select one physical FKS-SV from this gateway entry."""
-        choices = self._fks_sv_choices()
+        """Select a compatible physical climate actuator."""
+        choices = self._room_temperature_choices()
         if not choices:
             return self.async_show_form(
-                step_id="fks_sv_room_temperature",
+                step_id="room_temperature_assignment",
                 data_schema=vol.Schema({}),
-                errors={"base": "no_fks_sv_devices"},
+                errors={"base": "no_room_temperature_devices"},
             )
 
         if user_input is not None:
-            selected = normalize_enocean_id(user_input.get(CONF_FKS_SV_DEVICE_ID))
+            selected = normalize_enocean_id(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID))
             if selected not in choices:
                 return self.async_show_form(
-                    step_id="fks_sv_room_temperature",
+                    step_id="room_temperature_assignment",
                     data_schema=vol.Schema(
-                        {vol.Required(CONF_FKS_SV_DEVICE_ID): vol.In(choices)}
+                        {vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID): vol.In(choices)}
                     ),
-                    errors={CONF_FKS_SV_DEVICE_ID: "missing_fks_sv"},
+                    errors={CONF_ROOM_TEMPERATURE_DEVICE_ID: "missing_room_temperature_device"},
                 )
-            self._pending_fks_sv_device_id = selected
-            return await self.async_step_fks_sv_room_temperature_source()
+            self._pending_room_temperature_device_id = selected
+            return await self.async_step_room_temperature_source()
 
         default_id = next(iter(choices))
         return self.async_show_form(
-            step_id="fks_sv_room_temperature",
+            step_id="room_temperature_assignment",
             data_schema=vol.Schema(
-                {vol.Required(CONF_FKS_SV_DEVICE_ID, default=default_id): vol.In(choices)}
+                {vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID, default=default_id): vol.In(choices)}
             ),
         )
 
-    async def async_step_fks_sv_room_temperature_source(
+    async def async_step_room_temperature_source(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Choose internal or external temperature source."""
-        if not self._pending_fks_sv_device_id:
-            return await self.async_step_fks_sv_room_temperature()
+        """Choose native or external temperature source."""
+        device = self._selected_room_temperature_device()
+        if device is None:
+            return await self.async_step_room_temperature_assignment()
+        kind = room_temperature_device_kind(device)
 
         if user_input is not None:
-            source = str(user_input.get(CONF_FKS_SV_TEMPERATURE_SOURCE) or "").strip().lower()
-            if source == FKS_SV_TEMPERATURE_SOURCE_INTERNAL:
-                options = set_fks_sv_override(
+            source = str(user_input.get(CONF_ROOM_TEMPERATURE_SOURCE) or "").strip().lower()
+            if source == ROOM_TEMPERATURE_SOURCE_NATIVE:
+                options = set_room_temperature_override(
                     self.config_entry.options,
-                    self._pending_fks_sv_device_id,
-                    FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
+                    self._pending_room_temperature_device_id,
+                    ROOM_TEMPERATURE_SOURCE_NATIVE,
                 )
                 return self.async_create_entry(title="", data=options)
-            if source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL:
-                return await self.async_step_fks_sv_room_temperature_entity()
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                return await self.async_step_room_temperature_entity()
             return self.async_show_form(
-                step_id="fks_sv_room_temperature_source",
+                step_id="room_temperature_source",
                 data_schema=vol.Schema(
                     {
-                        vol.Required(CONF_FKS_SV_TEMPERATURE_SOURCE): vol.In(_temperature_source_choices(self.hass))
+                        vol.Required(CONF_ROOM_TEMPERATURE_SOURCE): vol.In(
+                            _temperature_source_choices(self.hass, kind)
+                        )
                     }
                 ),
-                errors={CONF_FKS_SV_TEMPERATURE_SOURCE: "invalid_temperature_source"},
+                errors={CONF_ROOM_TEMPERATURE_SOURCE: "invalid_temperature_source"},
             )
 
-        current_source = FKS_SV_TEMPERATURE_SOURCE_INTERNAL
-        devices = self._current_data().get(CONF_DEVICES) or []
-        current_device = next(
-            (
-                device for device in devices
-                if is_fks_sv_device(device)
-                and normalize_enocean_id(device.get("id")) == self._pending_fks_sv_device_id
-            ),
-            None,
+        current_source, _entity_id, _origin = resolve_room_temperature_config(
+            device, self.config_entry.options
         )
-        if current_device is not None:
-            current_source, _entity_id, _origin = resolve_fks_sv_temperature_config(
-                current_device, self.config_entry.options
-            )
-
         return self.async_show_form(
-            step_id="fks_sv_room_temperature_source",
+            step_id="room_temperature_source",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_FKS_SV_TEMPERATURE_SOURCE,
+                        CONF_ROOM_TEMPERATURE_SOURCE,
                         default=current_source,
-                    ): vol.In(_temperature_source_choices(self.hass))
+                    ): vol.In(_temperature_source_choices(self.hass, kind))
                 }
             ),
         )
 
-    async def async_step_fks_sv_room_temperature_entity(
+    async def async_step_room_temperature_entity(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select one HA temperature sensor for the chosen physical FKS-SV."""
-        if not self._pending_fks_sv_device_id:
-            return await self.async_step_fks_sv_room_temperature()
+        """Select one Home Assistant temperature sensor for the chosen actuator."""
+        device = self._selected_room_temperature_device()
+        if device is None:
+            return await self.async_step_room_temperature_assignment()
 
         errors: dict[str, str] = {}
         default_entity = ""
-        devices = self._current_data().get(CONF_DEVICES) or []
-        current_device = next(
-            (
-                device for device in devices
-                if is_fks_sv_device(device)
-                and normalize_enocean_id(device.get("id")) == self._pending_fks_sv_device_id
-            ),
-            None,
+        source, entity_id, _origin = resolve_room_temperature_config(
+            device, self.config_entry.options
         )
-        if current_device is not None:
-            source, entity_id, _origin = resolve_fks_sv_temperature_config(
-                current_device, self.config_entry.options
-            )
-            if source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
-                default_entity = entity_id
+        if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
+            default_entity = entity_id
 
         if user_input is not None:
-            entity_id = str(
-                user_input.get(CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY) or ""
-            ).strip()
+            entity_id = str(user_input.get(CONF_EXTERNAL_TEMPERATURE_ENTITY) or "").strip()
             if not _is_temperature_entity_compatible(self.hass, entity_id):
-                errors[CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
+                errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
             else:
-                options = set_fks_sv_override(
+                options = set_room_temperature_override(
                     self.config_entry.options,
-                    self._pending_fks_sv_device_id,
-                    FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+                    self._pending_room_temperature_device_id,
+                    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
                     entity_id,
                 )
                 return self.async_create_entry(title="", data=options)
 
         key = (
-            vol.Required(
-                CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY,
-                default=default_entity,
-            )
+            vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY, default=default_entity)
             if default_entity
-            else vol.Required(CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY)
+            else vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY)
         )
         return self.async_show_form(
-            step_id="fks_sv_room_temperature_entity",
+            step_id="room_temperature_entity",
             data_schema=vol.Schema({key: _temperature_entity_selector()}),
             errors=errors,
         )
