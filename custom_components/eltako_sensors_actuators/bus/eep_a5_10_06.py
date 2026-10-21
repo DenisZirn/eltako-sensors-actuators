@@ -59,6 +59,28 @@ def _priority_byte(priority: str | int | None) -> int:
     return 0x0E
 
 
+def encode_a5_10_06_room_control_data(
+    *,
+    target_temperature: float | int | None = None,
+    current_temperature: float | int | None = None,
+    hvac_mode: str | None = "heat",
+    priority: str | int | None = None,
+) -> bytes:
+    """Return DB3..DB0 for an ELTAKO A5-10-06 controller telegram.
+
+    current_temperature=None preserves the established actuator/native
+    room-sensor path (DB1=0x00 / 40 C protocol value).
+    """
+    target_byte = _temp_to_byte(target_temperature, default=20.0)
+    effective_current = 40.0 if current_temperature is None else current_temperature
+    current_byte = _current_temp_to_byte(effective_current)
+    return bytes([
+        _mode_byte(hvac_mode),
+        target_byte,
+        current_byte,
+        _priority_byte(priority),
+    ])
+
 def build_a5_10_06_room_control(
     sender_id: str,
     *,
@@ -75,16 +97,12 @@ def build_a5_10_06_room_control(
     the physical room sensor learned in function group 1 remains authoritative.
     """
     address = parse_address(sender_id)
-    target_byte = _temp_to_byte(target_temperature, default=20.0)
-    if current_temperature is None:
-        current_temperature = 40.0
-    current_byte = _current_temp_to_byte(current_temperature)
-    data = bytes([
-        _mode_byte(hvac_mode),
-        target_byte,
-        current_byte,
-        _priority_byte(priority),
-    ])
+    data = encode_a5_10_06_room_control_data(
+        target_temperature=target_temperature,
+        current_temperature=current_temperature,
+        hvac_mode=hvac_mode,
+        priority=priority,
+    )
     return build_regular_4bs(address, data, status=0x80, outgoing=True)
 
 
