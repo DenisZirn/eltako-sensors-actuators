@@ -531,13 +531,36 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._room_temperature_menu_targets: dict[str, str] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        # Repair the transient "__back__" marker that an earlier v0.1.164 test
+        # build could accidentally persist as the gateway port.
+        if str(self.config_entry.options.get(CONF_PORT, "")) == _BACK:
+            repaired_options = dict(self.config_entry.options)
+            repaired_options.pop(CONF_PORT, None)
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                options=repaired_options,
+            )
+
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
+        # Supply explicit labels as a fallback as well as keeping translation
+        # entries in strings/de/en. This prevents an empty options menu when HA
+        # still has a stale translation cache from an earlier test build.
         return self.async_show_menu(
             step_id="init",
-            menu_options=["connection", "yaml", "room_temperature_assignment", "diagnostics"],
+            menu_options={
+                "connection": "Gateway / seriellen Anschluss ändern" if is_de else "Change gateway / serial connection",
+                "yaml": "EEDTOY YAML importieren oder ersetzen" if is_de else "Import or replace EEDTOY YAML",
+                "room_temperature_assignment": "Raumtemperatursensor zuweisen" if is_de else "Assign room temperature sensor",
+                "diagnostics": "Funk / Bus Diagnose" if is_de else "Radio / bus diagnostics",
+            },
         )
 
     def _current_data(self) -> dict[str, Any]:
-        return {**self.config_entry.data, **self.config_entry.options}
+        options = dict(self.config_entry.options)
+        if str(options.get(CONF_PORT, "")) == _BACK:
+            options.pop(CONF_PORT, None)
+        return {**self.config_entry.data, **options}
 
     def _merged_options(self, updates: dict[str, Any]) -> dict[str, Any]:
         current_options = dict(self.config_entry.options)
