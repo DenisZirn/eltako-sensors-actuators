@@ -146,6 +146,7 @@ def room_temperature_overrides(options: dict[str, Any] | None) -> dict[str, dict
             continue
         source = str(
             value.get(CONF_ROOM_TEMPERATURE_SOURCE)
+            or value.get("fks_sv_temperature_source")
             or value.get(CONF_FKS_SV_TEMPERATURE_SOURCE)
             or ""
         ).strip().lower()
@@ -154,6 +155,7 @@ def room_temperature_overrides(options: dict[str, Any] | None) -> dict[str, dict
         item = {CONF_ROOM_TEMPERATURE_SOURCE: source}
         entity_id = str(
             value.get(CONF_EXTERNAL_TEMPERATURE_ENTITY)
+            or value.get("fks_sv_external_temperature_entity")
             or value.get(CONF_FKS_SV_EXTERNAL_TEMPERATURE_ENTITY)
             or ""
         ).strip()
