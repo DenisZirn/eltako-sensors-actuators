@@ -1535,33 +1535,36 @@ class EltakoGateway:
                 teach_message = build_a5_20_01_teach_in_response(sender_id, query_data, status=status)
                 teach_frame = await self._async_send_esp2_message(teach_message)
 
-                # The valve is still awake after the teach-in response. Send the
-                # actual setpoint in the same receive window so it can start the
-                # reference run and immediately adopt the configured room value.
-                await asyncio.sleep(0.05)
-                if str(hvac_mode).lower().endswith("off") or str(hvac_mode).lower() == "off":
-                    control_message = build_a5_20_01_valve_position(
-                        sender_id,
-                        valve_position=0,
-                        room_temperature=room_temperature,
-                        status=status,
-                    )
-                else:
-                    control_message = build_a5_20_01_temperature_setpoint(
-                        sender_id,
-                        target_temperature=target_temperature,
-                        room_temperature=room_temperature,
-                        summer_mode=bool(_device_raw_option(device, "summer_mode", False)),
-                        status=status,
-                    )
-                control_frame = await self._async_send_esp2_message(control_message)
+                # The teach-in itself must remain possible even if no valid room
+                # temperature is currently available. Never encode missing room
+                # temperature as DB2=0x00 (40 °C). In that case send only the
+                # teach-in response and wait for a later regular receive window.
+                control_frame = None
+                if room_temperature is not None:
+                    await asyncio.sleep(0.05)
+                    if str(hvac_mode).lower().endswith("off") or str(hvac_mode).lower() == "off":
+                        control_message = build_a5_20_01_valve_position(
+                            sender_id,
+                            valve_position=0,
+                            room_temperature=room_temperature,
+                            status=status,
+                        )
+                    else:
+                        control_message = build_a5_20_01_temperature_setpoint(
+                            sender_id,
+                            target_temperature=target_temperature,
+                            room_temperature=room_temperature,
+                            summer_mode=bool(_device_raw_option(device, "summer_mode", False)),
+                            status=status,
+                        )
+                    control_frame = await self._async_send_esp2_message(control_message)
                 self._last_send_error = None
                 _LOGGER.info(
                     "FKS-SV teach-in completed: device_id=%s sender_id=%s teach_frame=%s control_frame=%s",
                     device.get("id"),
                     sender_id,
                     teach_frame.hex("-"),
-                    control_frame.hex("-"),
+                    control_frame.hex("-") if control_frame is not None else "skipped-no-valid-room-temperature",
                 )
                 return True
             except Exception as err:
@@ -2773,12 +2776,25 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             if command == "set_hvac_mode":
                 hvac_mode = str(kwargs.get("hvac_mode") or "heat")
                 raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+                current_temperature = kwargs.get("current_temperature")
                 if hvac_mode.endswith("off") or hvac_mode == "off":
-                    return build_a5_20_01_valve_position(sender_id, valve_position=0)
+                    return build_a5_20_01_valve_position(
+                        sender_id,
+                        valve_position=0,
+                        room_temperature=current_temperature,
+                    )
                 target = raw.get("target_temperature") or raw.get("min_target_temperature") or 20
-                return build_a5_20_01_temperature_setpoint(sender_id, target_temperature=target)
+                return build_a5_20_01_temperature_setpoint(
+                    sender_id,
+                    target_temperature=target,
+                    room_temperature=current_temperature,
+                )
             if command == "set_valve_position":
-                return build_a5_20_01_valve_position(sender_id, valve_position=kwargs.get("valve_position", 0))
+                return build_a5_20_01_valve_position(
+                    sender_id,
+                    valve_position=kwargs.get("valve_position", 0),
+                    room_temperature=kwargs.get("current_temperature"),
+                )
 
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
             raise UnsupportedEltakoCommand(f"Climate sender.eep {sender_eep} wird noch nicht unterstuetzt")
@@ -2786,9 +2802,10 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # The physical room sensor learned in the actuator remains
-                # authoritative. No synthetic room temperature is transmitted.
-                current_temperature=None,
+                # None preserves the established physical/native room-sensor
+                # path. A numeric value is supplied only for an explicit
+                # Home Assistant room-temperature assignment.
+                current_temperature=kwargs.get("current_temperature"),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
             )

@@ -28,7 +28,8 @@
         "menu_options": {
           "connection": "Change gateway / serial connection",
           "yaml": "Import or replace EEDTOY YAML",
-          "diagnostics": "Radio / bus diagnostics"
+          "diagnostics": "Radio / bus diagnostics",
+          "room_temperature_assignment": "Assign room temperature sensor"
         }
       },
       "connection": {
@@ -44,7 +45,8 @@
         "description": "Choose exactly one import source. Manual YAML code and file paths are handled in separate dialogs so that a previously saved path can no longer block text input.",
         "menu_options": {
           "yaml_text": "Paste YAML code manually",
-          "yaml_file": "Use a YAML file from the configuration directory"
+          "yaml_file": "Use a YAML file from the configuration directory",
+          "init": "← Back to main menu"
         }
       },
       "yaml_gateway": {
@@ -74,6 +76,27 @@
         "data": {
           "diagnostics_enabled": "Show diagnostics"
         }
+      },
+      "room_temperature_assignment": {
+        "title": "Assign room temperature sensor",
+        "description": "Select the heating actuator that should receive a room-temperature source. Supported devices are FKS-SV and A5-10-06 FHK14/F4HK14/FAE14 actuators. The mapping is stored persistently by physical EnOcean ID.",
+        "data": {
+          "room_temperature_device_id": "Heating actuator"
+        }
+      },
+      "room_temperature_source": {
+        "title": "Select temperature source",
+        "description": "Current assignment: {current_assignment}\n\nChoose the existing device/native or learned temperature source, or an external Home Assistant room-temperature sensor.",
+        "data": {
+          "room_temperature_source": "Temperature source"
+        }
+      },
+      "room_temperature_entity": {
+        "title": "Select external room temperature sensor",
+        "description": "Current assignment: {current_assignment}\n\nSelect a Home Assistant sensor entity with a temperature value. Suitable °C/°F sensors are supported regardless of the providing integration.",
+        "data": {
+          "external_temperature_entity": "External room temperature sensor"
+        }
       }
     },
     "error": {
@@ -86,7 +109,11 @@
       "yaml_source_required": "Please specify a YAML file path or paste the EEDTOY YAML export into the text field.",
       "yaml_file_required": "Please specify a YAML file path.",
       "sender_id_collision": "At least one FKS-SV sender.id is already assigned to another device or controller. Each independently controlled FKS-SV requires its own free sender ID.",
-      "invalid_yaml_tabs": "The YAML code contains invalid tab characters in the indentation. Use spaces for YAML indentation."
+      "invalid_yaml_tabs": "The YAML code contains invalid tab characters in the indentation. Use spaces for YAML indentation.",
+      "invalid_temperature_source": "Please select a valid temperature source.",
+      "invalid_temperature_entity": "The selected entity is not a suitable temperature sensor. Use a sensor with temperature device class, °C/°F unit, or a valid numeric Celsius value.",
+      "no_room_temperature_devices": "No supported heating actuator for room-temperature assignment was found in this gateway configuration.",
+      "missing_room_temperature_device": "Please select a valid heating actuator."
     }
   },
   "entity": {

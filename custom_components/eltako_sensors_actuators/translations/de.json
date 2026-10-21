@@ -28,7 +28,8 @@
         "menu_options": {
           "connection": "Gateway / seriellen Anschluss ändern",
           "yaml": "EEDTOY YAML importieren oder ersetzen",
-          "diagnostics": "Funk / Bus Diagnose"
+          "diagnostics": "Funk / Bus Diagnose",
+          "room_temperature_assignment": "Raumtemperatursensor zuweisen"
         }
       },
       "connection": {
@@ -44,7 +45,8 @@
         "description": "Wähle genau eine Importquelle. Manueller YAML-Code und Dateipfad werden in getrennten Dialogen verarbeitet, damit ein alter gespeicherter Pfad die Texteingabe nicht mehr blockieren kann.",
         "menu_options": {
           "yaml_text": "YAML-Code manuell einfügen",
-          "yaml_file": "YAML-Datei aus dem Konfigurationsordner verwenden"
+          "yaml_file": "YAML-Datei aus dem Konfigurationsordner verwenden",
+          "init": "← Zurück zum Hauptmenü"
         }
       },
       "yaml_gateway": {
@@ -74,6 +76,27 @@
         "data": {
           "diagnostics_enabled": "Diagnose anzeigen"
         }
+      },
+      "room_temperature_assignment": {
+        "title": "Raumtemperatursensor zuweisen",
+        "description": "Wähle den Heizungsaktor aus, dem eine Raumtemperaturquelle zugeordnet werden soll. Unterstützt werden FKS-SV sowie FHK14/F4HK14 und FAE14-Aktoren mit A5-10-06. Die Zuordnung erfolgt dauerhaft über die physische EnOcean-ID.",
+        "data": {
+          "room_temperature_device_id": "Heizungsaktor"
+        }
+      },
+      "room_temperature_source": {
+        "title": "Temperaturquelle auswählen",
+        "description": "Aktuelle Zuordnung: {current_assignment}\n\nWähle die bestehende geräteeigene bzw. eingelernte Temperaturquelle oder einen externen Home-Assistant-Raumtemperatursensor.",
+        "data": {
+          "room_temperature_source": "Temperaturquelle"
+        }
+      },
+      "room_temperature_entity": {
+        "title": "Externen Raumtemperatursensor auswählen",
+        "description": "Aktuelle Zuordnung: {current_assignment}\n\nWähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Geeignete °C/°F-Sensoren werden unabhängig von der verwendeten Integration unterstützt.",
+        "data": {
+          "external_temperature_entity": "Externer Raumtemperatursensor"
+        }
       }
     },
     "error": {
@@ -86,7 +109,11 @@
       "yaml_source_required": "Bitte einen YAML-Dateipfad angeben oder den EEDTOY YAML-Export in das Textfeld einfuegen.",
       "yaml_file_required": "Bitte einen YAML-Dateipfad angeben.",
       "sender_id_collision": "Mindestens eine FKS-SV sender.id ist bereits einem anderen Gerät oder Regler zugeordnet. Jeder unabhängig geregelte FKS-SV benötigt eine eigene freie Sender-ID.",
-      "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung."
+      "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung.",
+      "invalid_temperature_source": "Bitte eine gültige Temperaturquelle auswählen.",
+      "invalid_temperature_entity": "Die ausgewählte Entity ist kein geeigneter Temperatursensor. Verwende einen Sensor mit Temperatur-Device-Class, °C/°F-Einheit oder einen gültigen numerischen Celsiuswert.",
+      "no_room_temperature_devices": "In dieser Gateway-Konfiguration wurde kein unterstützter Heizungsaktor für die Raumtemperaturzuweisung gefunden.",
+      "missing_room_temperature_device": "Bitte einen gültigen Heizungsaktor auswählen."
     }
   },
   "entity": {

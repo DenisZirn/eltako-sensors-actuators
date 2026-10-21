@@ -1,0 +1,180 @@
+name: Validate v0.1.164 room-temperature assignment test
+
+on:
+  push:
+    branches:
+      - test/v0.1.164-fks-sv-room-temperature
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.2"
+
+      - name: Compile integration Python
+        run: |
+          python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("custom_components/eltako_sensors_actuators")
+          for path in root.rglob("*.json"):
+              json.loads(path.read_text(encoding="utf-8"))
+              print("OK", path)
+          PY
+
+      - name: Run room-temperature assignment tests
+        run: |
+          python tests/test_fks_sv_room_temperature.py
+
+      - name: Validate Home Assistant 2026.10 API imports
+        run: |
+          python -m pip install --disable-pip-version-check --quiet "homeassistant==2026.10.1" pyserial
+          python - <<'PY'
+          from custom_components.eltako_sensors_actuators import config_flow, climate
+          from custom_components.eltako_sensors_actuators.room_temperature import (
+              is_room_temperature_assignable_device,
+              temperature_to_celsius,
+          )
+
+          selector_obj = config_flow._temperature_entity_selector()
+          assert selector_obj is not str
+          assert config_flow.EltakoSensorsActuatorsOptionsFlow is not None
+          assert climate.EltakoClimate is not None
+          assert temperature_to_celsius(68, "°F") == 20.0
+          assert is_room_temperature_assignable_device({
+              "platform": "climate",
+              "id": "01-02-03-04",
+              "eep": "A5-10-06",
+              "device_type": "FHK14",
+          })
+          print("Home Assistant 2026.10.1 imports, selector API and generalized assignment OK")
+          PY
+
+      - name: Guard sender-ID and sleeping-valve paths against v0.1.163
+        run: |
+          python - <<'PY'
+          import ast
+          import subprocess
+          from pathlib import Path
+
+          def git_file(ref, path):
+              return subprocess.check_output(
+                  ["git", "show", f"{ref}:{path}"], text=True
+              )
+
+          def function_dump(source, name):
+              tree = ast.parse(source)
+              matches = [
+                  node for node in ast.walk(tree)
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.name == name
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected one {name}, found {len(matches)}")
+              return ast.dump(matches[0], include_attributes=False)
+
+          gateway_path = "custom_components/eltako_sensors_actuators/gateway.py"
+          climate_path = "custom_components/eltako_sensors_actuators/climate.py"
+          current_gateway = Path(gateway_path).read_text(encoding="utf-8")
+          old_gateway = git_file("v0.1.163", gateway_path)
+          for name in (
+              "_fks_sv_effective_sender_id",
+              "_get_sender_id",
+              "_effective_sender_id_for_gateway",
+          ):
+              if function_dump(current_gateway, name) != function_dump(old_gateway, name):
+                  raise SystemExit(f"Sender-ID function changed unexpectedly: {name}")
+
+          current_climate = Path(climate_path).read_text(encoding="utf-8")
+          set_temperature = function_dump(current_climate, "async_set_temperature")
+          source = current_climate
+          function_text = source[
+              source.index("    async def async_set_temperature"):
+              source.index("    async def async_will_remove_from_hass")
+          ]
+          if "if self._is_fks_sv or self._is_fks_hora:" not in function_text:
+              raise SystemExit("FKS-SV sleeping-valve guard is missing")
+          if function_text.index("if self._is_fks_sv or self._is_fks_hora:") > function_text.index(
+              "async_send_actuator_command"
+          ):
+              raise SystemExit("FKS-SV sleeping-valve guard no longer precedes direct send")
+          print("Sender-ID paths unchanged and FKS-SV sleeping-valve guard preserved")
+          PY
+
+      - name: Guard scope against v0.1.163
+        run: |
+          python - <<'PY'
+          import subprocess
+          allowed = {
+              ".github/workflows/validate-v0.1.164-fks-sv.yml",
+              "custom_components/eltako_sensors_actuators/__init__.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_10_06.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
+              "custom_components/eltako_sensors_actuators/climate.py",
+              "custom_components/eltako_sensors_actuators/config_flow.py",
+              "custom_components/eltako_sensors_actuators/const.py",
+              "custom_components/eltako_sensors_actuators/fks_sv_temperature.py",
+              "custom_components/eltako_sensors_actuators/room_temperature.py",
+              "custom_components/eltako_sensors_actuators/gateway.py",
+              "custom_components/eltako_sensors_actuators/frontend/diagnostics-panel.js",
+              "custom_components/eltako_sensors_actuators/manifest.json",
+              "custom_components/eltako_sensors_actuators/strings.json",
+              "custom_components/eltako_sensors_actuators/translations/de.json",
+              "custom_components/eltako_sensors_actuators/translations/en.json",
+              "tests/test_fks_sv_room_temperature.py",
+          }
+          changed = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only", "v0.1.163...HEAD"],
+                  text=True,
+              ).splitlines()
+          )
+          unexpected = changed - allowed
+          if unexpected:
+              raise SystemExit(f"Unexpected files changed vs v0.1.163: {sorted(unexpected)}")
+          required = {
+              "custom_components/eltako_sensors_actuators/climate.py",
+              "custom_components/eltako_sensors_actuators/config_flow.py",
+              "custom_components/eltako_sensors_actuators/room_temperature.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_10_06.py",
+              "custom_components/eltako_sensors_actuators/bus/eep_a5_20_01.py",
+          }
+          missing = required - changed
+          if missing:
+              raise SystemExit(f"Required files are not changed: {sorted(missing)}")
+          print("Changed-file scope OK:", sorted(changed))
+          PY
+
+      - name: Build installable v0.1.164 test ZIP
+        run: |
+          rm -rf dist
+          mkdir -p dist/custom_components
+          cp -a custom_components/eltako_sensors_actuators dist/custom_components/
+          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
+          find dist -type f -name '*.pyc' -delete
+          cd dist
+          zip -qr ../ELTAKO_Sensors_Actuators_v0.1.164-TEST.zip custom_components
+
+      - name: Upload v0.1.164 test ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_v0.1.164-TEST
+          path: ELTAKO_Sensors_Actuators_v0.1.164-TEST.zip
+          if-no-files-found: error
+          retention-days: 30

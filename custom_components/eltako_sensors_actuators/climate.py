@@ -22,6 +22,8 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 
 try:
     from homeassistant.components.climate import ClimateEntityFeature
@@ -31,8 +33,26 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
     _SUPPORT_PRESET_MODE = 16
 
-from .const import CONF_DEVICES, DOMAIN
+from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data
+from .bus.eep_a5_20_01 import (
+    encode_a5_20_01_temperature_setpoint_data,
+    encode_a5_20_01_valve_position_data,
+)
+from .const import (
+    CONF_DEVICES,
+    DOMAIN,
+    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+    ROOM_TEMPERATURE_SOURCE_NATIVE,
+    SIGNAL_ROOM_TEMPERATURE_UPDATED,
+)
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
+from .room_temperature import (
+    is_room_temperature_assignable_device,
+    resolve_room_temperature_config,
+    room_temperature_device_kind,
+    select_numeric_room_temperature,
+    temperature_to_celsius,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,7 +132,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device)
         self._eep = str(device.get("eep") or "").strip().upper()
+        # Preserve the v0.1.163 A5-20-01 protocol path. The narrower flag is
+        # used only for the new FKS-SV room-temperature UI feature so other
+        # A5-20-01 climate profiles are not changed by this test version.
         self._is_fks_sv = self._eep == "A5-20-01"
+        self._has_room_temperature_assignment = is_room_temperature_assignable_device(device)
+        self._room_temperature_device_kind = room_temperature_device_kind(device)
         self._is_fks_hora = self._eep == "A5-20-04" and _futh55ed_mode(device) == "fks_hora"
         # ELTAKO setpoints and feedback are natively Celsius. Keep this explicit
         # on every instance so no legacy YAML temperature_unit value can replace it.
@@ -175,9 +200,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             )
 
         self._fhk_heater_mode = "normal"
+        raw_device = device.get("raw") if isinstance(device.get("raw"), dict) else {}
         model_text = " ".join(
-            str(device.get(key) or "")
-            for key in ("type", "model", "name", "description")
+            str(value or "")
+            for value in (
+                device.get("type"),
+                device.get("model"),
+                device.get("name"),
+                device.get("description"),
+                device.get("device_type"),
+                device.get("eltako"),
+                raw_device.get("device_type"),
+                raw_device.get("eltako"),
+            )
         ).upper()
         self._is_fhk14 = (
             self._eep == "A5-10-06"
@@ -204,48 +239,287 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._last_teach_in: str | None = None
         self._last_error: str | None = None
         self._successful_replies = 0
+
+        # Shared room-temperature state. For FKS-SV, _internal_temperature is
+        # the valve's own sensor. For A5-10-06 heating actuators it stores only
+        # a genuine actuator-reported temperature; the established native/
+        # learned room-sensor path itself is represented by current_temperature=None
+        # in outgoing controller telegrams.
+        self._internal_temperature: float | None = (
+            self._current_temperature
+            if self._room_temperature_device_kind == "a5_10_06"
+            and self._has_genuine_current_temperature
+            else None
+        )
+        self._external_temperature: float | None = None
+        self._used_room_temperature: float | None = None
+        self._configured_temperature_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+        self._actual_temperature_source: str | None = None
+        self._temperature_source_status = "error"
+        self._temperature_config_origin = "default"
+        self._external_temperature_entity: str | None = None
+        self._last_sent_room_temperature: float | None = None
+        self._last_sent_target_temperature: float | None = None
+        self._last_controller_telegram: str | None = None
+        self._last_controller_response: str | None = None
+
         self._control_reply_task = None
         self._teach_in_reply_task = None
+        self._room_temperature_push_task = None
         self._remove_listener = gateway.register_listener(self._handle_telegram)
+        self._remove_temperature_options_listener = None
+        self._remove_external_temperature_listener = None
 
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        if last_state is None:
-            return
-        attrs = last_state.attributes or {}
-        try:
-            restored_target = attrs.get("temperature")
-            if restored_target is not None:
-                value = float(restored_target)
-                if self._attr_min_temp <= value <= self._attr_max_temp:
-                    self._target_temperature = value
-        except (TypeError, ValueError):
-            pass
-        try:
-            restored_current = attrs.get("current_temperature")
-            restored_genuine = bool(attrs.get("genuine_current_temperature", False))
-            if restored_current is not None:
-                if self._is_fhk14 or self._is_fae14lpr:
-                    if restored_genuine:
-                        self._current_temperature = float(restored_current)
-                        self._has_genuine_current_temperature = True
+        if last_state is not None:
+            attrs = last_state.attributes or {}
+            try:
+                restored_target = attrs.get("temperature")
+                if restored_target is not None:
+                    value = float(restored_target)
+                    if self._attr_min_temp <= value <= self._attr_max_temp:
+                        self._target_temperature = value
+            except (TypeError, ValueError):
+                pass
+
+            try:
+                restored_current = attrs.get("current_temperature")
+                restored_genuine = bool(attrs.get("genuine_current_temperature", False))
+                if self._has_room_temperature_assignment:
+                    if self._room_temperature_device_kind == "fks_sv":
+                        restored_native = attrs.get(
+                            "interne_fks_sv_temperatur",
+                            attrs.get("native_raumtemperatur"),
+                        )
                     else:
-                        self._current_temperature = 40.0 if self._is_fhk14 else 0.0
-                        self._has_genuine_current_temperature = False
-                else:
-                    self._current_temperature = float(restored_current)
-        except (TypeError, ValueError):
-            pass
-        restored_hvac = str(last_state.state or "").lower()
-        if restored_hvac in {str(HVACMode.HEAT), "heat"}:
-            self._attr_hvac_mode = HVACMode.HEAT
-        elif restored_hvac in {str(HVACMode.OFF), "off"}:
-            self._attr_hvac_mode = HVACMode.OFF
-        restored_preset = attrs.get("preset_mode")
-        if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
-            self._attr_preset_mode = restored_preset
+                        restored_native = attrs.get("interne_aktor_temperatur")
+                        if restored_native is None and restored_genuine:
+                            restored_native = restored_current
+                    self._internal_temperature = temperature_to_celsius(
+                        restored_native, "°C"
+                    )
+                    if self._room_temperature_device_kind == "a5_10_06":
+                        self._has_genuine_current_temperature = bool(
+                            restored_genuine and self._internal_temperature is not None
+                        )
+                elif restored_current is not None:
+                    if self._is_fhk14 or self._is_fae14lpr:
+                        if restored_genuine:
+                            self._current_temperature = float(restored_current)
+                            self._has_genuine_current_temperature = True
+                        else:
+                            self._current_temperature = 40.0 if self._is_fhk14 else 0.0
+                            self._has_genuine_current_temperature = False
+                    else:
+                        self._current_temperature = float(restored_current)
+            except (TypeError, ValueError):
+                pass
+
+            restored_hvac = str(last_state.state or "").lower()
+            if restored_hvac in {str(HVACMode.HEAT), "heat"}:
+                self._attr_hvac_mode = HVACMode.HEAT
+            elif restored_hvac in {str(HVACMode.OFF), "off"}:
+                self._attr_hvac_mode = HVACMode.OFF
+            restored_preset = attrs.get("preset_mode")
+            if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
+                self._attr_preset_mode = restored_preset
+
+            if self._has_room_temperature_assignment:
+                self._last_sent_room_temperature = temperature_to_celsius(
+                    attrs.get("zuletzt_gesendete_isttemperatur"), "°C"
+                )
+                try:
+                    restored_last_target = attrs.get("zuletzt_gesendete_solltemperatur")
+                    if restored_last_target is not None:
+                        self._last_sent_target_temperature = float(restored_last_target)
+                except (TypeError, ValueError):
+                    pass
+                self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
+                self._last_controller_response = attrs.get("letzte_controllerantwort")
+
+        if self._has_room_temperature_assignment:
+            self._remove_temperature_options_listener = async_dispatcher_connect(
+                self.hass,
+                SIGNAL_ROOM_TEMPERATURE_UPDATED,
+                self._handle_temperature_options_updated,
+            )
+            self._rebind_external_temperature_listener()
+            self._refresh_room_temperature_state()
+
+    def _entry_options(self) -> dict[str, Any]:
+        entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
+        return dict(entry.options) if entry is not None else {}
+
+    def _read_external_temperature(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        attributes = getattr(state, "attributes", {}) or {}
+        return temperature_to_celsius(
+            getattr(state, "state", None),
+            attributes.get("unit_of_measurement"),
+        )
+
+    def _native_a5_10_06_display_temperature(self) -> float | None:
+        internal = temperature_to_celsius(self._internal_temperature, "°C")
+        if internal is not None and self._has_genuine_current_temperature:
+            return internal
+        if self._is_fhk14:
+            return 40.0
+        if self._is_fae14lpr:
+            return 0.0
+        return internal
+
+    def _refresh_room_temperature_state(self) -> float | None:
+        """Resolve configured source, fallback and displayed/current temperature."""
+        if not self._has_room_temperature_assignment:
+            return self._current_temperature
+
+        source, entity_id, origin = resolve_room_temperature_config(
+            self.device_config,
+            self._entry_options(),
+        )
+        external = self._read_external_temperature(entity_id)
+        internal = temperature_to_celsius(self._internal_temperature, "°C")
+
+        if self._room_temperature_device_kind == "fks_sv":
+            used, status, actual_source = select_numeric_room_temperature(
+                source,
+                external,
+                internal,
+            )
+            displayed = used
+        else:
+            native_display = self._native_a5_10_06_display_temperature()
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and external is not None:
+                used = external
+                status = "normal"
+                actual_source = ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                displayed = external
+            elif source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                # For A5-10-06, fallback means restoring the established native/
+                # learned sensor path by transmitting current_temperature=None.
+                used = None
+                status = "fallback"
+                actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+                displayed = native_display
+            else:
+                used = None
+                status = "normal"
+                actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+                displayed = native_display
+
+        self._configured_temperature_source = source
+        self._temperature_config_origin = origin
+        self._external_temperature_entity = entity_id
+        self._external_temperature = external
+        self._internal_temperature = internal
+        self._used_room_temperature = used
+        self._temperature_source_status = status
+        self._actual_temperature_source = actual_source
+        self._current_temperature = displayed
+        return used if self._room_temperature_device_kind == "fks_sv" else displayed
+
+    def _a5_10_06_outgoing_room_temperature(self) -> float | None:
+        """Return numeric external temperature or None for native actuator control."""
+        if self._room_temperature_device_kind != "a5_10_06":
+            return None
+        self._refresh_room_temperature_state()
+        if (
+            self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+            and self._external_temperature is not None
+        ):
+            return self._external_temperature
+        return None
+
+    def _schedule_a5_10_06_room_temperature_push(self) -> None:
+        if self._room_temperature_device_kind != "a5_10_06":
+            return
+        if self._room_temperature_push_task is None or self._room_temperature_push_task.done():
+            self._room_temperature_push_task = self.gateway.hass.async_create_task(
+                self._async_push_a5_10_06_room_temperature()
+            )
+
+    async def _async_push_a5_10_06_room_temperature(self) -> None:
+        """Push source changes immediately to mains-powered A5-10-06 actuators."""
+        current_temperature = self._a5_10_06_outgoing_room_temperature()
+        target = float(self._target_temperature or 20.0)
+        heater_mode = self._fhk_heater_mode
+        ok = await self.gateway.async_send_actuator_command(
+            self.device_config,
+            "set_temperature",
+            temperature=target,
+            current_temperature=current_temperature,
+            heater_mode=heater_mode,
+        )
+        if ok:
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            priority = self.device_config.get("priority") or raw.get("priority")
+            data = encode_a5_10_06_room_control_data(
+                target_temperature=target,
+                current_temperature=current_temperature,
+                hvac_mode=heater_mode,
+                priority=priority,
+            )
+            timestamp = _now_iso()
+            self._last_sent_room_temperature = current_temperature
+            self._last_sent_target_temperature = target
+            self._last_controller_telegram = data.hex("-").upper()
+            self._last_controller_response = timestamp
+            self._last_error = None
+        else:
+            self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
+        self.schedule_update_ha_state()
+
+    def _rebind_external_temperature_listener(self) -> None:
+        if self._remove_external_temperature_listener is not None:
+            self._remove_external_temperature_listener()
+            self._remove_external_temperature_listener = None
+
+        if not self._has_room_temperature_assignment:
+            return
+        source, entity_id, _origin = resolve_room_temperature_config(
+            self.device_config,
+            self._entry_options(),
+        )
+        if source != ROOM_TEMPERATURE_SOURCE_EXTERNAL or not entity_id:
+            return
+        self._remove_external_temperature_listener = async_track_state_change_event(
+            self.hass,
+            [entity_id],
+            self._handle_external_temperature_state_event,
+        )
+
+    def _handle_external_temperature_state_event(self, _event) -> None:
+        previous = (
+            self._external_temperature,
+            self._temperature_source_status,
+            self._configured_temperature_source,
+        )
+        self._refresh_room_temperature_state()
+        current = (
+            self._external_temperature,
+            self._temperature_source_status,
+            self._configured_temperature_source,
+        )
+        if current != previous:
+            self._schedule_a5_10_06_room_temperature_push()
+        self.schedule_update_ha_state()
+
+    def _handle_temperature_options_updated(self, entry_id: str) -> None:
+        if entry_id != self.gateway.entry_id or not self._has_room_temperature_assignment:
+            return
+        self._rebind_external_temperature_listener()
+        self._refresh_room_temperature_state()
+        # FKS-SV must wait for the valve's next receive window. A5-10-06
+        # Series-14 actuators are mains powered and can receive the update now.
+        self._schedule_a5_10_06_room_temperature_push()
+        self.schedule_update_ha_state()
 
     @property
     def current_temperature(self):
@@ -295,7 +569,9 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             base.update(
                 {
                     "controller_sender_id": self.device_config.get("sender_id"),
-                    "room_temperature_entity": _device_option(self.device_config, "room_temperature_entity"),
+                    "room_temperature_entity": _device_option(
+                        self.device_config, "room_temperature_entity"
+                    ),
                     "ventilstellung": self._valve_position,
                     "befehl_ausstehend": self._pending_command,
                     "ventil_blockiert": self._actuator_obstructed,
@@ -313,6 +589,52 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     "kommunikationsstatus": "verbunden" if self._last_rx else "Warten auf erstes FKS-SV-Telegramm",
                 }
             )
+        if self._has_room_temperature_assignment:
+            configured_label = (
+                "Extern"
+                if self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                else "Intern"
+                if self._room_temperature_device_kind == "fks_sv"
+                else "Bestehend / eingelernt"
+            )
+            actual_label = (
+                "Extern"
+                if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                else "Intern"
+                if self._room_temperature_device_kind == "fks_sv"
+                and self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_NATIVE
+                else "Bestehend / eingelernt"
+                if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_NATIVE
+                else None
+            )
+            status_label = {
+                "normal": "Normalbetrieb",
+                "fallback": "Fallback",
+                "error": "Fehler",
+            }.get(self._temperature_source_status, "Fehler")
+            base.update(
+                {
+                    "controller_sender_id": self.device_config.get("sender_id"),
+                    "room_temperature_entity": self._external_temperature_entity,
+                    "temperaturquelle_konfiguriert": configured_label,
+                    "temperaturquelle_konfigurationsursprung": self._temperature_config_origin,
+                    "temperaturquelle_tatsaechlich": actual_label,
+                    "externe_temperatur_entity": self._external_temperature_entity,
+                    "aktuelle_externe_raumtemperatur": self._external_temperature,
+                    "native_raumtemperatur": self._internal_temperature,
+                    "verwendete_isttemperatur": self._used_room_temperature,
+                    "zuletzt_gesendete_isttemperatur": self._last_sent_room_temperature,
+                    "zuletzt_gesendete_solltemperatur": self._last_sent_target_temperature,
+                    "letztes_controllertelegramm": self._last_controller_telegram,
+                    "letzte_controllerantwort": self._last_controller_response,
+                    "temperaturquellen_status": status_label,
+                }
+            )
+            if self._room_temperature_device_kind == "fks_sv":
+                base["interne_fks_sv_temperatur"] = self._internal_temperature
+            elif self._room_temperature_device_kind == "a5_10_06":
+                base["interne_aktor_temperatur"] = self._internal_temperature
+
         return base
 
     def _matches_physical_device(self, telegram) -> bool:
@@ -343,12 +665,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if "temperature" in telegram.decoded:
             if self._is_fhk14 or self._is_fae14lpr:
                 # A5-10-06 controller telegrams contain a synthetic DB1 value
-                # (40 °C when no room sensor value is transmitted).  Only a
-                # genuine actuator response from the physical device may update
-                # the displayed current temperature.
+                # (40 °C when no room sensor value is transmitted). Only a
+                # genuine physical actuator response may update the native
+                # temperature retained beside an optional external HA sensor.
                 if self._matches_physical_device(telegram) and bool(telegram.decoded.get("actuator_response")):
-                    self._current_temperature = telegram.decoded["temperature"]
-                    self._has_genuine_current_temperature = True
+                    value = temperature_to_celsius(telegram.decoded["temperature"], "°C")
+                    if self._has_room_temperature_assignment:
+                        self._internal_temperature = value
+                    else:
+                        self._current_temperature = value
+                    self._has_genuine_current_temperature = value is not None
             else:
                 self._current_temperature = telegram.decoded["temperature"]
         if "target_temperature" in telegram.decoded:
@@ -380,6 +706,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 "night_setback": PRESET_SLEEP,
                 "setback": PRESET_ECO,
             }.get(str(heater_mode), self._attr_preset_mode)
+        if self._room_temperature_device_kind == "a5_10_06":
+            self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
 
     def _handle_fks_sv_telegram(self, telegram) -> None:
@@ -416,7 +744,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            self._current_temperature = decoded.get("temperature")
+            if self._has_room_temperature_assignment:
+                self._internal_temperature = temperature_to_celsius(
+                    decoded.get("temperature"), "°C"
+                )
+            else:
+                self._current_temperature = decoded.get("temperature")
         if "valve_position" in decoded:
             try:
                 self._valve_position = int(decoded.get("valve_position"))
@@ -434,6 +767,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if key in decoded:
                 setattr(self, attr, bool(decoded.get(key)))
 
+        self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
         # Every genuine valve telegram opens the receive window. The controller
         # must answer every cycle, even when the HA target did not just change.
@@ -549,48 +883,69 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._pending_command = True
         self.schedule_update_ha_state()
 
-    def _external_room_temperature(self) -> float | None:
+    def _legacy_a5_20_01_room_temperature(self) -> float | None:
+        """Preserve v0.1.163 YAML behavior for non-FKS A5-20-01 profiles."""
         entity_id = _device_option(self.device_config, "room_temperature_entity")
         if entity_id:
             state = self.gateway.hass.states.get(str(entity_id))
             if state is not None:
-                try:
-                    temperature = float(state.state)
-                except (TypeError, ValueError):
-                    temperature = None
-                if temperature is not None:
-                    attributes = getattr(state, "attributes", {}) or {}
-                    unit = str(attributes.get("unit_of_measurement") or "").strip().upper()
-                    if unit in {"°F", "F", "FAHRENHEIT"}:
-                        temperature = (temperature - 32.0) * 5.0 / 9.0
-                    elif 40.0 < temperature <= 104.0:
-                        # Compatibility fallback for older/custom sensors that expose a
-                        # Fahrenheit value without a unit attribute.
-                        temperature = (temperature - 32.0) * 5.0 / 9.0
-                    return max(0.0, min(40.0, temperature))
+                attributes = getattr(state, "attributes", {}) or {}
+                value = temperature_to_celsius(
+                    getattr(state, "state", None),
+                    attributes.get("unit_of_measurement"),
+                )
+                if value is not None:
+                    return value
+        return temperature_to_celsius(self._current_temperature, "°C")
 
-        # A5-20-01 Direction-2 DB2 is always the actual room temperature from
-        # the controller, encoded inversely (255..0 => 0..40 °C). DB2=0x00
-        # therefore means 40 °C; it does NOT select the valve's internal sensor.
-        # If no external HA room sensor is configured, echo the temperature just
-        # reported by the FKS-SV so its internal PI controller receives a valid
-        # actual value together with the HA target setpoint.
-        if self._is_fks_sv and self._current_temperature is not None:
-            try:
-                return max(0.0, min(40.0, float(self._current_temperature)))
-            except (TypeError, ValueError):
-                pass
-        return None
+    def _fks_sv_controller_data(self, room_temperature: float) -> bytes:
+        """Build exactly the DB3..DB0 payload that the gateway will transmit."""
+        hvac = str(self._attr_hvac_mode).lower()
+        if hvac.endswith("off") or hvac == "off":
+            return encode_a5_20_01_valve_position_data(
+                valve_position=0,
+                room_temperature=room_temperature,
+            )
+        return encode_a5_20_01_temperature_setpoint_data(
+            target_temperature=float(self._target_temperature or 20.0),
+            room_temperature=room_temperature,
+            summer_mode=bool(_device_option(self.device_config, "summer_mode", False)),
+        )
+
+    def _mark_missing_fks_sv_room_temperature(self) -> None:
+        self._last_error = (
+            "Keine gueltige Raumtemperatur verfuegbar; "
+            "Controllerantwort aus Sicherheitsgruenden nicht gesendet"
+        )
+        self._pending_command = True
 
     async def _async_reply_fks_sv_control(self) -> None:
+        room_temperature = (
+            self._refresh_room_temperature_state()
+            if self._has_room_temperature_assignment
+            else self._legacy_a5_20_01_room_temperature()
+        )
+        if room_temperature is None:
+            # A5-20-01 DB2=0x00 means 40 °C. Never use it as a missing-value
+            # sentinel; skipping this receive-window reply is safer.
+            self._mark_missing_fks_sv_room_temperature()
+            self.schedule_update_ha_state()
+            return
+
+        controller_data = self._fks_sv_controller_data(room_temperature)
         ok = await self.gateway.async_send_fks_sv_control_response(
             self.device_config,
             target_temperature=float(self._target_temperature or 20.0),
-            room_temperature=self._external_room_temperature(),
+            room_temperature=room_temperature,
             hvac_mode=str(self._attr_hvac_mode),
         )
         if ok:
-            self._last_tx = _now_iso()
+            timestamp = _now_iso()
+            self._last_tx = timestamp
+            self._last_controller_response = timestamp
+            self._last_sent_room_temperature = room_temperature
+            self._last_sent_target_temperature = float(self._target_temperature or 20.0)
+            self._last_controller_telegram = controller_data.hex("-").upper()
             self._last_error = None
             self._pending_command = False
             self._successful_replies += 1
@@ -600,20 +955,39 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self.schedule_update_ha_state()
 
     async def _async_reply_fks_sv_teach_in(self, query_data: bytes) -> None:
+        room_temperature = (
+            self._refresh_room_temperature_state()
+            if self._has_room_temperature_assignment
+            else self._legacy_a5_20_01_room_temperature()
+        )
+        controller_data = (
+            self._fks_sv_controller_data(room_temperature)
+            if room_temperature is not None
+            else None
+        )
         ok = await self.gateway.async_send_fks_sv_teach_in_response(
             self.device_config,
             query_data=query_data,
             target_temperature=float(self._target_temperature or 20.0),
-            room_temperature=self._external_room_temperature(),
+            room_temperature=room_temperature,
             hvac_mode=str(self._attr_hvac_mode),
         )
         if ok:
             timestamp = _now_iso()
             self._last_teach_in = timestamp
             self._last_tx = timestamp
-            self._last_error = None
-            self._pending_command = False
-            self._successful_replies += 1
+            if room_temperature is not None and controller_data is not None:
+                self._last_controller_response = timestamp
+                self._last_sent_room_temperature = room_temperature
+                self._last_sent_target_temperature = float(self._target_temperature or 20.0)
+                self._last_controller_telegram = controller_data.hex("-").upper()
+                self._last_error = None
+                self._pending_command = False
+                self._successful_replies += 1
+            else:
+                # Teach-in succeeded, but gateway intentionally omitted the
+                # follow-up control telegram because no safe DB2 value existed.
+                self._mark_missing_fks_sv_room_temperature()
         else:
             self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
             self._pending_command = True
@@ -695,11 +1069,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             # chooses a new target temperature.
             heater_mode = "normal"
 
+        outgoing_room_temperature = (
+            self._a5_10_06_outgoing_room_temperature()
+            if self._room_temperature_device_kind == "a5_10_06"
+            else None
+        )
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
             temperature=temperature,
-            current_temperature=self._current_temperature,
+            current_temperature=outgoing_room_temperature,
             heater_mode=heater_mode,
         )
         if not ok:
@@ -711,11 +1090,34 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._fhk_heater_mode = heater_mode
             if heater_mode == "normal":
                 self._attr_preset_mode = PRESET_HOME
+        if self._room_temperature_device_kind == "a5_10_06":
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            priority = self.device_config.get("priority") or raw.get("priority")
+            data = encode_a5_10_06_room_control_data(
+                target_temperature=temperature,
+                current_temperature=outgoing_room_temperature,
+                hvac_mode=heater_mode,
+                priority=priority,
+            )
+            self._last_sent_room_temperature = outgoing_room_temperature
+            self._last_sent_target_temperature = temperature
+            self._last_controller_telegram = data.hex("-").upper()
+            self._last_controller_response = _now_iso()
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        for task in (self._control_reply_task, self._teach_in_reply_task):
+        for task in (
+            self._control_reply_task,
+            self._teach_in_reply_task,
+            self._room_temperature_push_task,
+        ):
             if task is not None and not task.done():
                 task.cancel()
+        if self._remove_external_temperature_listener is not None:
+            self._remove_external_temperature_listener()
+            self._remove_external_temperature_listener = None
+        if self._remove_temperature_options_listener is not None:
+            self._remove_temperature_options_listener()
+            self._remove_temperature_options_listener = None
         if self._remove_listener:
             self._remove_listener()

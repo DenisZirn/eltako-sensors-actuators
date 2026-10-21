@@ -22,6 +22,9 @@ from .const import (
     CONF_CONNECTION_KIND,
     CONF_DIAGNOSTICS_ENABLED,
     CONF_DEVICES,
+    CONF_EXTERNAL_TEMPERATURE_ENTITY,
+    CONF_ROOM_TEMPERATURE_DEVICE_ID,
+    CONF_ROOM_TEMPERATURE_SOURCE,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
     CONF_RELOAD_AFTER_SAVE,
@@ -33,14 +36,25 @@ from .const import (
     CONNECTION_KIND_RS485_BUS,
     CONNECTION_KIND_UNKNOWN,
     DOMAIN,
+    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+    ROOM_TEMPERATURE_SOURCE_NATIVE,
     GATEWAY_TYPE_AUTO,
     GATEWAY_TYPE_FAM_USB,
+)
+from .room_temperature import (
+    is_room_temperature_assignable_device,
+    normalize_enocean_id,
+    resolve_room_temperature_config,
+    room_temperature_device_kind,
+    set_room_temperature_override,
+    temperature_to_celsius,
 )
 from .yaml_config import EltakoYamlError, list_eedtoy_yaml_gateways, parse_eedtoy_yaml
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_NAME = "ELTAKO Sensors & Actuators"
 MANUAL_PORT = "manual"
+_BACK = "__back__"
 
 _TTYS_RE = re.compile(r"^/dev/ttyS\d+$")
 
@@ -147,36 +161,39 @@ def _friendly_serial_label(device: str, description: str | None, hwid: str | Non
 def _list_serial_ports() -> dict[str, dict[str, str]]:
     """Return clean serial port metadata for the config/options flow."""
     choices: dict[str, dict[str, str]] = {}
+    grouped: dict[str, list[Any]] = {}
     try:
         from serial.tools import list_ports
     except Exception as err:  # pragma: no cover - depends on HA runtime
-        _LOGGER.warning("pyserial list_ports unavailable: %s", err)
-        return choices
+        # Do not abort here. HA OS may still expose the stable
+        # /dev/serial/by-id EnOcean Programmer path even when pyserial's port
+        # enumeration is temporarily unavailable or incomplete.
+        _LOGGER.warning("pyserial list_ports unavailable, falling back to /dev/serial/by-id: %s", err)
+        list_ports = None
 
-    grouped: dict[str, list[Any]] = {}
+    if list_ports is not None:
+        for port in list_ports.comports(include_links=True):
+            device = str(port.device)
+            description = getattr(port, "description", None)
+            hwid = getattr(port, "hwid", None)
 
-    for port in list_ports.comports(include_links=True):
-        device = str(port.device)
-        description = getattr(port, "description", None)
-        hwid = getattr(port, "hwid", None)
+            if _is_noise_serial_port(device, description, hwid):
+                continue
 
-        if _is_noise_serial_port(device, description, hwid):
-            continue
+            if _infer_connection_kind(device, description, hwid) == CONNECTION_KIND_UNKNOWN:
+                continue
 
-        if _infer_connection_kind(device, description, hwid) == CONNECTION_KIND_UNKNOWN:
-            continue
+            grouped.setdefault(_dedupe_group_key(port), []).append(port)
 
-        grouped.setdefault(_dedupe_group_key(port), []).append(port)
-
-    for ports in grouped.values():
-        port = sorted(ports, key=_interface_rank)[0]
-        device = str(port.device)
-        description = getattr(port, "description", None)
-        hwid = getattr(port, "hwid", None)
-        choices[device] = {
-            "label": _friendly_serial_label(device, description, hwid),
-            "connection_kind": _infer_connection_kind(device, description, hwid),
-        }
+        for ports in grouped.values():
+            port = sorted(ports, key=_interface_rank)[0]
+            device = str(port.device)
+            description = getattr(port, "description", None)
+            hwid = getattr(port, "hwid", None)
+            choices[device] = {
+                "label": _friendly_serial_label(device, description, hwid),
+                "connection_kind": _infer_connection_kind(device, description, hwid),
+            }
 
     # HA OS systems sometimes expose /dev/serial/by-id links even when
     # pyserial's include_links result is incomplete.  Add these links
@@ -267,6 +284,83 @@ def _gateway_choice_map(gateways) -> dict[str, str]:
     return {gateway.key: gateway.label for gateway in gateways}
 
 
+def _temperature_entity_selector() -> Any:
+    """Retain the sensor-domain selector for compatibility with HA versions."""
+    if selector is not None:
+        try:
+            # The actual options dropdown is populated by
+            # _temperature_entity_choices(), which applies strict temperature
+            # metadata filtering and also supports unit-only MQTT sensors.
+            return selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            )
+        except Exception:
+            pass
+    return str
+
+
+def _temperature_source_choices(hass, device_kind: str | None) -> dict[str, str]:
+    language = str(getattr(getattr(hass, "config", None), "language", "") or "").lower()
+    if language.startswith("de"):
+        native = (
+            "Interner Temperatursensor des FKS-SV"
+            if device_kind == "fks_sv"
+            else "Bestehende / eingelernte Raumtemperaturquelle des Aktors"
+        )
+        return {
+            ROOM_TEMPERATURE_SOURCE_NATIVE: native,
+            ROOM_TEMPERATURE_SOURCE_EXTERNAL: "Externer Home-Assistant-Raumtemperatursensor",
+        }
+    native = (
+        "Internal FKS-SV temperature sensor"
+        if device_kind == "fks_sv"
+        else "Existing / learned actuator room-temperature source"
+    )
+    return {
+        ROOM_TEMPERATURE_SOURCE_NATIVE: native,
+        ROOM_TEMPERATURE_SOURCE_EXTERNAL: "External Home Assistant room-temperature sensor",
+    }
+
+
+def _temperature_entity_choices(hass) -> dict[str, str]:
+    """Return compatible HA temperature sensors plus an explicit back entry."""
+    language = str(getattr(getattr(hass, "config", None), "language", "") or "").lower()
+    choices: dict[str, str] = {
+        _BACK: "← Zurück zur Temperaturquelle" if language.startswith("de") else "← Back to temperature source"
+    }
+    for state in sorted(hass.states.async_all("sensor"), key=lambda item: str(item.entity_id)):
+        entity_id = str(getattr(state, "entity_id", "") or "")
+        if not entity_id or not _is_temperature_entity_compatible(hass, entity_id):
+            continue
+        attrs = getattr(state, "attributes", {}) or {}
+        friendly_name = str(attrs.get("friendly_name") or "").strip()
+        label = f"{friendly_name} ({entity_id})" if friendly_name else entity_id
+        choices[entity_id] = label
+    return choices
+
+
+def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
+    """Only allow sensor entities explicitly identified as temperatures.
+
+    Numerical sensor values alone do not qualify: gateway IDs, counters,
+    voltages, percentages and other unrelated entities are also numeric.
+    Keep unit-only MQTT/template temperature sensors available when they
+    expose °C/°F but do not declare a device_class.
+    """
+    entity_id = str(entity_id or "").strip()
+    if not entity_id.startswith("sensor."):
+        return False
+    state = hass.states.get(entity_id)
+    if state is None:
+        return False
+    attrs = getattr(state, "attributes", {}) or {}
+    device_class = str(attrs.get("device_class") or "").strip().lower()
+    unit = str(attrs.get("unit_of_measurement") or "").strip().upper()
+    return device_class == "temperature" or unit in {
+        "°C", "C", "CELSIUS", "°F", "F", "FAHRENHEIT"
+    }
+
+
 def _normalize_yaml_input(value: Any) -> str:
     """Normalize pasted/file YAML without changing meaningful indentation.
 
@@ -352,6 +446,8 @@ class EltakoSensorsActuatorsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)
 
         if user_input is not None:
             selected_port = str(user_input[CONF_PORT])
+            if selected_port == _BACK:
+                return await self.async_step_init()
             manual_port = str(user_input.get("manual_port", "")).strip()
             port = manual_port if selected_port == MANUAL_PORT else selected_port.strip()
 
@@ -361,6 +457,11 @@ class EltakoSensorsActuatorsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)
                 connection_kind = serial_ports.get(selected_port, {}).get(
                     "connection_kind", CONNECTION_KIND_UNKNOWN
                 )
+                if connection_kind == CONNECTION_KIND_UNKNOWN:
+                    # Manual/stale paths must still recover FAM-USB from the
+                    # stable EnOcean Programmer path instead of silently
+                    # falling back to gateway_type=auto.
+                    connection_kind = _infer_connection_kind(port, port, port)
                 gateway_type = _gateway_type_for_connection_kind(connection_kind)
 
                 self._pending_port = port
@@ -428,15 +529,40 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_yaml_text: str | None = None
         self._pending_yaml_path: str = ""
         self._pending_gateway_choices: dict[str, str] = {}
+        self._pending_room_temperature_device_id: str | None = None
+        self._room_temperature_menu_targets: dict[str, str] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        # Repair the transient "__back__" marker that an earlier v0.1.164 test
+        # build could accidentally persist as the gateway port.
+        if str(self.config_entry.options.get(CONF_PORT, "")) == _BACK:
+            repaired_options = dict(self.config_entry.options)
+            repaired_options.pop(CONF_PORT, None)
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                options=repaired_options,
+            )
+
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
+        # Supply explicit labels as a fallback as well as keeping translation
+        # entries in strings/de/en. This prevents an empty options menu when HA
+        # still has a stale translation cache from an earlier test build.
         return self.async_show_menu(
             step_id="init",
-            menu_options=["connection", "yaml", "diagnostics"],
+            menu_options={
+                "connection": "Gateway / seriellen Anschluss ändern" if is_de else "Change gateway / serial connection",
+                "yaml": "EEDTOY YAML importieren oder ersetzen" if is_de else "Import or replace EEDTOY YAML",
+                "room_temperature_assignment": "Raumtemperatursensor zuweisen" if is_de else "Assign room temperature sensor",
+                "diagnostics": "Funk / Bus Diagnose" if is_de else "Radio / bus diagnostics",
+            },
         )
 
     def _current_data(self) -> dict[str, Any]:
-        return {**self.config_entry.data, **self.config_entry.options}
+        options = dict(self.config_entry.options)
+        if str(options.get(CONF_PORT, "")) == _BACK:
+            options.pop(CONF_PORT, None)
+        return {**self.config_entry.data, **options}
 
     def _merged_options(self, updates: dict[str, Any]) -> dict[str, Any]:
         current_options = dict(self.config_entry.options)
@@ -458,35 +584,312 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         )
 
 
-    async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Configure the global diagnostics sidebar panel."""
-        current_enabled = bool(self._current_data().get(CONF_DIAGNOSTICS_ENABLED, True))
+    def _room_temperature_devices(self) -> dict[str, dict[str, Any]]:
+        devices = self._current_data().get(CONF_DEVICES) or []
+        result: dict[str, dict[str, Any]] = {}
+        for device in devices:
+            if not is_room_temperature_assignable_device(device):
+                continue
+            normalized_id = normalize_enocean_id(device.get("id"))
+            if normalized_id is None:
+                continue
+            result[normalized_id] = device
+        return result
 
-        if user_input is not None:
-            enabled = bool(user_input.get(CONF_DIAGNOSTICS_ENABLED, False))
-            # Keep this setting global across all configured ELTAKO gateways.
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                options = dict(entry.options)
-                options[CONF_DIAGNOSTICS_ENABLED] = enabled
-                self.hass.config_entries.async_update_entry(entry, options=options)
+    def _room_temperature_assignment_text(self, device: dict[str, Any]) -> str:
+        """Return a concise human-readable summary of the effective assignment."""
+        source, entity_id, origin = resolve_room_temperature_config(
+            device, self.config_entry.options
+        )
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
 
-            from .diagnostics import async_set_diagnostics_enabled
-            await async_set_diagnostics_enabled(self.hass, enabled)
-            return self.async_create_entry(
-                title="",
-                data=self._merged_options({CONF_DIAGNOSTICS_ENABLED: enabled}),
+        if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
+            return "Externer Sensor" if is_de else "External sensor"
+
+        kind = room_temperature_device_kind(device)
+        if kind == "fks_sv":
+            return "Interner Sensor" if is_de else "Internal sensor"
+        return "Eingelernter Sensor" if is_de else "Learned sensor"
+
+    def _room_temperature_choices(self) -> dict[str, str]:
+        devices = self._room_temperature_devices()
+        raw_choices: list[tuple[str, str]] = []
+        for device_id, device in devices.items():
+            name = str(device.get("name") or device_id).strip() or device_id
+            type_name = str(
+                device.get("device_type")
+                or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("device_type")
+                or ""
+            ).strip()
+            label = f"{name} – {type_name}" if type_name and type_name.upper() not in name.upper() else name
+            assignment = self._room_temperature_assignment_text(device)
+            raw_choices.append((device_id, f"{label} · {assignment}"))
+
+        counts: dict[str, int] = {}
+        for _device_id, label in raw_choices:
+            counts[label] = counts.get(label, 0) + 1
+        choices = {
+            device_id: (f"{label} ({device_id})" if counts.get(label, 0) > 1 else label)
+            for device_id, label in raw_choices
+        }
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        choices[_BACK] = "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
+        return choices
+
+    def _selected_room_temperature_device(self) -> dict[str, Any] | None:
+        if not self._pending_room_temperature_device_id:
+            return None
+        return self._room_temperature_devices().get(self._pending_room_temperature_device_id)
+
+    async def async_step_room_temperature_assignment(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show compatible climate actuators as directly clickable menu rows."""
+        choices = self._room_temperature_choices()
+        device_choices = [(device_id, label) for device_id, label in choices.items() if device_id != _BACK]
+        if not device_choices:
+            return self.async_show_menu(
+                step_id="room_temperature_assignment",
+                menu_options={
+                    "room_temperature_back_main": (
+                        "← Zurück zum Hauptmenü"
+                        if str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower().startswith("de")
+                        else "← Back to main menu"
+                    )
+                },
             )
 
-        schema = vol.Schema(
-            {vol.Required(CONF_DIAGNOSTICS_ENABLED, default=current_enabled): bool}
+        self._room_temperature_menu_targets = {}
+        menu_options: dict[str, str] = {}
+        for index, (device_id, label) in enumerate(device_choices):
+            step_key = f"room_temperature_device_{index}"
+            self._room_temperature_menu_targets[step_key] = device_id
+            menu_options[step_key] = label
+
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        menu_options["room_temperature_back_main"] = (
+            "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
         )
-        return self.async_show_form(step_id="diagnostics", data_schema=schema)
+        return self.async_show_menu(
+            step_id="room_temperature_assignment",
+            menu_options=menu_options,
+        )
+
+    async def async_step_room_temperature_back_main(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Return directly to the options main menu."""
+        self._pending_room_temperature_device_id = None
+        return await self.async_step_init()
+
+    async def _async_select_room_temperature_menu_device(self, step_key: str) -> FlowResult:
+        """Resolve one dynamic clickable actuator menu item."""
+        selected = normalize_enocean_id(self._room_temperature_menu_targets.get(step_key))
+        if selected is None or selected not in self._room_temperature_devices():
+            return await self.async_step_room_temperature_assignment()
+        self._pending_room_temperature_device_id = selected
+        return await self.async_step_room_temperature_source()
+
+    def __getattr__(self, name: str):
+        """Dispatch dynamic Home Assistant menu rows without an extra OK click."""
+        if name.startswith("async_step_room_temperature_device_"):
+            step_key = name.removeprefix("async_step_")
+
+            async def _device_step(user_input: dict[str, Any] | None = None) -> FlowResult:
+                return await self._async_select_room_temperature_menu_device(step_key)
+
+            return _device_step
+
+        raise AttributeError(name)
+
+    async def async_step_room_temperature_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show one-click temperature-source choices with an active-state marker.
+
+        A menu is intentionally used instead of a radio/select form so native
+        selection and back navigation do not require an additional OK click.
+        """
+        device = self._selected_room_temperature_device()
+        if device is None:
+            return await self.async_step_room_temperature_assignment()
+
+        kind = room_temperature_device_kind(device)
+        labels = _temperature_source_choices(self.hass, kind)
+        current_source, _entity_id, _origin = resolve_room_temperature_config(
+            device, self.config_entry.options
+        )
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
+
+        return self.async_show_menu(
+            step_id="room_temperature_source",
+            menu_options={
+                "room_temperature_source_native": (
+                    ("✓ " if current_source == ROOM_TEMPERATURE_SOURCE_NATIVE else "○ ")
+                    + labels[ROOM_TEMPERATURE_SOURCE_NATIVE]
+                ),
+                "room_temperature_source_external": (
+                    ("✓ " if current_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else "○ ")
+                    + labels[ROOM_TEMPERATURE_SOURCE_EXTERNAL]
+                ),
+                "room_temperature_back_actuators": (
+                    "← Zurück zur Aktorauswahl" if is_de else "← Back to actuator selection"
+                ),
+            },
+            description_placeholders={
+                "current_assignment": self._room_temperature_assignment_text(device)
+            },
+        )
+
+    async def async_step_room_temperature_source_native(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Save the native/learned temperature source with a single click."""
+        device = self._selected_room_temperature_device()
+        if device is None:
+            return await self.async_step_room_temperature_assignment()
+
+        options = set_room_temperature_override(
+            self.config_entry.options,
+            self._pending_room_temperature_device_id,
+            ROOM_TEMPERATURE_SOURCE_NATIVE,
+        )
+        return self.async_create_entry(title="", data=options)
+
+    async def async_step_room_temperature_source_external(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Open the compact entity dropdown directly, with no intermediate OK."""
+        return await self.async_step_room_temperature_entity()
+
+    async def async_step_room_temperature_back_actuators(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Navigate back to the actuator selection without saving changes."""
+        return await self.async_step_room_temperature_assignment()
+
+    async def async_step_room_temperature_entity(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Select one Home Assistant temperature sensor from a compact dropdown."""
+        device = self._selected_room_temperature_device()
+        if device is None:
+            return await self.async_step_room_temperature_assignment()
+
+        errors: dict[str, str] = {}
+        source, entity_id, _origin = resolve_room_temperature_config(
+            device, self.config_entry.options
+        )
+        default_entity = entity_id if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id else ""
+
+        entity_choices = _temperature_entity_choices(self.hass)
+        # Do not reinsert a legacy saved numeric/non-temperature entity into
+        # the dropdown. The existing assignment remains stored until changed.
+
+        if user_input is not None:
+            selected = str(user_input.get(CONF_EXTERNAL_TEMPERATURE_ENTITY) or "").strip()
+            if selected == _BACK:
+                return await self.async_step_room_temperature_source()
+            if not _is_temperature_entity_compatible(self.hass, selected):
+                errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
+            else:
+                options = set_room_temperature_override(
+                    self.config_entry.options,
+                    self._pending_room_temperature_device_id,
+                    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+                    selected,
+                )
+                return self.async_create_entry(title="", data=options)
+
+        default_choice = default_entity if default_entity in entity_choices else next(
+            (choice for choice in entity_choices if choice != _BACK),
+            _BACK,
+        )
+
+        return self.async_show_form(
+            step_id="room_temperature_entity",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_EXTERNAL_TEMPERATURE_ENTITY,
+                        default=default_choice,
+                    ): vol.In(entity_choices)
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "current_assignment": self._room_temperature_assignment_text(device)
+            },
+        )
+
+
+    async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Configure diagnostics using directly clickable menu rows."""
+        current_enabled = bool(self._current_data().get(CONF_DIAGNOSTICS_ENABLED, True))
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        is_de = language.startswith("de")
+
+        return self.async_show_menu(
+            step_id="diagnostics",
+            menu_options={
+                "diagnostics_enable": (
+                    ("✓ Funk-/Bus-Diagnose ist aktiviert" if current_enabled else "Funk-/Bus-Diagnose aktivieren")
+                    if is_de
+                    else ("✓ Radio/bus diagnostics is enabled" if current_enabled else "Enable radio/bus diagnostics")
+                ),
+                "diagnostics_disable": (
+                    ("Funk-/Bus-Diagnose deaktivieren" if current_enabled else "✓ Funk-/Bus-Diagnose ist deaktiviert")
+                    if is_de
+                    else ("Disable radio/bus diagnostics" if current_enabled else "✓ Radio/bus diagnostics is disabled")
+                ),
+                "diagnostics_back_main": (
+                    "← Zurück zum Hauptmenü" if is_de else "← Back to main menu"
+                ),
+            },
+        )
+
+    async def _async_set_diagnostics_enabled(self, enabled: bool) -> FlowResult:
+        """Persist the global diagnostics setting immediately."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            options = dict(entry.options)
+            options[CONF_DIAGNOSTICS_ENABLED] = enabled
+            self.hass.config_entries.async_update_entry(entry, options=options)
+
+        from .diagnostics import async_set_diagnostics_enabled
+        await async_set_diagnostics_enabled(self.hass, enabled)
+        return self.async_create_entry(
+            title="",
+            data=self._merged_options({CONF_DIAGNOSTICS_ENABLED: enabled}),
+        )
+
+    async def async_step_diagnostics_enable(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        return await self._async_set_diagnostics_enabled(True)
+
+    async def async_step_diagnostics_disable(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        return await self._async_set_diagnostics_enabled(False)
+
+    async def async_step_diagnostics_back_main(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        return await self.async_step_init()
 
     async def async_step_connection(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Configure the gateway port using the established form-style UI."""
         errors: dict[str, str] = {}
         serial_ports = await self.hass.async_add_executor_job(_list_serial_ports)
         port_choices = {port: meta["label"] for port, meta in serial_ports.items()}
-        port_choices[MANUAL_PORT] = "Manuell eingeben / Netzwerkpfad"
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        port_choices[MANUAL_PORT] = (
+            "Manuell eingeben / Netzwerkpfad"
+            if language.startswith("de")
+            else "Enter manually / network path"
+        )
 
         data = self._current_data()
         current_port = str(data.get(CONF_PORT, MANUAL_PORT))
@@ -504,6 +907,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 connection_kind = serial_ports.get(selected_port, {}).get(
                     "connection_kind", CONNECTION_KIND_UNKNOWN
                 )
+                if connection_kind == CONNECTION_KIND_UNKNOWN:
+                    connection_kind = _infer_connection_kind(port, port, port)
                 gateway_type = _gateway_type_for_connection_kind(connection_kind)
 
                 yaml_text = str(data.get(CONF_YAML_CONFIG, "") or "")
@@ -546,6 +951,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={"port_count": str(len(serial_ports))},
         )
+
 
     async def _process_yaml_submission(
         self,
@@ -614,7 +1020,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         """Choose one unambiguous YAML import source."""
         return self.async_show_menu(
             step_id="yaml",
-            menu_options=["yaml_text", "yaml_file"],
+            menu_options=["yaml_text", "yaml_file", "init"],
         )
 
     async def async_step_yaml_text(self, user_input: dict[str, Any] | None = None) -> FlowResult:

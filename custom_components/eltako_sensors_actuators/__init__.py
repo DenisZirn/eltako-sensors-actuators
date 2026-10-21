@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     CONF_GATEWAY_TYPE,
@@ -15,6 +16,7 @@ from .const import (
     CONF_RELOAD_AFTER_SAVE,
     CONF_SELECTED_YAML_GATEWAY,
     DOMAIN,
+    SIGNAL_ROOM_TEMPERATURE_UPDATED,
     PLATFORMS,
     SERVICE_DUMP_GATEWAY_STATE,
     SERVICE_PROBE_GATEWAY,
@@ -153,6 +155,15 @@ async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry
         for current in hass.config_entries.async_entries(DOMAIN)
     )
     await async_set_diagnostics_enabled(hass, enabled)
+
+    # Room-temperature assignments are live options. FKS-SV waits for the
+    # valve's next receive window; mains-powered A5-10-06 actuators may push
+    # the newly selected source immediately.
+    async_dispatcher_send(
+        hass,
+        SIGNAL_ROOM_TEMPERATURE_UPDATED,
+        entry.entry_id,
+    )
 
     if not entry.options.get(CONF_RELOAD_AFTER_SAVE):
         _LOGGER.debug("ELTAKO options updated without reload request for entry %s", entry.entry_id)
