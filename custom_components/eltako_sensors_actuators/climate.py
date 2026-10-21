@@ -665,12 +665,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if "temperature" in telegram.decoded:
             if self._is_fhk14 or self._is_fae14lpr:
                 # A5-10-06 controller telegrams contain a synthetic DB1 value
-                # (40 °C when no room sensor value is transmitted).  Only a
-                # genuine actuator response from the physical device may update
-                # the displayed current temperature.
+                # (40 °C when no room sensor value is transmitted). Only a
+                # genuine physical actuator response may update the native
+                # temperature retained beside an optional external HA sensor.
                 if self._matches_physical_device(telegram) and bool(telegram.decoded.get("actuator_response")):
-                    self._current_temperature = telegram.decoded["temperature"]
-                    self._has_genuine_current_temperature = True
+                    value = temperature_to_celsius(telegram.decoded["temperature"], "°C")
+                    if self._has_room_temperature_assignment:
+                        self._internal_temperature = value
+                    else:
+                        self._current_temperature = value
+                    self._has_genuine_current_temperature = value is not None
             else:
                 self._current_temperature = telegram.decoded["temperature"]
         if "target_temperature" in telegram.decoded:
@@ -702,6 +706,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 "night_setback": PRESET_SLEEP,
                 "setback": PRESET_ECO,
             }.get(str(heater_mode), self._attr_preset_mode)
+        if self._room_temperature_device_kind == "a5_10_06":
+            self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
 
     def _handle_fks_sv_telegram(self, telegram) -> None:
