@@ -322,6 +322,23 @@ def _temperature_source_choices(hass, device_kind: str | None) -> dict[str, str]
     }
 
 
+def _temperature_entity_choices(hass) -> dict[str, str]:
+    """Return compatible HA temperature sensors plus an explicit back entry."""
+    language = str(getattr(getattr(hass, "config", None), "language", "") or "").lower()
+    choices: dict[str, str] = {
+        _BACK: "← Zurück zur Temperaturquelle" if language.startswith("de") else "← Back to temperature source"
+    }
+    for state in sorted(hass.states.async_all("sensor"), key=lambda item: str(item.entity_id)):
+        entity_id = str(getattr(state, "entity_id", "") or "")
+        if not entity_id or not _is_temperature_entity_compatible(hass, entity_id):
+            continue
+        attrs = getattr(state, "attributes", {}) or {}
+        friendly_name = str(attrs.get("friendly_name") or "").strip()
+        label = f"{friendly_name} ({entity_id})" if friendly_name else entity_id
+        choices[entity_id] = label
+    return choices
+
+
 def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
     """Accept temperature device_class, °C/°F units, or safe unitless values."""
     entity_id = str(entity_id or "").strip()
@@ -427,6 +444,8 @@ class EltakoSensorsActuatorsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)
 
         if user_input is not None:
             selected_port = str(user_input[CONF_PORT])
+            if selected_port == _BACK:
+                return await self.async_step_init()
             manual_port = str(user_input.get("manual_port", "")).strip()
             port = manual_port if selected_port == MANUAL_PORT else selected_port.strip()
 
@@ -722,8 +741,14 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id:
             default_entity = entity_id
 
+        entity_choices = _temperature_entity_choices(self.hass)
+        if default_entity and default_entity not in entity_choices:
+            entity_choices[default_entity] = default_entity
+
         if user_input is not None:
             entity_id = str(user_input.get(CONF_EXTERNAL_TEMPERATURE_ENTITY) or "").strip()
+            if entity_id == _BACK:
+                return await self.async_step_room_temperature_source()
             if not _is_temperature_entity_compatible(self.hass, entity_id):
                 errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
             else:
@@ -735,14 +760,14 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data=options)
 
-        key = (
-            vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY, default=default_entity)
-            if default_entity
-            else vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY)
+        default_choice = default_entity if default_entity else next(
+            (choice for choice in entity_choices if choice != _BACK),
+            _BACK,
         )
+        key = vol.Required(CONF_EXTERNAL_TEMPERATURE_ENTITY, default=default_choice)
         return self.async_show_form(
             step_id="room_temperature_entity",
-            data_schema=vol.Schema({key: _temperature_entity_selector()}),
+            data_schema=vol.Schema({key: vol.In(entity_choices)}),
             errors=errors,
             description_placeholders={
                 "current_assignment": self._room_temperature_assignment_text(device)
@@ -778,11 +803,13 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         serial_ports = await self.hass.async_add_executor_job(_list_serial_ports)
         port_choices = {port: meta["label"] for port, meta in serial_ports.items()}
-        port_choices[MANUAL_PORT] = "Manuell eingeben / Netzwerkpfad"
+        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
+        port_choices[MANUAL_PORT] = "Manuell eingeben / Netzwerkpfad" if language.startswith("de") else "Enter manually / network path"
+        port_choices[_BACK] = "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
 
         data = self._current_data()
         current_port = str(data.get(CONF_PORT, MANUAL_PORT))
-        default_port = current_port if current_port in port_choices else MANUAL_PORT
+        default_port = current_port if current_port in port_choices and current_port != _BACK else MANUAL_PORT
         default_manual = _manual_port_default(current_port, port_choices)
 
         if user_input is not None:
