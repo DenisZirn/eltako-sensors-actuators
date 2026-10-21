@@ -16,7 +16,7 @@ from .const import (
     CONF_RELOAD_AFTER_SAVE,
     CONF_SELECTED_YAML_GATEWAY,
     DOMAIN,
-    SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+    SIGNAL_ROOM_TEMPERATURE_UPDATED,
     PLATFORMS,
     SERVICE_DUMP_GATEWAY_STATE,
     SERVICE_PROBE_GATEWAY,
@@ -156,12 +156,12 @@ async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry
     )
     await async_set_diagnostics_enabled(hass, enabled)
 
-    # FKS-SV room-temperature mappings are intentionally live options. Climate
-    # entities re-resolve their source immediately, but they do not transmit
-    # until the physical valve opens its next receive window.
+    # Room-temperature assignments are live options. FKS-SV waits for the
+    # valve's next receive window; mains-powered A5-10-06 actuators may push
+    # the newly selected source immediately.
     async_dispatcher_send(
         hass,
-        SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+        SIGNAL_ROOM_TEMPERATURE_UPDATED,
         entry.entry_id,
     )
 
