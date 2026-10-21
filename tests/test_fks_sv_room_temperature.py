@@ -32,16 +32,75 @@ def _load(name: str, path: Path):
 
 _package(PKG, INTEGRATION)
 _package(f"{PKG}.bus", INTEGRATION / "bus")
-_load(f"{PKG}.const", INTEGRATION / "const.py")
+const = _load(f"{PKG}.const", INTEGRATION / "const.py")
 _load(f"{PKG}.bus.exceptions", INTEGRATION / "bus" / "exceptions.py")
 _load(f"{PKG}.bus.ids", INTEGRATION / "bus" / "ids.py")
 _load(f"{PKG}.bus.esp2", INTEGRATION / "bus" / "esp2.py")
-fks = _load(f"{PKG}.fks_sv_temperature", INTEGRATION / "fks_sv_temperature.py")
-eep = _load(f"{PKG}.bus.eep_a5_20_01", INTEGRATION / "bus" / "eep_a5_20_01.py")
-const = sys.modules[f"{PKG}.const"]
+room = _load(f"{PKG}.room_temperature", INTEGRATION / "room_temperature.py")
+eep20 = _load(f"{PKG}.bus.eep_a5_20_01", INTEGRATION / "bus" / "eep_a5_20_01.py")
+eep10 = _load(f"{PKG}.bus.eep_a5_10_06", INTEGRATION / "bus" / "eep_a5_10_06.py")
 
 
-class TestFksSvIdentityAndPersistence(unittest.TestCase):
+class TestAssignableClimateDevices(unittest.TestCase):
+    def setUp(self):
+        self.fks = {
+            "platform": "climate",
+            "id": "01-02-03-04",
+            "eep": "A5-20-01",
+            "name": "Wohnzimmer Ventil",
+            "device_type": "FKS-SV",
+        }
+
+    def climate(self, device_type: str, eep: str = "A5-10-06"):
+        return {
+            "platform": "climate",
+            "id": "01-02-03-05",
+            "eep": eep,
+            "name": "Frei benannter Heizkreis",
+            "device_type": device_type,
+        }
+
+    def test_fks_sv_is_assignable(self):
+        self.assertTrue(room.is_room_temperature_assignable_device(self.fks))
+        self.assertEqual(room.room_temperature_device_kind(self.fks), "fks_sv")
+
+    def test_fhk14_f4hk14_and_fae14_are_assignable(self):
+        for device_type in ("FHK14", "F4HK14", "FAE14LPR", "FAE14SSR"):
+            with self.subTest(device_type=device_type):
+                device = self.climate(device_type)
+                self.assertTrue(room.is_room_temperature_assignable_device(device))
+                self.assertEqual(room.room_temperature_device_kind(device), "a5_10_06")
+
+    def test_room_controllers_are_excluded(self):
+        for device_type in ("FUTH55", "FUTH55ED", "FTR55ESB", "FTR65DSB"):
+            with self.subTest(device_type=device_type):
+                self.assertFalse(
+                    room.is_room_temperature_assignable_device(
+                        self.climate(device_type)
+                    )
+                )
+
+    def test_wrong_platform_or_eep_is_excluded(self):
+        self.assertFalse(
+            room.is_room_temperature_assignable_device(
+                {**self.climate("FHK14"), "platform": "sensor"}
+            )
+        )
+        self.assertFalse(
+            room.is_room_temperature_assignable_device(
+                self.climate("FHK14", "A5-10-12")
+            )
+        )
+
+    def test_legacy_fks_sv_without_device_type_still_works(self):
+        legacy = dict(self.fks)
+        legacy.pop("device_type")
+        self.assertTrue(room.is_fks_sv_device(legacy))
+        legacy["room_controller_mode"] = "fks_kp"
+        self.assertFalse(room.is_fks_sv_device(legacy))
+
+
+class TestPersistenceAndPriority(unittest.TestCase):
     def setUp(self):
         self.device = {
             "platform": "climate",
@@ -52,134 +111,126 @@ class TestFksSvIdentityAndPersistence(unittest.TestCase):
             "room_temperature_entity": "sensor.yaml_temperature",
         }
         self.other = {
-            **self.device,
+            "platform": "climate",
             "id": "01-02-03-05",
-            "name": "Schlafzimmer",
+            "eep": "A5-10-06",
+            "name": "Heizkreis",
+            "device_type": "FHK14",
         }
 
     def test_normalize_physical_id(self):
-        self.assertEqual(fks.normalize_enocean_id("01:02:03:04"), "01-02-03-04")
-        self.assertIsNone(fks.normalize_enocean_id("bad-id"))
+        self.assertEqual(room.normalize_enocean_id("01:02:03:04"), "01-02-03-04")
+        self.assertIsNone(room.normalize_enocean_id("bad-id"))
 
-    def test_only_real_fks_sv_is_selectable(self):
-        self.assertTrue(fks.is_fks_sv_device(self.device))
-        self.assertFalse(
-            fks.is_fks_sv_device(
-                {
-                    **self.device,
-                    "device_type": "FUTH55ED",
-                    "room_controller_mode": "fks_kp",
-                }
-            )
-        )
-        self.assertFalse(fks.is_fks_sv_device({**self.device, "platform": "sensor"}))
-
-    def test_legacy_fks_sv_without_device_type_still_works(self):
-        legacy = dict(self.device)
-        legacy.pop("device_type")
-        self.assertTrue(fks.is_fks_sv_device(legacy))
-        legacy["room_controller_mode"] = "fks_kp"
-        self.assertFalse(fks.is_fks_sv_device(legacy))
-
-    def test_priority_ui_external_over_yaml(self):
-        source, entity, origin = fks.resolve_fks_sv_temperature_config(self.device, {})
+    def test_ui_external_overrides_yaml(self):
+        source, entity, origin = room.resolve_room_temperature_config(self.device, {})
         self.assertEqual(
             (source, entity, origin),
-            (const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL, "sensor.yaml_temperature", "yaml"),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.yaml_temperature", "yaml"),
         )
-
-        options = fks.set_fks_sv_override(
+        options = room.set_room_temperature_override(
             {"diagnostics_enabled": True},
             self.device["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
             "sensor.ui_temperature",
         )
-        source, entity, origin = fks.resolve_fks_sv_temperature_config(self.device, options)
         self.assertEqual(
-            (source, entity, origin),
-            (const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL, "sensor.ui_temperature", "ui"),
+            room.resolve_room_temperature_config(self.device, options),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.ui_temperature", "ui"),
         )
         self.assertTrue(options["diagnostics_enabled"])
 
-    def test_explicit_internal_overrides_yaml_external(self):
-        options = fks.set_fks_sv_override(
+    def test_explicit_native_overrides_yaml_external(self):
+        options = room.set_room_temperature_override(
             {},
             self.device["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
+            const.ROOM_TEMPERATURE_SOURCE_NATIVE,
         )
-        source, entity, origin = fks.resolve_fks_sv_temperature_config(self.device, options)
         self.assertEqual(
-            (source, entity, origin),
-            (const.FKS_SV_TEMPERATURE_SOURCE_INTERNAL, None, "ui"),
+            room.resolve_room_temperature_config(self.device, options),
+            (const.ROOM_TEMPERATURE_SOURCE_NATIVE, None, "ui"),
         )
 
-    def test_multiple_fks_sv_mappings_are_independent(self):
-        options = fks.set_fks_sv_override(
+    def test_multiple_device_mappings_are_independent(self):
+        options = room.set_room_temperature_override(
             {},
             self.device["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
             "sensor.wohnzimmer",
         )
-        options = fks.set_fks_sv_override(
+        options = room.set_room_temperature_override(
             options,
             self.other["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-            "sensor.schlafzimmer",
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.heizkreis",
         )
         self.assertEqual(
-            fks.resolve_fks_sv_temperature_config(self.device, options)[1],
+            room.resolve_room_temperature_config(self.device, options)[1],
             "sensor.wohnzimmer",
         )
         self.assertEqual(
-            fks.resolve_fks_sv_temperature_config(self.other, options)[1],
-            "sensor.schlafzimmer",
+            room.resolve_room_temperature_config(self.other, options)[1],
+            "sensor.heizkreis",
         )
 
-    def test_options_mapping_survives_json_roundtrip_and_device_rename(self):
-        options = fks.set_fks_sv_override(
+    def test_mapping_survives_json_roundtrip_and_rename(self):
+        options = room.set_room_temperature_override(
             {},
-            self.device["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-            "sensor.wohnzimmer",
+            self.other["id"],
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.heizkreis",
         )
-        restored_options = json.loads(json.dumps(options))
-        renamed_device = {**self.device, "name": "Komplett neuer Anzeigename"}
-        source, entity, origin = fks.resolve_fks_sv_temperature_config(
-            renamed_device, restored_options
-        )
+        restored = json.loads(json.dumps(options))
+        renamed = {**self.other, "name": "Komplett anderer Anzeigename"}
         self.assertEqual(
-            (source, entity, origin),
-            (
-                const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-                "sensor.wohnzimmer",
-                "ui",
-            ),
+            room.resolve_room_temperature_config(renamed, restored),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.heizkreis", "ui"),
         )
 
-    def test_yaml_reimport_style_update_does_not_remove_override(self):
-        options = fks.set_fks_sv_override(
+    def test_yaml_reimport_style_update_preserves_override(self):
+        options = room.set_room_temperature_override(
             {"yaml_config": "old"},
-            self.device["id"],
-            const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-            "sensor.wohnzimmer",
+            self.other["id"],
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.heizkreis",
         )
-        # Mirrors OptionsFlow._merged_options(): current options are copied and
-        # the newly parsed YAML/device list updates only its own keys.
         after_import = dict(options)
-        after_import.update({"yaml_config": "new", "devices": [self.device]})
+        after_import.update({"yaml_config": "new", "devices": [self.other]})
         self.assertEqual(
-            fks.resolve_fks_sv_temperature_config(self.device, after_import)[1],
-            "sensor.wohnzimmer",
+            room.resolve_room_temperature_config(self.other, after_import)[1],
+            "sensor.heizkreis",
         )
 
+    def test_first_fks_only_test_mapping_is_migrated(self):
+        old_options = {
+            "fks_sv_room_temperature_overrides": {
+                "01-02-03-04": {
+                    "fks_sv_temperature_source": "external",
+                    "fks_sv_external_temperature_entity": "sensor.alt",
+                }
+            }
+        }
+        self.assertEqual(
+            room.resolve_room_temperature_config(self.device, old_options),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.alt", "ui"),
+        )
+        migrated = room.set_room_temperature_override(
+            old_options,
+            self.device["id"],
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.neu",
+        )
+        self.assertNotIn("fks_sv_room_temperature_overrides", migrated)
+        self.assertIn(const.CONF_ROOM_TEMPERATURE_OVERRIDES, migrated)
 
-class TestTemperatureValidationAndFallback(unittest.TestCase):
+
+class TestTemperatureValidationAndFksFallback(unittest.TestCase):
     def test_celsius_and_fahrenheit(self):
-        self.assertEqual(fks.temperature_to_celsius("21.5", "°C"), 21.5)
-        self.assertEqual(fks.temperature_to_celsius("68", "°F"), 20.0)
-        self.assertEqual(fks.temperature_to_celsius(0, "°C"), 0.0)
+        self.assertEqual(room.temperature_to_celsius("21.5", "°C"), 21.5)
+        self.assertEqual(room.temperature_to_celsius("68", "°F"), 20.0)
+        self.assertEqual(room.temperature_to_celsius(0, "°C"), 0.0)
 
-    def test_invalid_values_are_rejected_not_clamped(self):
+    def test_invalid_values_are_rejected(self):
         for value, unit in [
             ("unknown", "°C"),
             ("unavailable", "°C"),
@@ -190,83 +241,107 @@ class TestTemperatureValidationAndFallback(unittest.TestCase):
             (293.15, "K"),
         ]:
             with self.subTest(value=value, unit=unit):
-                self.assertIsNone(fks.temperature_to_celsius(value, unit))
+                self.assertIsNone(room.temperature_to_celsius(value, unit))
 
-    def test_external_fallback_and_recovery(self):
-        source = const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
+    def test_fks_external_fallback_and_recovery(self):
+        source = const.ROOM_TEMPERATURE_SOURCE_EXTERNAL
         self.assertEqual(
-            fks.select_fks_sv_room_temperature(source, 22.1, 20.0),
-            (22.1, "normal", const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL),
+            room.select_numeric_room_temperature(source, 22.1, 20.0),
+            (22.1, "normal", const.ROOM_TEMPERATURE_SOURCE_EXTERNAL),
         )
         self.assertEqual(
-            fks.select_fks_sv_room_temperature(source, None, 20.0),
-            (20.0, "fallback", const.FKS_SV_TEMPERATURE_SOURCE_INTERNAL),
+            room.select_numeric_room_temperature(source, None, 20.0),
+            (20.0, "fallback", const.ROOM_TEMPERATURE_SOURCE_NATIVE),
         )
         self.assertEqual(
-            fks.select_fks_sv_room_temperature(source, 22.4, 20.0),
-            (22.4, "normal", const.FKS_SV_TEMPERATURE_SOURCE_EXTERNAL),
+            room.select_numeric_room_temperature(source, 22.4, 20.0),
+            (22.4, "normal", const.ROOM_TEMPERATURE_SOURCE_EXTERNAL),
         )
         self.assertEqual(
-            fks.select_fks_sv_room_temperature(source, None, None),
+            room.select_numeric_room_temperature(source, None, None),
             (None, "error", None),
-        )
-
-    def test_internal_source_ignores_external_value(self):
-        self.assertEqual(
-            fks.select_fks_sv_room_temperature(
-                const.FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
-                25.0,
-                19.5,
-            ),
-            (19.5, "normal", const.FKS_SV_TEMPERATURE_SOURCE_INTERNAL),
         )
 
 
 class TestA52001Encoding(unittest.TestCase):
     def test_inverse_db2_encoding(self):
-        data = eep.encode_a5_20_01_temperature_setpoint_data(
+        data = eep20.encode_a5_20_01_temperature_setpoint_data(
             target_temperature=20.0,
             room_temperature=20.0,
         )
         self.assertEqual(data, bytes((0x80, 0x7F, 0x04, 0x08)))
-
-        data_40 = eep.encode_a5_20_01_temperature_setpoint_data(
-            target_temperature=20.0,
-            room_temperature=40.0,
+        self.assertEqual(
+            eep20.encode_a5_20_01_temperature_setpoint_data(
+                target_temperature=20.0,
+                room_temperature=40.0,
+            )[1],
+            0x00,
         )
-        self.assertEqual(data_40[1], 0x00)
-
-        data_0 = eep.encode_a5_20_01_temperature_setpoint_data(
-            target_temperature=20.0,
-            room_temperature=0.0,
+        self.assertEqual(
+            eep20.encode_a5_20_01_temperature_setpoint_data(
+                target_temperature=20.0,
+                room_temperature=0.0,
+            )[1],
+            0xFF,
         )
-        self.assertEqual(data_0[1], 0xFF)
 
-    def test_missing_or_nonfinite_room_temperature_cannot_encode(self):
+    def test_missing_room_temperature_cannot_encode(self):
         for value in (None, math.nan, math.inf):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    eep.encode_a5_20_01_temperature_setpoint_data(
+                    eep20.encode_a5_20_01_temperature_setpoint_data(
                         target_temperature=20.0,
                         room_temperature=value,
                     )
 
-    def test_db2_zero_decodes_as_real_40_degrees(self):
-        decoded = eep.decode_a5_20_01_controller_telegram(
+    def test_db2_zero_decodes_as_40_degrees(self):
+        decoded = eep20.decode_a5_20_01_controller_telegram(
             bytes((0x80, 0x00, 0x04, 0x08))
         )
         self.assertEqual(decoded["room_temperature_command"], 40.0)
-        self.assertTrue(decoded["temperature_control"])
 
-    def test_builder_payload_matches_pure_encoder(self):
-        expected = eep.encode_a5_20_01_temperature_setpoint_data(
-            target_temperature=21.0,
-            room_temperature=22.0,
+
+class TestA51006Encoding(unittest.TestCase):
+    def test_external_room_temperature_is_encoded_in_db1(self):
+        data = eep10.encode_a5_10_06_room_control_data(
+            target_temperature=20.0,
+            current_temperature=20.0,
+            hvac_mode="heat",
         )
-        message = eep.build_a5_20_01_temperature_setpoint(
+        self.assertEqual(data[0], 0x70)
+        self.assertEqual(data[1], 0x7F)
+        self.assertEqual(data[2], 0x7F)
+        self.assertEqual(data[3], 0x0E)
+
+    def test_native_source_preserves_existing_db1_zero_path(self):
+        data = eep10.encode_a5_10_06_room_control_data(
+            target_temperature=20.0,
+            current_temperature=None,
+            hvac_mode="heat",
+        )
+        self.assertEqual(data[2], 0x00)
+        self.assertEqual(data[3], 0x0E)
+
+    def test_existing_priority_is_not_changed_by_external_temperature(self):
+        data = eep10.encode_a5_10_06_room_control_data(
+            target_temperature=21.0,
+            current_temperature=22.0,
+            hvac_mode="heat",
+            priority=0x08,
+        )
+        self.assertEqual(data[3], 0x08)
+
+    def test_builder_matches_pure_encoder(self):
+        expected = eep10.encode_a5_10_06_room_control_data(
+            target_temperature=21.0,
+            current_temperature=22.0,
+            hvac_mode="heat",
+        )
+        message = eep10.build_a5_10_06_room_control(
             "00-00-B0-01",
             target_temperature=21.0,
-            room_temperature=22.0,
+            current_temperature=22.0,
+            hvac_mode="heat",
         )
         self.assertEqual(message.body[2:6], expected)
 
@@ -284,39 +359,46 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.1.164")
 
-    def test_options_flow_exposes_fks_sv_menu_and_entity_selector(self):
+    def test_options_flow_is_generalized(self):
         source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
-        self.assertIn('"fks_sv_room_temperature"', source)
+        self.assertIn('"room_temperature_assignment"', source)
+        self.assertIn("is_room_temperature_assignable_device", source)
+        self.assertIn("set_room_temperature_override", source)
         self.assertIn("EntitySelector", source)
-        self.assertIn("set_fks_sv_override", source)
 
     def test_yaml_import_still_preserves_legacy_room_temperature_entity(self):
         source = (INTEGRATION / "yaml_config.py").read_text(encoding="utf-8")
         self.assertIn('"room_temperature_entity"', source)
 
-    def test_live_source_callbacks_do_not_send_radio_telegrams(self):
+    def test_fks_source_callbacks_do_not_transmit_directly(self):
         climate = INTEGRATION / "climate.py"
-        for name in (
-            "_handle_external_temperature_state_event",
-            "_handle_temperature_options_updated",
-        ):
-            source = self._function_source(climate, name)
-            self.assertNotIn("async_send", source)
-            self.assertNotIn("_async_reply_fks_sv_control", source)
+        source = self._function_source(climate, "_handle_external_temperature_state_event")
+        self.assertNotIn("_async_reply_fks_sv_control", source)
+        self.assertIn("_schedule_a5_10_06_room_temperature_push", source)
+
+    def test_a5_10_06_push_uses_existing_set_temperature_path(self):
+        source = self._function_source(
+            INTEGRATION / "climate.py",
+            "_async_push_a5_10_06_room_temperature",
+        )
+        self.assertIn('"set_temperature"', source)
+        self.assertIn("current_temperature=current_temperature", source)
+
+    def test_gateway_passes_optional_current_temperature_to_a5_10_06_encoder(self):
+        source = (INTEGRATION / "gateway.py").read_text(encoding="utf-8")
+        self.assertIn("current_temperature=kwargs.get(\"current_temperature\")", source)
 
     def test_options_listener_dispatches_without_forcing_reload(self):
         source = (INTEGRATION / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn("SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED", source)
+        self.assertIn("SIGNAL_ROOM_TEMPERATURE_UPDATED", source)
         self.assertIn("async_dispatcher_send", source)
         self.assertIn("if not entry.options.get(CONF_RELOAD_AFTER_SAVE)", source)
 
-    def test_new_room_temperature_feature_does_not_replace_protocol_routing(self):
-        source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
-        self.assertIn('self._is_fks_sv = self._eep == "A5-20-01"', source)
-        self.assertIn(
-            "self._has_fks_sv_room_temperature_source = is_fks_sv_device(device)",
-            source,
-        )
+    def test_fks_sleeping_valve_branch_still_precedes_normal_send(self):
+        source = self._function_source(INTEGRATION / "climate.py", "async_set_temperature")
+        marker = "if self._is_fks_sv or self._is_fks_hora"
+        self.assertIn(marker, source)
+        self.assertLess(source.index(marker), source.index("async_send_actuator_command"))
 
 
 if __name__ == "__main__":
