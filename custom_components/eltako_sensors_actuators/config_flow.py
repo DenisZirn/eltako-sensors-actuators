@@ -160,36 +160,39 @@ def _friendly_serial_label(device: str, description: str | None, hwid: str | Non
 def _list_serial_ports() -> dict[str, dict[str, str]]:
     """Return clean serial port metadata for the config/options flow."""
     choices: dict[str, dict[str, str]] = {}
+    grouped: dict[str, list[Any]] = {}
     try:
         from serial.tools import list_ports
     except Exception as err:  # pragma: no cover - depends on HA runtime
-        _LOGGER.warning("pyserial list_ports unavailable: %s", err)
-        return choices
+        # Do not abort here. HA OS may still expose the stable
+        # /dev/serial/by-id EnOcean Programmer path even when pyserial's port
+        # enumeration is temporarily unavailable or incomplete.
+        _LOGGER.warning("pyserial list_ports unavailable, falling back to /dev/serial/by-id: %s", err)
+        list_ports = None
 
-    grouped: dict[str, list[Any]] = {}
+    if list_ports is not None:
+        for port in list_ports.comports(include_links=True):
+            device = str(port.device)
+            description = getattr(port, "description", None)
+            hwid = getattr(port, "hwid", None)
 
-    for port in list_ports.comports(include_links=True):
-        device = str(port.device)
-        description = getattr(port, "description", None)
-        hwid = getattr(port, "hwid", None)
+            if _is_noise_serial_port(device, description, hwid):
+                continue
 
-        if _is_noise_serial_port(device, description, hwid):
-            continue
+            if _infer_connection_kind(device, description, hwid) == CONNECTION_KIND_UNKNOWN:
+                continue
 
-        if _infer_connection_kind(device, description, hwid) == CONNECTION_KIND_UNKNOWN:
-            continue
+            grouped.setdefault(_dedupe_group_key(port), []).append(port)
 
-        grouped.setdefault(_dedupe_group_key(port), []).append(port)
-
-    for ports in grouped.values():
-        port = sorted(ports, key=_interface_rank)[0]
-        device = str(port.device)
-        description = getattr(port, "description", None)
-        hwid = getattr(port, "hwid", None)
-        choices[device] = {
-            "label": _friendly_serial_label(device, description, hwid),
-            "connection_kind": _infer_connection_kind(device, description, hwid),
-        }
+        for ports in grouped.values():
+            port = sorted(ports, key=_interface_rank)[0]
+            device = str(port.device)
+            description = getattr(port, "description", None)
+            hwid = getattr(port, "hwid", None)
+            choices[device] = {
+                "label": _friendly_serial_label(device, description, hwid),
+                "connection_kind": _infer_connection_kind(device, description, hwid),
+            }
 
     # HA OS systems sometimes expose /dev/serial/by-id links even when
     # pyserial's include_links result is incomplete.  Add these links
@@ -432,6 +435,11 @@ class EltakoSensorsActuatorsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)
                 connection_kind = serial_ports.get(selected_port, {}).get(
                     "connection_kind", CONNECTION_KIND_UNKNOWN
                 )
+                if connection_kind == CONNECTION_KIND_UNKNOWN:
+                    # Manual/stale paths must still recover FAM-USB from the
+                    # stable EnOcean Programmer path instead of silently
+                    # falling back to gateway_type=auto.
+                    connection_kind = _infer_connection_kind(port, port, port)
                 gateway_type = _gateway_type_for_connection_kind(connection_kind)
 
                 self._pending_port = port
