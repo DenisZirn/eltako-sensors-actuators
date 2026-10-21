@@ -40,15 +40,16 @@ from .bus.eep_a5_20_01 import (
 from .const import (
     CONF_DEVICES,
     DOMAIN,
-    FKS_SV_TEMPERATURE_SOURCE_EXTERNAL,
-    FKS_SV_TEMPERATURE_SOURCE_INTERNAL,
-    SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+    ROOM_TEMPERATURE_SOURCE_NATIVE,
+    SIGNAL_ROOM_TEMPERATURE_UPDATED,
 )
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
-from .fks_sv_temperature import (
-    is_fks_sv_device,
-    resolve_fks_sv_temperature_config,
-    select_fks_sv_room_temperature,
+from .room_temperature import (
+    is_room_temperature_assignable_device,
+    resolve_room_temperature_config,
+    room_temperature_device_kind,
+    select_numeric_room_temperature,
     temperature_to_celsius,
 )
 
@@ -134,7 +135,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         # used only for the new FKS-SV room-temperature UI feature so other
         # A5-20-01 climate profiles are not changed by this test version.
         self._is_fks_sv = self._eep == "A5-20-01"
-        self._has_fks_sv_room_temperature_source = is_fks_sv_device(device)
+        self._has_room_temperature_assignment = is_room_temperature_assignable_device(device)
+        self._room_temperature_device_kind = room_temperature_device_kind(device)
         self._is_fks_hora = self._eep == "A5-20-04" and _futh55ed_mode(device) == "fks_hora"
         # ELTAKO setpoints and feedback are natively Celsius. Keep this explicit
         # on every instance so no legacy YAML temperature_unit value can replace it.
@@ -233,7 +235,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._internal_temperature: float | None = None
         self._external_temperature: float | None = None
         self._used_room_temperature: float | None = None
-        self._configured_temperature_source = FKS_SV_TEMPERATURE_SOURCE_INTERNAL
+        self._configured_temperature_source = ROOM_TEMPERATURE_SOURCE_NATIVE
         self._actual_temperature_source: str | None = None
         self._temperature_source_status = "error"
         self._temperature_config_origin = "default"
@@ -267,7 +269,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             try:
                 restored_current = attrs.get("current_temperature")
                 restored_genuine = bool(attrs.get("genuine_current_temperature", False))
-                if self._has_fks_sv_room_temperature_source:
+                if self._has_room_temperature_assignment:
                     restored_internal = attrs.get("interne_fks_sv_temperatur", restored_current)
                     self._internal_temperature = temperature_to_celsius(restored_internal, "°C")
                 elif restored_current is not None:
@@ -292,7 +294,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
                 self._attr_preset_mode = restored_preset
 
-            if self._has_fks_sv_room_temperature_source:
+            if self._has_room_temperature_assignment:
                 self._last_sent_room_temperature = temperature_to_celsius(
                     attrs.get("zuletzt_gesendete_isttemperatur"), "°C"
                 )
@@ -305,14 +307,14 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
                 self._last_controller_response = attrs.get("letzte_controllerantwort")
 
-        if self._has_fks_sv_room_temperature_source:
+        if self._has_room_temperature_assignment:
             self._remove_temperature_options_listener = async_dispatcher_connect(
                 self.hass,
-                SIGNAL_FKS_SV_ROOM_TEMPERATURE_UPDATED,
+                SIGNAL_ROOM_TEMPERATURE_UPDATED,
                 self._handle_temperature_options_updated,
             )
             self._rebind_external_temperature_listener()
-            self._refresh_fks_sv_temperature_state()
+            self._refresh_room_temperature_state()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -330,18 +332,18 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             attributes.get("unit_of_measurement"),
         )
 
-    def _refresh_fks_sv_temperature_state(self) -> float | None:
+    def _refresh_room_temperature_state(self) -> float | None:
         """Resolve configured source, fallback and displayed/current temperature."""
-        if not self._has_fks_sv_room_temperature_source:
+        if not self._has_room_temperature_assignment:
             return self._current_temperature
 
-        source, entity_id, origin = resolve_fks_sv_temperature_config(
+        source, entity_id, origin = resolve_room_temperature_config(
             self.device_config,
             self._entry_options(),
         )
         external = self._read_external_temperature(entity_id)
         internal = temperature_to_celsius(self._internal_temperature, "°C")
-        used, status, actual_source = select_fks_sv_room_temperature(
+        used, status, actual_source = select_numeric_room_temperature(
             source,
             external,
             internal,
@@ -363,13 +365,13 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._remove_external_temperature_listener()
             self._remove_external_temperature_listener = None
 
-        if not self._has_fks_sv_room_temperature_source:
+        if not self._has_room_temperature_assignment:
             return
-        source, entity_id, _origin = resolve_fks_sv_temperature_config(
+        source, entity_id, _origin = resolve_room_temperature_config(
             self.device_config,
             self._entry_options(),
         )
-        if source != FKS_SV_TEMPERATURE_SOURCE_EXTERNAL or not entity_id:
+        if source != ROOM_TEMPERATURE_SOURCE_EXTERNAL or not entity_id:
             return
         self._remove_external_temperature_listener = async_track_state_change_event(
             self.hass,
@@ -378,14 +380,14 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
 
     def _handle_external_temperature_state_event(self, _event) -> None:
-        self._refresh_fks_sv_temperature_state()
+        self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
 
     def _handle_temperature_options_updated(self, entry_id: str) -> None:
-        if entry_id != self.gateway.entry_id or not self._has_fks_sv_room_temperature_source:
+        if entry_id != self.gateway.entry_id or not self._has_room_temperature_assignment:
             return
         self._rebind_external_temperature_listener()
-        self._refresh_fks_sv_temperature_state()
+        self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
 
     @property
@@ -456,17 +458,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     "kommunikationsstatus": "verbunden" if self._last_rx else "Warten auf erstes FKS-SV-Telegramm",
                 }
             )
-        if self._has_fks_sv_room_temperature_source:
+        if self._has_room_temperature_assignment:
             configured_label = (
                 "Extern"
-                if self._configured_temperature_source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
+                if self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
                 else "Intern"
             )
             actual_label = (
                 "Extern"
-                if self._actual_temperature_source == FKS_SV_TEMPERATURE_SOURCE_EXTERNAL
+                if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
                 else "Intern"
-                if self._actual_temperature_source == FKS_SV_TEMPERATURE_SOURCE_INTERNAL
+                if self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_NATIVE
                 else None
             )
             status_label = {
@@ -611,7 +613,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            if self._has_fks_sv_room_temperature_source:
+            if self._has_room_temperature_assignment:
                 self._internal_temperature = temperature_to_celsius(
                     decoded.get("temperature"), "°C"
                 )
@@ -634,7 +636,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if key in decoded:
                 setattr(self, attr, bool(decoded.get(key)))
 
-        self._refresh_fks_sv_temperature_state()
+        self._refresh_room_temperature_state()
         self.schedule_update_ha_state()
         # Every genuine valve telegram opens the receive window. The controller
         # must answer every cycle, even when the HA target did not just change.
@@ -788,8 +790,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     async def _async_reply_fks_sv_control(self) -> None:
         room_temperature = (
-            self._refresh_fks_sv_temperature_state()
-            if self._has_fks_sv_room_temperature_source
+            self._refresh_room_temperature_state()
+            if self._has_room_temperature_assignment
             else self._legacy_a5_20_01_room_temperature()
         )
         if room_temperature is None:
@@ -823,8 +825,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     async def _async_reply_fks_sv_teach_in(self, query_data: bytes) -> None:
         room_temperature = (
-            self._refresh_fks_sv_temperature_state()
-            if self._has_fks_sv_room_temperature_source
+            self._refresh_room_temperature_state()
+            if self._has_room_temperature_assignment
             else self._legacy_a5_20_01_room_temperature()
         )
         controller_data = (
