@@ -1069,11 +1069,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             # chooses a new target temperature.
             heater_mode = "normal"
 
+        outgoing_room_temperature = (
+            self._a5_10_06_outgoing_room_temperature()
+            if self._room_temperature_device_kind == "a5_10_06"
+            else None
+        )
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
             temperature=temperature,
-            current_temperature=self._current_temperature,
+            current_temperature=outgoing_room_temperature,
             heater_mode=heater_mode,
         )
         if not ok:
@@ -1085,10 +1090,27 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._fhk_heater_mode = heater_mode
             if heater_mode == "normal":
                 self._attr_preset_mode = PRESET_HOME
+        if self._room_temperature_device_kind == "a5_10_06":
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            priority = self.device_config.get("priority") or raw.get("priority")
+            data = encode_a5_10_06_room_control_data(
+                target_temperature=temperature,
+                current_temperature=outgoing_room_temperature,
+                hvac_mode=heater_mode,
+                priority=priority,
+            )
+            self._last_sent_room_temperature = outgoing_room_temperature
+            self._last_sent_target_temperature = temperature
+            self._last_controller_telegram = data.hex("-").upper()
+            self._last_controller_response = _now_iso()
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        for task in (self._control_reply_task, self._teach_in_reply_task):
+        for task in (
+            self._control_reply_task,
+            self._teach_in_reply_task,
+            self._room_temperature_push_task,
+        ):
             if task is not None and not task.done():
                 task.cancel()
         if self._remove_external_temperature_listener is not None:
