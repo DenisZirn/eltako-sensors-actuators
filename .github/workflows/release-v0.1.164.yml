@@ -1,0 +1,87 @@
+name: Release v0.1.164
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v0.1.164.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate production package
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("custom_components/eltako_sensors_actuators")
+          assert json.loads((root / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.164"
+          for path in root.rglob("*.py"):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          for path in root.rglob("*.json"):
+              json.loads(path.read_text(encoding="utf-8"))
+          config_flow = (root / "config_flow.py").read_text(encoding="utf-8")
+          assert "async_step_room_temperature_source_external" in config_flow
+          assert '"room_temperature_source_native"' in config_flow
+          assert 'device_class == "temperature"' in config_flow
+          PY
+          python tests/test_fks_sv_room_temperature.py
+
+      - name: Package Home Assistant integration
+        run: |
+          mkdir -p dist/custom_components
+          cp -a custom_components/eltako_sensors_actuators dist/custom_components/
+          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
+          find dist -type f -name '*.pyc' -delete
+          cd dist
+          zip -qr ../ELTAKO_Sensors_Actuators_v0.1.164.zip custom_components
+
+      - name: Publish official release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes-v0.1.164.md <<'EOF'
+          ## ELTAKO Sensors & Actuators v0.1.164
+
+          ### Raumtemperatursensoren Heizungsaktoren zuweisen
+          - Neue Geräteoption **Raumtemperatursensor zuweisen** für FKS-SV, FHK14, F4HK14 und kompatible FAE14-Aktoren (A5-10-06).
+          - Die Aktoren werden direkt als anklickbare Menüpunkte angezeigt, einschließlich des bisherigen Zuordnungsstatus.
+          - Auswahl zwischen geräteeigener/eingelernter Temperaturquelle und externem Home-Assistant-Temperatursensor.
+          - Die aktive Quelle wird mit einem Häkchen gekennzeichnet. Die interne Quelle lässt sich ohne zusätzlichen Bestätigungsklick auswählen.
+          - Externe Temperatursensoren werden über ein Dropdown ausgewählt; die Liste enthält nur Sensoren mit Temperatur-Geräteklasse oder Celsius-/Fahrenheit-Einheit. Andere numerische Entitäten wie Gateway-IDs und Zähler werden ausgeblendet.
+          - Einheitliche Zurück-Navigation in den Zuordnungsdialogen.
+
+          ### Persistenz und Temperaturübertragung
+          - Zuordnungen werden pro physischer EnOcean-Geräte-ID in den Integrationsoptionen gespeichert und bleiben bei einem EEDTOY-YAML-Reimport bestehen.
+          - Die manuelle UI-Zuordnung hat Vorrang vor einem gegebenenfalls im YAML hinterlegten Raumtemperatursensor.
+          - Temperaturwerte werden auf Celsius normalisiert und auf Plausibilität geprüft.
+          - FKS-SV übermittelt die ausgewählte Isttemperatur während des nächsten regulären Empfangsfensters; die bestehende batteriebetriebene Kommunikation bleibt erhalten.
+          - Bei Ausfall eines externen Temperatursensors greifen die vorgesehenen gerätespezifischen Fallbacks.
+          - Bei FHK14/F4HK14/FAE14-Aktoren bleibt die A5-10-06-Telegrammbehandlung gerätespezifisch.
+
+          ### Gateways und Bedienung
+          - Erkennung von FAM-USB-EnOcean-Programmern über stabile `if01`-Pfade weiter abgesichert.
+          - Verbesserter Fallback bei fehlender oder unvollständiger serieller Portauflistung und bei manuell angegebenen EnOcean-Programmer-Pfaden.
+          - Optionen-Menü und Funk-/Bus-Diagnose bleiben erhalten.
+
+          ### Qualitätssicherung
+          - Automatisierte Tests für Zuordnung, Prioritäten, Fallback-Verhalten, A5-20-01-/A5-10-06-Codierung und Bediennavigation.
+          - Python- und JSON-Prüfungen sowie Tests gegen die Home-Assistant-API.
+          - Nicht alle Kombinationen wurden an realer Hardware geprüft.
+
+          ### Installation
+          Über HACS auf v0.1.164 aktualisieren und Home Assistant anschließend neu starten. Alternativ die angehängte ZIP-Datei manuell installieren.
+          EOF
+          if gh release view v0.1.164 >/dev/null 2>&1; then
+            echo "Release v0.1.164 exists; refusing to overwrite."
+            exit 1
+          fi
+          gh release create v0.1.164 ELTAKO_Sensors_Actuators_v0.1.164.zip --target main --title "ELTAKO Sensors & Actuators v0.1.164" --notes-file release-notes-v0.1.164.md --latest
