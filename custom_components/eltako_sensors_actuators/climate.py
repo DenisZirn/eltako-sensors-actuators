@@ -289,8 +289,22 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 restored_current = attrs.get("current_temperature")
                 restored_genuine = bool(attrs.get("genuine_current_temperature", False))
                 if self._has_room_temperature_assignment:
-                    restored_internal = attrs.get("interne_fks_sv_temperatur", restored_current)
-                    self._internal_temperature = temperature_to_celsius(restored_internal, "°C")
+                    if self._room_temperature_device_kind == "fks_sv":
+                        restored_native = attrs.get(
+                            "interne_fks_sv_temperatur",
+                            attrs.get("native_raumtemperatur"),
+                        )
+                    else:
+                        restored_native = attrs.get("interne_aktor_temperatur")
+                        if restored_native is None and restored_genuine:
+                            restored_native = restored_current
+                    self._internal_temperature = temperature_to_celsius(
+                        restored_native, "°C"
+                    )
+                    if self._room_temperature_device_kind == "a5_10_06":
+                        self._has_genuine_current_temperature = bool(
+                            restored_genuine and self._internal_temperature is not None
+                        )
                 elif restored_current is not None:
                     if self._is_fhk14 or self._is_fae14lpr:
                         if restored_genuine:
@@ -351,6 +365,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             attributes.get("unit_of_measurement"),
         )
 
+    def _native_a5_10_06_display_temperature(self) -> float | None:
+        internal = temperature_to_celsius(self._internal_temperature, "°C")
+        if internal is not None and self._has_genuine_current_temperature:
+            return internal
+        if self._is_fhk14:
+            return 40.0
+        if self._is_fae14lpr:
+            return 0.0
+        return internal
+
     def _refresh_room_temperature_state(self) -> float | None:
         """Resolve configured source, fallback and displayed/current temperature."""
         if not self._has_room_temperature_assignment:
@@ -362,11 +386,33 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
         external = self._read_external_temperature(entity_id)
         internal = temperature_to_celsius(self._internal_temperature, "°C")
-        used, status, actual_source = select_numeric_room_temperature(
-            source,
-            external,
-            internal,
-        )
+
+        if self._room_temperature_device_kind == "fks_sv":
+            used, status, actual_source = select_numeric_room_temperature(
+                source,
+                external,
+                internal,
+            )
+            displayed = used
+        else:
+            native_display = self._native_a5_10_06_display_temperature()
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and external is not None:
+                used = external
+                status = "normal"
+                actual_source = ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                displayed = external
+            elif source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                # For A5-10-06, fallback means restoring the established native/
+                # learned sensor path by transmitting current_temperature=None.
+                used = None
+                status = "fallback"
+                actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+                displayed = native_display
+            else:
+                used = None
+                status = "normal"
+                actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+                displayed = native_display
 
         self._configured_temperature_source = source
         self._temperature_config_origin = origin
@@ -376,8 +422,59 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._used_room_temperature = used
         self._temperature_source_status = status
         self._actual_temperature_source = actual_source
-        self._current_temperature = used
-        return used
+        self._current_temperature = displayed
+        return used if self._room_temperature_device_kind == "fks_sv" else displayed
+
+    def _a5_10_06_outgoing_room_temperature(self) -> float | None:
+        """Return numeric external temperature or None for native actuator control."""
+        if self._room_temperature_device_kind != "a5_10_06":
+            return None
+        self._refresh_room_temperature_state()
+        if (
+            self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+            and self._external_temperature is not None
+        ):
+            return self._external_temperature
+        return None
+
+    def _schedule_a5_10_06_room_temperature_push(self) -> None:
+        if self._room_temperature_device_kind != "a5_10_06":
+            return
+        if self._room_temperature_push_task is None or self._room_temperature_push_task.done():
+            self._room_temperature_push_task = self.gateway.hass.async_create_task(
+                self._async_push_a5_10_06_room_temperature()
+            )
+
+    async def _async_push_a5_10_06_room_temperature(self) -> None:
+        """Push source changes immediately to mains-powered A5-10-06 actuators."""
+        current_temperature = self._a5_10_06_outgoing_room_temperature()
+        target = float(self._target_temperature or 20.0)
+        heater_mode = self._fhk_heater_mode
+        ok = await self.gateway.async_send_actuator_command(
+            self.device_config,
+            "set_temperature",
+            temperature=target,
+            current_temperature=current_temperature,
+            heater_mode=heater_mode,
+        )
+        if ok:
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            priority = self.device_config.get("priority") or raw.get("priority")
+            data = encode_a5_10_06_room_control_data(
+                target_temperature=target,
+                current_temperature=current_temperature,
+                hvac_mode=heater_mode,
+                priority=priority,
+            )
+            timestamp = _now_iso()
+            self._last_sent_room_temperature = current_temperature
+            self._last_sent_target_temperature = target
+            self._last_controller_telegram = data.hex("-").upper()
+            self._last_controller_response = timestamp
+            self._last_error = None
+        else:
+            self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
+        self.schedule_update_ha_state()
 
     def _rebind_external_temperature_listener(self) -> None:
         if self._remove_external_temperature_listener is not None:
@@ -399,7 +496,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
 
     def _handle_external_temperature_state_event(self, _event) -> None:
+        previous = (
+            self._external_temperature,
+            self._temperature_source_status,
+            self._configured_temperature_source,
+        )
         self._refresh_room_temperature_state()
+        current = (
+            self._external_temperature,
+            self._temperature_source_status,
+            self._configured_temperature_source,
+        )
+        if current != previous:
+            self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
     def _handle_temperature_options_updated(self, entry_id: str) -> None:
@@ -407,6 +516,9 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
         self._rebind_external_temperature_listener()
         self._refresh_room_temperature_state()
+        # FKS-SV must wait for the valve's next receive window. A5-10-06
+        # Series-14 actuators are mains powered and can receive the update now.
+        self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
     @property
