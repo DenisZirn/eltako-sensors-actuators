@@ -29,7 +29,7 @@
           "connection": "Gateway / seriellen Anschluss ändern",
           "yaml": "EEDTOY YAML importieren oder ersetzen",
           "diagnostics": "Funk / Bus Diagnose",
-          "fks_sv_room_temperature": "FKS-SV Raumtemperatursensor"
+          "room_temperature_assignment": "Raumtemperatursensor zuweisen"
         }
       },
       "connection": {
@@ -76,25 +76,25 @@
           "diagnostics_enabled": "Diagnose anzeigen"
         }
       },
-      "fks_sv_room_temperature": {
-        "title": "FKS-SV Raumtemperatursensor",
-        "description": "Wähle den FKS-SV aus, dessen Raumtemperaturquelle konfiguriert werden soll. Die Zuordnung erfolgt intern über die physische EnOcean-ID und bleibt bei einer Umbenennung des Geräts erhalten.",
+      "room_temperature_assignment": {
+        "title": "Raumtemperatursensor zuweisen",
+        "description": "Wähle den Heizungsaktor aus, dem eine Raumtemperaturquelle zugeordnet werden soll. Unterstützt werden FKS-SV sowie FHK14/F4HK14 und FAE14-Aktoren mit A5-10-06. Die Zuordnung erfolgt dauerhaft über die physische EnOcean-ID.",
         "data": {
-          "fks_sv_device_id": "FKS-SV"
+          "room_temperature_device_id": "Heizungsaktor"
         }
       },
-      "fks_sv_room_temperature_source": {
+      "room_temperature_source": {
         "title": "Temperaturquelle auswählen",
-        "description": "Wähle, ob die interne FKS-SV-Temperatur oder ein externer Home-Assistant-Temperatursensor für die Regelung verwendet werden soll.",
+        "description": "Wähle die bestehende geräteeigene bzw. eingelernte Temperaturquelle oder einen externen Home-Assistant-Raumtemperatursensor.",
         "data": {
-          "fks_sv_temperature_source": "Temperaturquelle"
+          "room_temperature_source": "Temperaturquelle"
         }
       },
-      "fks_sv_room_temperature_entity": {
-        "title": "Externen Temperatursensor auswählen",
-        "description": "Wähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Sensoren mit device_class temperature sowie geeignete °C/°F-Sensoren werden akzeptiert. Fällt der externe Sensor aus, verwendet die Integration automatisch die interne FKS-SV-Temperatur.",
+      "room_temperature_entity": {
+        "title": "Externen Raumtemperatursensor auswählen",
+        "description": "Wähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Geeignete °C/°F-Sensoren werden unabhängig von der verwendeten Integration unterstützt.",
         "data": {
-          "fks_sv_external_temperature_entity": "Externer Temperatursensor"
+          "external_temperature_entity": "Externer Raumtemperatursensor"
         }
       }
     },
@@ -109,10 +109,10 @@
       "yaml_file_required": "Bitte einen YAML-Dateipfad angeben.",
       "sender_id_collision": "Mindestens eine FKS-SV sender.id ist bereits einem anderen Gerät oder Regler zugeordnet. Jeder unabhängig geregelte FKS-SV benötigt eine eigene freie Sender-ID.",
       "invalid_yaml_tabs": "Der YAML-Code enthält unzulässige Tabulatoren in der Einrückung. Verwende Leerzeichen für die YAML-Einrückung.",
-      "no_fks_sv_devices": "In dieser Gateway-Konfiguration wurde kein FKS-SV gefunden.",
-      "missing_fks_sv": "Bitte einen gültigen FKS-SV auswählen.",
       "invalid_temperature_source": "Bitte eine gültige Temperaturquelle auswählen.",
-      "invalid_temperature_entity": "Die ausgewählte Entity ist kein geeigneter Temperatursensor. Verwende einen Sensor mit Temperatur-Device-Class, °C/°F-Einheit oder einen gültigen numerischen Celsiuswert."
+      "invalid_temperature_entity": "Die ausgewählte Entity ist kein geeigneter Temperatursensor. Verwende einen Sensor mit Temperatur-Device-Class, °C/°F-Einheit oder einen gültigen numerischen Celsiuswert.",
+      "no_room_temperature_devices": "In dieser Gateway-Konfiguration wurde kein unterstützter Heizungsaktor für die Raumtemperaturzuweisung gefunden.",
+      "missing_room_temperature_device": "Bitte einen gültigen Heizungsaktor auswählen."
     }
   },
   "entity": {
