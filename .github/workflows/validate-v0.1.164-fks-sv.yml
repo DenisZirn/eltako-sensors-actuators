@@ -133,7 +133,7 @@ jobs:
               "custom_components/eltako_sensors_actuators/room_temperature.py",
               "custom_components/eltako_sensors_actuators/gateway.py",
               "custom_components/eltako_sensors_actuators/frontend/diagnostics-panel.js",
-    "custom_components/eltako_sensors_actuators/manifest.json",
+              "custom_components/eltako_sensors_actuators/manifest.json",
               "custom_components/eltako_sensors_actuators/strings.json",
               "custom_components/eltako_sensors_actuators/translations/de.json",
               "custom_components/eltako_sensors_actuators/translations/en.json",
