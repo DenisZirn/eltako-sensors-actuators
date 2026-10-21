@@ -285,12 +285,12 @@ def _gateway_choice_map(gateways) -> dict[str, str]:
 
 
 def _temperature_entity_selector() -> Any:
-    """Use Home Assistant's entity selector while allowing legacy custom sensors."""
+    """Retain the sensor-domain selector for compatibility with HA versions."""
     if selector is not None:
         try:
-            # Restrict the selector to sensor entities. A strict temperature
-            # device_class filter would hide valid custom/MQTT sensors without
-            # a device class, so temperature suitability is validated on save.
+            # The actual options dropdown is populated by
+            # _temperature_entity_choices(), which applies strict temperature
+            # metadata filtering and also supports unit-only MQTT sensors.
             return selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             )
@@ -340,7 +340,13 @@ def _temperature_entity_choices(hass) -> dict[str, str]:
 
 
 def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
-    """Accept temperature device_class, °C/°F units, or safe unitless values."""
+    """Only allow sensor entities explicitly identified as temperatures.
+
+    Numerical sensor values alone do not qualify: gateway IDs, counters,
+    voltages, percentages and other unrelated entities are also numeric.
+    Keep unit-only MQTT/template temperature sensors available when they
+    expose °C/°F but do not declare a device_class.
+    """
     entity_id = str(entity_id or "").strip()
     if not entity_id.startswith("sensor."):
         return False
@@ -349,14 +355,10 @@ def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
         return False
     attrs = getattr(state, "attributes", {}) or {}
     device_class = str(attrs.get("device_class") or "").strip().lower()
-    unit = str(attrs.get("unit_of_measurement") or "").strip()
-    if device_class == "temperature":
-        return True
-    if unit.upper() in {"C", "°C", "CELSIUS", "F", "°F", "FAHRENHEIT"}:
-        return True
-    # Support custom sensors without device_class/unit only when their current
-    # state is already a safe, representable Celsius value.
-    return temperature_to_celsius(getattr(state, "state", None), "") is not None
+    unit = str(attrs.get("unit_of_measurement") or "").strip().upper()
+    return device_class == "temperature" or unit in {
+        "°C", "C", "CELSIUS", "°F", "F", "FAHRENHEIT"
+    }
 
 
 def _normalize_yaml_input(value: Any) -> str:
@@ -783,8 +785,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         default_entity = entity_id if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and entity_id else ""
 
         entity_choices = _temperature_entity_choices(self.hass)
-        if default_entity and default_entity not in entity_choices:
-            entity_choices[default_entity] = default_entity
+        # Do not reinsert a legacy saved numeric/non-temperature entity into
+        # the dropdown. The existing assignment remains stored until changed.
 
         if user_input is not None:
             selected = str(user_input.get(CONF_EXTERNAL_TEMPERATURE_ENTITY) or "").strip()
@@ -801,7 +803,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data=options)
 
-        default_choice = default_entity if default_entity else next(
+        default_choice = default_entity if default_entity in entity_choices else next(
             (choice for choice in entity_choices if choice != _BACK),
             _BACK,
         )
