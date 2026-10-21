@@ -45,7 +45,8 @@
         "description": "Wähle genau eine Importquelle. Manueller YAML-Code und Dateipfad werden in getrennten Dialogen verarbeitet, damit ein alter gespeicherter Pfad die Texteingabe nicht mehr blockieren kann.",
         "menu_options": {
           "yaml_text": "YAML-Code manuell einfügen",
-          "yaml_file": "YAML-Datei aus dem Konfigurationsordner verwenden"
+          "yaml_file": "YAML-Datei aus dem Konfigurationsordner verwenden",
+          "init": "← Zurück zum Hauptmenü"
         }
       },
       "yaml_gateway": {
@@ -85,14 +86,14 @@
       },
       "room_temperature_source": {
         "title": "Temperaturquelle auswählen",
-        "description": "Wähle die bestehende geräteeigene bzw. eingelernte Temperaturquelle oder einen externen Home-Assistant-Raumtemperatursensor.",
+        "description": "Aktuelle Zuordnung: {current_assignment}\n\nWähle die bestehende geräteeigene bzw. eingelernte Temperaturquelle oder einen externen Home-Assistant-Raumtemperatursensor.",
         "data": {
           "room_temperature_source": "Temperaturquelle"
         }
       },
       "room_temperature_entity": {
         "title": "Externen Raumtemperatursensor auswählen",
-        "description": "Wähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Geeignete °C/°F-Sensoren werden unabhängig von der verwendeten Integration unterstützt.",
+        "description": "Aktuelle Zuordnung: {current_assignment}\n\nWähle eine Home-Assistant-Sensor-Entity mit Temperaturwert. Geeignete °C/°F-Sensoren werden unabhängig von der verwendeten Integration unterstützt.",
         "data": {
           "external_temperature_entity": "Externer Raumtemperatursensor"
         }
