@@ -386,6 +386,20 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         sensor = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_entity")
         self.assertIn("vol.In(entity_choices)", sensor)
 
+    def test_temperature_filter_rejects_unrelated_numeric_entities(self):
+        source = self._function_source(
+            INTEGRATION / "config_flow.py", "_is_temperature_entity_compatible"
+        )
+        self.assertIn('device_class == "temperature"', source)
+        self.assertIn('"°C"', source)
+        self.assertIn('"°F"', source)
+        self.assertNotIn('temperature_to_celsius(getattr(state', source)
+        selector = self._function_source(
+            INTEGRATION / "config_flow.py", "async_step_room_temperature_entity"
+        )
+        self.assertNotIn("entity_choices[default_entity] = default_entity", selector)
+        self.assertIn("default_entity in entity_choices", selector)
+
     def test_yaml_import_still_preserves_legacy_room_temperature_entity(self):
         source = (INTEGRATION / "yaml_config.py").read_text(encoding="utf-8")
         self.assertIn('"room_temperature_entity"', source)
