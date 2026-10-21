@@ -29,7 +29,7 @@
           "connection": "Change gateway / serial connection",
           "yaml": "Import or replace EEDTOY YAML",
           "diagnostics": "Radio / bus diagnostics",
-          "fks_sv_room_temperature": "FKS-SV room temperature sensor"
+          "room_temperature_assignment": "Assign room temperature sensor"
         }
       },
       "connection": {
@@ -76,25 +76,25 @@
           "diagnostics_enabled": "Show diagnostics"
         }
       },
-      "fks_sv_room_temperature": {
-        "title": "FKS-SV room temperature sensor",
-        "description": "Select the FKS-SV whose room temperature source should be configured. The mapping uses the physical EnOcean ID internally and survives device renaming.",
+      "room_temperature_assignment": {
+        "title": "Assign room temperature sensor",
+        "description": "Select the heating actuator that should receive a room-temperature source. Supported devices are FKS-SV and A5-10-06 FHK14/F4HK14/FAE14 actuators. The mapping is stored persistently by physical EnOcean ID.",
         "data": {
-          "fks_sv_device_id": "FKS-SV"
+          "room_temperature_device_id": "Heating actuator"
         }
       },
-      "fks_sv_room_temperature_source": {
+      "room_temperature_source": {
         "title": "Select temperature source",
-        "description": "Choose whether the internal FKS-SV temperature or an external Home Assistant temperature sensor should be used for control.",
+        "description": "Choose the existing device/native or learned temperature source, or an external Home Assistant room-temperature sensor.",
         "data": {
-          "fks_sv_temperature_source": "Temperature source"
+          "room_temperature_source": "Temperature source"
         }
       },
-      "fks_sv_room_temperature_entity": {
-        "title": "Select external temperature sensor",
-        "description": "Select a Home Assistant sensor entity that provides temperature. Sensors with device_class temperature and suitable °C/°F sensors are accepted. If the external sensor fails, the integration automatically falls back to the internal FKS-SV temperature.",
+      "room_temperature_entity": {
+        "title": "Select external room temperature sensor",
+        "description": "Select a Home Assistant sensor entity with a temperature value. Suitable °C/°F sensors are supported regardless of the providing integration.",
         "data": {
-          "fks_sv_external_temperature_entity": "External temperature sensor"
+          "external_temperature_entity": "External room temperature sensor"
         }
       }
     },
@@ -109,10 +109,10 @@
       "yaml_file_required": "Please specify a YAML file path.",
       "sender_id_collision": "At least one FKS-SV sender.id is already assigned to another device or controller. Each independently controlled FKS-SV requires its own free sender ID.",
       "invalid_yaml_tabs": "The YAML code contains invalid tab characters in the indentation. Use spaces for YAML indentation.",
-      "no_fks_sv_devices": "No FKS-SV was found in this gateway configuration.",
-      "missing_fks_sv": "Please select a valid FKS-SV.",
       "invalid_temperature_source": "Please select a valid temperature source.",
-      "invalid_temperature_entity": "The selected entity is not a suitable temperature sensor. Use a sensor with temperature device class, °C/°F unit, or a valid numeric Celsius value."
+      "invalid_temperature_entity": "The selected entity is not a suitable temperature sensor. Use a sensor with temperature device class, °C/°F unit, or a valid numeric Celsius value.",
+      "no_room_temperature_devices": "No supported heating actuator for room-temperature assignment was found in this gateway configuration.",
+      "missing_room_temperature_device": "Please select a valid heating actuator."
     }
   },
   "entity": {
