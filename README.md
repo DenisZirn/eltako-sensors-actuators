@@ -2,390 +2,61 @@
 
 <!-- ha-marketplace:exclude-start -->
 [![Open in Home Assistant Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
+[![Open Documentation](https://img.shields.io/badge/Documentation-Read%20the%20Guides-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/README.md)
 <!-- ha-marketplace:exclude-end -->
 
-Inoffizielle Home-Assistant-Integration zur lokalen Einbindung kompatibler ELTAKO-EnOcean-Sensoren und -Aktoren über **FAM-USB** (Funk) oder **FGW14-USB / FAM14** (Serie-14-Bus).
+**Unabhängige Home-Assistant-Integration für kompatible ELTAKO-EnOcean-Sensoren und -Aktoren.** Lokale Kommunikation über **FAM-USB** (Funk) und **FGW14-USB / FAM14** (Serie-14-Bus), ohne Cloud-Zwang.
 
-**Aktuelle Version: v0.1.165** · Home Assistant 2026.11 oder neuer · Deutsch und Englisch · Lokale Kommunikation ohne Cloud-Zwang.
+**Version:** v0.1.165 · **Home Assistant:** 2026.11.0+ · **Lizenz:** [MIT](LICENSE) · **Sprachen:** Deutsch und Englisch
 
-> **Unabhängiges Community-Projekt:** Diese Integration ist privat entwickelt und kein offizielles Produkt von ELTAKO. Sie wird weder von ELTAKO herausgegeben noch unterstützt oder freigegeben. Die genannten Produkt- und Markennamen gehören ihren jeweiligen Rechteinhabern.
+> Dieses Community-Projekt ist keine offizielle ELTAKO-Integration und wird nicht von ELTAKO herausgegeben oder unterstützt.
 
 ## Schnellstart
 
-1. **Hardware anschließen:** FAM-USB oder FGW14-USB an das Home-Assistant-System anschließen und einen stabilen USB-Portpfad (z. B. `/dev/serial/by-id/...`) verwenden.
-2. **Integration installieren:** Im **Home Assistant Marketplace** nach **ELTAKO Sensors & Actuators** suchen und installieren. Solange die öffentliche Katalogaufnahme noch aussteht, das Repository `DenisZirn/eltako-sensors-actuators` als benutzerdefiniertes Integrations-Repository hinzufügen.
-3. **Home Assistant neu starten.**
-4. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** die Integration **ELTAKO Sensors & Actuators** auswählen und das Gateway konfigurieren.
-5. Mit **EEDTOY** eine Geräte-YAML erstellen und in den Integrationsoptionen über **EEDTOY YAML importieren** einlesen.
-6. Home Assistant gegebenenfalls neu starten und die erzeugten Entitäten in **Geräte & Dienste** prüfen.
+1. **Gateway anschließen:** FAM-USB oder FGW14-USB und möglichst den stabilen `/dev/serial/by-id/`-Port auswählen.
+2. **Integration installieren:** Über den [Marketplace-Link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration) bzw. **Add from link**, solange die öffentliche Katalogaufnahme aussteht. Alternativ die [Release-ZIP](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.165) manuell installieren.
+3. **Home Assistant neu starten** und unter **Einstellungen → Geräte & Dienste** die Integration hinzufügen.
+4. **YAML mit [EEDTOY](https://github.com/DenisZirn/eedtoy)** erstellen und unter **Konfigurieren → EEDTOY YAML importieren oder ersetzen** einlesen.
+5. Entitäten und bei Bedarf die **Funk-/Bus-Diagnose** prüfen.
 
-### Geräte-YAML mit EEDTOY erstellen
+Die Konfiguration wird über den Integrationsdialog importiert, **nicht in `configuration.yaml`** geschrieben.
 
-**[EEDTOY – ELTAKO EnOcean Device to YAML Generator](https://github.com/DenisZirn/eedtoy)** erzeugt die Gerätebeschreibung, die diese Integration importiert.
+## Dokumentation
 
-1. Die passende Version aus den [EEDTOY-Releases](https://github.com/DenisZirn/eedtoy/releases) für dein Betriebssystem herunterladen.
-2. EEDTOY öffnen, dein Gateway bzw. die Gateway-Verbindung auswählen und die Geräte hinzufügen. Je nach Gerät und Anlagentyp lassen sich vorhandene Konfigurationsdaten importieren.
-3. Physische Geräte-IDs, EEPs und erforderliche Sender-IDs kontrollieren. Die richtige Betriebsart bzw. das Geräteprofil auswählen.
-4. Die Konfiguration als **Home-Assistant-/ELTAKO-YAML** exportieren.
-5. In Home Assistant **Einstellungen → Geräte & Dienste → ELTAKO Sensors & Actuators → Konfigurieren → EEDTOY YAML importieren** öffnen und die erzeugte YAML übernehmen.
+**[📚 Zur vollständigen Dokumentation](docs/README.md)**
 
-Die YAML wird **im Konfigurationsdialog importiert**, nicht einfach in `configuration.yaml` kopiert. Bereits vorhandene Gerätezuordnungen sollten vor einem Import gesichert werden. Die Integration und EEDTOY sind getrennte Projekte; EEDTOY ist ein Hilfsprogramm für die komfortable Erstellung der Konfiguration.
-
-### Unterstützte USB-Gateways
-
-| Gateway | Verbindung | Serielle Parameter |
-| --- | --- | --- |
-| FAM-USB | EnOcean-Funk (USB) | ESP2, 9600 Baud, in der Regel `if01` |
-| FGW14-USB / FAM14 | Serie-14-Bus (USB/RS485) | ESP2, 57600 Baud |
-
-Beim FAM-USB und FGW14-USB werden Telegramme lokal gesendet und empfangen. Es ist keine Cloudverbindung notwendig.
+| Anleitung | Themen |
+| --- | --- |
+| [Installation](docs/installation.md) | Voraussetzungen, Marketplace, manuelle Installation, Updates |
+| [Gateways](docs/gateways.md) | FAM-USB, FGW14-USB, Ports und Base-ID |
+| [EEDTOY / YAML](docs/eedtoy.md) | Geräte hinzufügen, exportieren und importieren |
+| [Gerätekatalog](docs/devices.md) | Unterstützte Modelle, Funktionen, Einschränkungen |
+| [Aktoren anlernen](docs/teach-in.md) | Sender-ID, Teach-in, F2L14, FMS14, RGBW |
+| [Heizung / Climate](docs/climate.md) | FHK14, FKS-SV, externe Temperatur |
+| [Funk-/Bus-Diagnose](docs/diagnostics.md) | Telegramme und Fehleranalyse |
+| [FAQ](docs/faq.md) | Häufige Fragen und bekannte Einschränkungen |
+| [Versionshistorie](docs/changelog.md) | Release-Änderungen |
 
 ## Funktionsumfang
 
-- Ansteuerung und Statusrückmeldungen unterstützter Schalt-, Dimm-, Rollladen-, RGBW- und Heizungsaktoren.
-- Auswertung von Funk-Tastern, Fensterkontakten, Bewegungs-, Klima-, Energie- und Wettersensoren.
-- **FHK14 / F4HK14 / FKS-SV:** Interne bzw. eingelernte oder externe Home-Assistant-Temperaturquelle zuweisen.
-- Funk-/Bus-Diagnose, Gateway-Erkennung und EnOcean-Telegrammverarbeitung.
-- ESP2-Empfangspuffer für fragmentierte Telegramme; getrennte Kanal- und Batterie-IDs bei unterstützten Sensoren.
-- **v0.1.165:** Umstellung auf `serialx` und die native Climate-API von Home Assistant 2026.11.
+- Schalt-, Dimm-, Cover-, RGBW-, Heizungs- und Lüfteraktoren (abhängig von Gerät/EEP).
+- Taster, Kontakte, Bewegungs-, Temperatur-, Wetter- und Energiesensoren.
+- `serialx` mit gepuffertem ESP2-Empfang einschließlich FT55-Drücken/Loslassen und separater Batterie-IDs.
+- EEDTOY-Geräteimport, persistente Gerätezuordnung und integrierte Funk-/Bus-Diagnose.
+- Externe Raumtemperaturquellen bei kompatiblen Heizungsaktoren.
+- Deutsche und englische Oberflächentexte.
 
-## Unterstützter Gerätekatalog
+**Bekannte Einschränkungen:** FRGBW14-Steuerung noch im Test; die Geräte-/EEP-Unterstützung hängt von der tatsächlichen Hardware ab. Siehe [Gerätekatalog](docs/devices.md).
 
-Die folgende Liste dokumentiert die bereits integrierten Gerätetypen; die genaue Funktion hängt vom Gerät, EEP, der Betriebsart und der jeweiligen Hardware ab. Als „noch im Test“ markierte Geräte sind nicht vollständig freigegeben.
+## Wartungshinweis v0.1.165
 
-- F2T55 – Taster 2-Kanal EU
-- FT55, F4T55E – Taster 4-Kanal EU
-- F4USM61B – Universalsender, Betriebsarten 1 bis 8
-- FTS14EM – 10-Kanal-Eingabemodul
-- FAE14LPR – Aktor Heizen/Kühlen für 2 Zonen
-- FNSN55EB, FNS65EB – Näherungsschalter
-- FTK, FTKB, FFKB – Fenster-/Türkontakt
-- FTKE, FFTE, FFG7B – Fensterkontakt / Fenstergriff (F6-10-00)
-- FFG7B – Fensterkontakt / Fenstergriff (A5-14-09)
-- FBH55ESB, FB55EB – Bewegungsmelder
-- FBH55ESB / FBHT55ESB – Bewegung + Helligkeit automatisch
-- FRWB – Rauchmelder
-- FHMB – Rauch-/Hitzemelder
-- FSM60B – Betriebsart 1, 2, 3 und 4
-- FFT60SB – Temperatur + Feuchte 0…40 °C
-- FLGTF – Temperatur + Feuchte −20…60 °C / 0…100 %
-- FLGTF – TVOC + Temperatur/Feuchte automatisch
-- FCO2TF65 – CO2 + Temperatur + Feuchte
-- FUTH65D – Raumregler Temperatur + Feuchte + Sollwert
-- FUTH65D – Raumregler Temperatur + Feuchte + Belegung
-- FUTH55ED – FHK-Datenübermittlung (A5-10-06)
-- FUTH55ED – FKS Kieback & Peter (A5-20-01)
-- FUTH55ED – FKS-H Hora (A5-20-04)
-- FUTH55ED – 2-Punkt-Regler TF61R / FR62 (A5-38-08)
-- FUTH55ED – Hygrostat (A5-10-12)
-- FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB, FTR55SB – TF61 und FHK
-- FKS-SV – Smart Valve / Heizkörper-Stellantrieb
-- FHK14, F4HK14 – Heizung/Klima
-- FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren  (noch im Test)
-- FWZ12, FWZ14, DSZ14 – Funk-/Wechselstromzähler kWh
-- F3Z14D – 3-Kanal-S0-Drehstromzähler
-- FWS61, FWG14MS – Wetterstation Wind + Regen + Temperatur
-- FUD14, FUD71, FDG14, FD2G14, FUD61, FUD61NP-230V, FUD61NPN-230V, FD62, FD62NP-230V, FD62NPN-230V, FSUD-230V – Dimmer
-- FRGBW71L – RGBW-Aktor
-- FRGBW14 – RGBW-Aktor (noch im Test)
-- FMS14 – 2-Kanal-Multifunktions-Stromstoßschalter
-- F2L14 – 2-Stufen-Lüfteraktor (exclusive / addierend)
-- FSR14-2x, FSR14-4x, FSR14M-2x, FSR14SSR
-- FSR71, FSR71-2x-230V, FSR71NP-2x-230V, FSR71NP-4x-230V
-- FMZ14, FSR61-230V, FSR61NP-230V, FSR61/8-24V UC, FSR61G-230V, FSR61LN-230V, FSR62, FLC61NP-230V
-- FR62-230V, FR62NP-230V, FL62-230V, FL62NP-230V
-- FSB14, FSB14/12-24V DC, FSB61-230V, FSB71-230V, FSB61NP-230V, FSB62, FJ62/12-36V DC, FJ62NP-230V, FJ62NPN
+Die v0.1.165-Release-ZIP wurde nach Veröffentlichung um den **hardwaregetesteten F2L14-FAM-USB-Sender-ID-Fix** ergänzt – **ohne die Versionsnummer zu ändern**. Wer v0.1.165 bereits vorher installiert hatte, erhält hierfür normalerweise keinen automatischen Update-Hinweis und muss die aktuelle ZIP erneut installieren. [Details](docs/installation.md).
 
-Nicht aufgeführte Produktbezeichnungen gehören nicht zum freigegebenen Katalog. Gemeinsame EEP-Decoder bleiben intern erhalten, soweit sie für die oben genannten Geräte erforderlich sind.
+## Hilfe und Projektlinks
 
-Nicht aufgeführte Gerätetypen gelten nicht automatisch als unterstützt. Gemeinsame EEP-Decoder können intern auch von weiteren Gerätetypen genutzt werden.
+- [EEDTOY – ELTAKO EnOcean Device to YAML Generator](https://github.com/DenisZirn/eedtoy)
+- [GitHub Releases](https://github.com/DenisZirn/eltako-sensors-actuators/releases)
+- [Fehler melden / Feature vorschlagen](https://github.com/DenisZirn/eltako-sensors-actuators/issues)
+- [MIT-Lizenz](LICENSE)
 
-## Weitere Installation und Updates
-
-**Marketplace:** Nach der Installation wird ein veröffentlichtes Update dort angezeigt. Vor Updates empfiehlt sich ein Home-Assistant-Backup. Nach dem Update Home Assistant vollständig neu starten.
-
-**Manuell:** Die Installationsdateien aus dem [GitHub-Release](https://github.com/DenisZirn/eltako-sensors-actuators/releases) unter `/config/custom_components/eltako_sensors_actuators/` ablegen, sodass dort direkt `manifest.json` und `__init__.py` liegen. Vorher die vorhandene Integration sichern und danach Home Assistant neu starten.
-
-**Diagnose:** Unter den Integrationsoptionen ist die Funk-/Bus-Diagnose erreichbar. Bei Problemen mit einem Sensor zuerst Gateway-Pfad, EEP, physische ID und Sender-ID kontrollieren.
-
-## Externen Raumtemperatursensor zuweisen
-
-1. Unter **Einstellungen → Geräte & Dienste → ELTAKO Sensors & Actuators → Konfigurieren** den Punkt **Raumtemperatursensor zuweisen** wählen.
-2. Den FHK14, F4HK14, FKS-SV oder einen anderen unterstützten Heizungsaktor auswählen.
-3. **Bestehende/eingelernte Quelle** oder **Externer Home-Assistant-Raumtemperatursensor** auswählen.
-4. Beim externen Sensor eine passende Temperatur-Entität wählen und speichern.
-
-Die gewählte Zuordnung bleibt bei Neustarts erhalten und hat Vorrang vor einer YAML-Vorgabe. Falls ein externer Sensor ausfällt, greift die gerätespezifische Rückfalllogik.
-
-Für externe Sensoren akzeptiert die Integration jetzt Werte von **−15 bis +40 °C**. **A5-10-06 kann negative Isttemperaturen nicht direkt übertragen:** Im FHK14-Telegramm wird deshalb auf 0 °C begrenzt, während der echte Sensorwert in Home Assistant angezeigt wird. Beim batteriebetriebenen FKS-SV bleibt der gültige Protokollbereich von 0 bis +40 °C erhalten.
-
-## Gerätezuordnung aus EEDTOY-YAML
-
-EEDTOY übergibt unter anderem `id`, `eep`, `name` und `device_type`. Der technische Gerätetyp erlaubt eine verlässliche Unterscheidung bei identischen EEPs; frei gewählte Anzeigenamen ändern die Gerätekennung nicht.
-
-Beispiel für einen Geräte-Eintrag (Auszug, keine vollständige Importdatei):
-
-```yaml
-binary_sensor:
-  - id: "FE-EF-D6-FC"
-    eep: "F6-02-01"
-    name: "Taster Schlafzimmer"
-    device_type: "F2T55"
-```
-
-Bei Mehrkanalaktoren und Geräten mit mehreren Betriebsarten sind zusätzlich die passenden Sender-IDs und Betriebsart-Parameter erforderlich. EEDTOY nimmt dir die Erstellung dieser Struktur ab.
-
-## Änderungen in v0.1.165
-
-- Neue native Home-Assistant-Climate-Eigenschaften für Temperaturwerte.
-- Externe Temperaturquelle: −15 bis +40 °C mit protokollgerechter Begrenzung bei FHK14/FKS-SV.
-- Serielle USB-Kommunikation über `serialx`; FAM-USB und FGW14-USB im Praxistest geprüft.
-
-## Änderungen in v0.1.164
-
-- Externe Raumtemperaturquelle für FKS-SV, FHK14, F4HK14 und kompatible FAE14-Aktoren.
-- Persistente Sensorzuordnung, verständliche Auswahldialoge und Temperatursensorfilter.
-- Verbesserte FAM-USB-Portzuordnung (`if01`) und robuste Diagnose.
-
-## Versionshistorie
-
-### Änderungen in v0.1.163
-
-### Geräteerkennung über `device_type`
-
-- Der YAML-Import übernimmt die technische Gerätekennung getrennt vom frei änderbaren Namen.
-- Geräte mit demselben EEP lassen sich zuverlässiger unterscheiden; insbesondere werden nicht alle `F6-02-01`-Geräte automatisch als Vierfachtaster behandelt.
-- Die bestehenden Betriebsarten- und Kanalparameter bleiben erhalten. Die statischen Zuordnungen für F4USM61B wurden für die Betriebsarten 1–8 überprüft.
-- Ältere YAML-Konfigurationen ohne `device_type` werden weiterhin unterstützt.
-
-### F2T55, FT55 und F4T55E
-
-- **F2T55:** `Taste oben`, `Taste unten` und `Taster gedrückt`.
-- **FT55/F4T55E:** vier einzelne Tastenpositionen und `Taster gedrückt`.
-- Der jeweilige Tastenzustand bleibt während des Drückens auf `Ein` und wird erst beim echten Loslass-Telegramm zurückgesetzt; der bisherige automatische Zeitreset entfällt.
-- Deutsche und englische Entity-Bezeichnungen wurden ergänzt.
-
-### Diagnose „Letztes Telegramm“
-
-- Die Diagnose-Entity `Letztes Telegramm` ist wieder bei Tastern vorhanden und wird für andere importierte Geräte ergänzt, sofern noch kein passender Zeitstempel-Sensor besteht.
-- **FLGTF:** ein gemeinsamer Diagnose-Zeitstempel für die zusammengehörigen Telegrammprofile.
-- **FTS14EM:** ein gemeinsamer Diagnose-Zeitstempel für die Eingänge des physischen Moduls.
-- Veraltete Taster-Hilfsentitäten `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden entfernt; `Letztes Telegramm` bleibt als Diagnose-Entity erhalten.
-
-
-## Änderungen in v0.1.162
-
-### F2L14
-
-- F2L14 als Home-Assistant-`fan`-Entity integriert.
-- Zwei Lüfterstufen werden als 50 % / 100 % abgebildet, 0 % entspricht Aus.
-- Unterstützung für beide PCT14-Schaltfolgen:
-  - `exclusive`: Stufe 1 schaltet nur Kontakt 1, Stufe 2 nur Kontakt 2.
-  - `additive`: Stufe 1 schaltet Kontakt 1, Stufe 2 beide Kontakte.
-- Native F6-02-01-Tastertelegramme werden verwendet:
-  - `0x30` = Stufe 1
-  - `0x70` = Stufe 2
-  - untere Taste = Aus
-- Die F2L14-Betriebsart wird über `f2l14_mode` aus der EEDTOY-YAML übernommen.
-- `stage_1_id` und `stage_2_id` werden für die Rückmeldung der beiden Relais verwendet.
-- FAM-USB- und FGW14-USB-/FAM14-Konfigurationen werden unterstützt.
-- Für zuverlässige F2L14-Tastersequenzen wurde ein definiertes Telegramm-Timing ergänzt.
-- Die F2L14-Ansteuerung wurde praktisch mit PCT14 und realem Aktor getestet.
-
-### Deutsche / englische Oberfläche
-
-- Sichtbare Entity-Namen werden schrittweise über Home Assistants Übersetzungssystem bereitgestellt.
-- Deutsche und englische Bezeichnungen für zahlreiche Sensoren, Binärsensoren und Diagnose-Entities ergänzt.
-- FNSN55EB/FNS65EB: `Näherung` / `Proximity` inklusive übersetzter Zustände.
-- F6-02-01-Taster: Tastenpositionen und Diagnosewerte deutsch/englisch.
-- Redundante generische F6-02-01-`Unknown`-Entity entfernt.
-- EnOcean-ID, Letztes Telegramm, Batterie-/Fenster-/Bewegungs- und weitere Entity-Namen lokalisiert.
-- F4USM61B: Eingänge E1 bis E4 werden korrekt als `Input E1` bis `Input E4` bzw. `Eingang E1` bis `Eingang E4` angezeigt.
-- Spannungs-Sensoren verwenden `Voltage` / `Spannung` statt gemischter Sprachbezeichnungen.
-- FBH55/FBH55ESB erzeugt keine Temperatur-Entity mehr, da diese Gerätevariante keine Temperatur überträgt.
-- FBHT55/FBHT55ESB behält die Temperatur-Entity.
-
-### Kompatibilität
-
-- Bestehende Unique-IDs und Entity-IDs bleiben erhalten.
-- Die Änderungen betreffen die Darstellung und die neue F2L14-Funktion; bestehende EnOcean-Gerätepfade bleiben unverändert.
-
-## Änderungen in v0.1.161
-
-### FKS-SV
-
-- Die Climate-Entity des FKS-SV ist zuverlässig verfügbar.
-- Die A5-20-01-Kommunikation Controller → FKS-SV wurde korrigiert.
-- DB2 wird nun EEP-konform als aktuelle Raumtemperatur übertragen.
-- Ohne externen Home-Assistant-Raumtemperatursensor wird die zuletzt vom FKS-SV gemeldete Isttemperatur verwendet.
-- Neue Solltemperaturen werden in Home Assistant gespeichert und beim nächsten Empfangsfenster des FKS-SV übertragen.
-- Das normale Kommunikationsintervall des FKS-SV von etwa 10 Minuten wird unterstützt.
-- Durch kurzes Drücken der Taste am FKS-SV kann eine sofortige Kommunikation ausgelöst werden.
-- Die Ventilregelung mit Soll- und Isttemperatur wurde praktisch getestet.
-
-### FHK14 / F4HK14
-
-- Die Erkennung echter Aktor-Antworttelegramme wurde korrigiert.
-- Die Isttemperatur wird nun auch dann korrekt übernommen, wenn das Antworttelegramm über die konfigurierte Sender-ID empfangen wird.
-- Der Fehler, bei dem die Climate-Entity auf 40,0 °C stehen bleiben konnte, wurde behoben.
-- Der Protokollwert 40,0 °C wird nur noch dann angezeigt, wenn er tatsächlich vom FHK14 als gültige Rückmeldung vorliegt.
-
-### Home-Assistant-Kompatibilität
-
-- Funk-/Bus-Diagnose verwendet nun die lokale Home-Assistant-Zeitzone statt UTC.
-- `ppm` und `ppb` verwenden die aktuellen `UnitOfRatio`-Konstanten von Home Assistant.
-- FLGTF TVOC in `ppb` verwendet nun die passende Device Class `VOLATILE_ORGANIC_COMPOUNDS_PARTS`.
-- `via_device` wurde auf `via_device_id` umgestellt und korrekt auf den zugehörigen Config Entry eingeschränkt.
-
-### Gateway / ESP2
-
-- Einzelne fehlerhafte ESP2-Telegramme mit Checksum-Fehler führen nicht mehr zu einem vollständigen Neustart der seriellen Verbindung.
-- Ungültige ESP2-Frames werden verworfen, während die FAM-USB-Verbindung geöffnet bleibt.
-- Echte USB-/Serial-Verbindungsfehler lösen weiterhin einen Reconnect aus.
-
-### Weitere Korrekturen
-
-- Die Wiederherstellung von Climate-Zuständen nach einem Home-Assistant-Neustart wurde stabilisiert.
-- Gerätezuordnung und Diagnose wurden weiter bereinigt.
-- Die Hotfix-Korrekturen aus den vorherigen Versionen bleiben vollständig enthalten.
-
-## Änderungen in v0.1.157
-
-- FHK14/F4HK14-Steuerung weiter stabilisiert. Die aktuelle Raumtemperatur wird nur noch aus einer echten Aktor-Rückmeldung übernommen; synthetische Controllerwerte werden nicht mehr als Isttemperatur angezeigt.
-- FAE14LPR verwendet dieselbe abgesicherte Isttemperatur-Logik. Bis zur ersten gültigen Aktor-Rückmeldung wird 0,0 °C angezeigt.
-- Zustände von Sensoren, Binärsensoren, Schaltern, Licht, Cover und Klima werden nach einem Home-Assistant-Neustart wiederhergestellt, ohne dabei Schalttelegramme auszulösen.
-- Technische Unique-IDs der YAML-Entitäten wurden stabilisiert. Bestehende Registry-Einträge werden migriert, ohne vorhandene `entity_id` umzubenennen.
-- Temperaturmesswerte werden mit einer leichten EMA-Glättung (`alpha=0.25`) beruhigt. Der unveränderte Rohwert bleibt als Attribut `raw_temperature` erhalten. Solltemperaturen werden nicht geglättet.
-- F4T55E bereinigt: Die vier echten Tasten bleiben erhalten; ältere generische Hilfsentitäten wie `Gedrückte Taste`, `Tastenposition` und `Signalcode` werden entfernt. Der Diagnose-Zeitstempel `Letztes Telegramm`, der in dieser älteren Version ebenfalls entfiel, wurde mit v0.1.163 wiederhergestellt.
-- FKS-B als Klimagerät mit bidirektionalem EEP `A5-20-04` ergänzt.
-- FKS-B Modus 02: Solltemperaturen von 10–30 °C werden im Empfangsfenster des Ventils nach dem praktisch ermittelten MiniSafe2-Telegrammmuster beantwortet.
-- Der FKS-B-Teach-In-Pfad wurde hinsichtlich Nutzdaten, Status und Antwortzeit an den erfolgreichen MiniSafe2-Mitschnitt angeglichen.
-- Das direkte Einlernen einer Home-Assistant-Sender-ID in einen FKS-B über einen reinen FAM-USB mit ESP2 ist weiterhin nicht möglich.
-- FRGBW14 bleibt offen; die praktische Ansteuerung ist noch nicht abschließend validiert.
-
-## FMS14
-
-Der FMS14 wird als 2-Kanal-Multifunktions-Stromstoßschalter unterstützt.
-
-Bei einem FMS14 wird jeder Kanal als eigene Home-Assistant-Entität angelegt.
-
-Die Ansteuerung erfolgt über A5-38-08:
-
-- EIN: `01-00-00-09`
-- AUS: `01-00-00-08`
-
-Die von EEDTOY erzeugte `sender.id` wird unverändert übernommen.
-
-Statusrückmeldungen werden von der jeweiligen physischen Kanaladresse ausgewertet:
-
-- `70` = EIN
-- `50` = AUS
-
-EEDTOY erzeugt für den FMS14 die passenden A5-38-08-Senderdaten.
-
-## F4USM61B
-
-Der F4USM61B wird in den Betriebsarten 1 bis 8 unterstützt.
-
-Je nach Betriebsart werden unter anderem Tasterzustände, Kontakte, Bewegung, Belegung und Batteriestatus ausgewertet.
-
-## FTS14EM
-
-Der FTS14EM wird als 10-Kanal-Eingabemodul unterstützt.
-
-Die Eingänge E1 bis E10 werden als eigene Home-Assistant-Entitäten angelegt.
-
-Die Eingänge E1 bis E10 bleiben eigenständige Binärsensoren. Ab v0.1.163 wird der Zeitstempel `Letztes Telegramm` für das physische FTS14EM gemeinsam im Bereich **Diagnose** angezeigt. Weitergehende Telegrammdetails stehen in der Funk-/Bus-Diagnose zur Verfügung.
-
-## FSM60B
-
-Der FSM60B wurde hardwareseitig getestet.
-
-Unterstützt werden die Betriebsarten 1, 2, 3 und 4.
-
-Je nach Betriebsart werden unter anderem Kontakt-, Alarm- und Batteriezustände ausgewertet.
-
-## FUTH55ED
-
-Unterstützte Betriebsarten aus EEDTOY:
-
-- FHK-Datenübermittlung A5-10-06, Lerntelegramm `40-30-0D-87`
-- FKS Kieback & Peter A5-20-01, Controller-/Antworttelegramme
-- FKS-H Hora A5-20-04, Controller-/Antworttelegramme
-- 2-Punkt-Regler TF61R / FR62 A5-38-08, Lerntelegramm `E0-40-0D-80`
-- Hygrostat A5-10-12, Lerntelegramm `40-90-0D-80`
-
-Der FUTH55ED wird passiv ausgewertet und nicht als FKS-SV-Aktor mit einer virtuellen `sender.id` behandelt.
-
-## FTR55/65-Familie
-
-Unterstützte Modelle: FTR65DSB, FTR55DSB, FTR55EHB, FTR55ESB, FTR65HB, FTRF65HB, FTR55HB, FTR65SB, FTRF65SB und FTR55SB.
-
-- Betriebsart TF61: A5-38-08, Lerntelegramm `E0-40-0D-80`, Heizanforderung AUS `01-00-00-08`, EIN `01-00-00-09`, Hysterese 1 K.
-- Betriebsart FHK: A5-10-06, Lerntelegramm `40-30-0D-87`, DB2 Solltemperatur, DB1 invertierte Isttemperatur, DB0 `0F`.
-- Sollwertbereich 12–28 °C; 8 °C wird als Frostschutz erkannt.
-
-## FHK14 / F4HK14
-
-Die Integration enthält Decoder und Sendeunterstützung für FHK14 und F4HK14.
-
-Der FHK14 ist mit korrekt programmiertem Controllerplatz funktionsfähig. Für die Controller-Sollwertvorgabe muss die Sender-ID im Aktor in Function Group 3, Function 65 (`temperature setpoint from controller`) eingetragen sein.
-
-Die aktuelle Raumtemperatur wird ausschließlich aus einer echten Aktor-Rückmeldung übernommen. Antworttelegramme werden sowohl über die Geräte-ID als auch über die konfigurierte Sender-ID korrekt zugeordnet.
-
-Der zuvor mögliche Fehler, bei dem die Climate-Entity auf 40,0 °C stehen blieb, obwohl eine gültige Isttemperatur empfangen wurde, ist seit v0.1.161 behoben.
-
-## FKS-B
-
-Der FKS-B wird als Klimagerät mit dem bidirektionalen EEP `A5-20-04` unterstützt.
-
-Für Modus 02 wird die Solltemperatur im Bereich 10–30 °C im Empfangsfenster des Ventils beantwortet; der FKS-B übernimmt die eigentliche Ventilregelung selbstständig.
-
-Bekannte Einschränkung: Das direkte Einlernen einer Home-Assistant-Sender-ID in einen FKS-B über einen reinen FAM-USB mit ESP2 ist derzeit nicht möglich. Der ESP2-Sendepfad arbeitet als Broadcast, während der erfolgreiche Anlernvorgang mit MiniSafe2 eine gerichtete Kommunikation verwendet.
-
-## FDG14
-
-- A5-38-08 / FUNC=38 / Command 2.
-- Direkte Helligkeitsvorgabe 0–100 %.
-- Dimmgeschwindigkeit 0–255; Standard `0` nutzt die am FDG14 eingestellte Geschwindigkeit.
-- Lerntelegramm `E0-40-0D-80`.
-- Statusrückmeldungen liefern Ein/Aus, Dimmwert und Dimmgeschwindigkeit an Home Assistant.
-
-## FRGBW14 / FRGBW71L
-
-Der FRGBW71L unterstützt Ein/Aus, Helligkeit sowie Rot, Grün, Blau und Weiß.
-
-Die Telegrammverarbeitung für den FRGBW14 ist ebenfalls Bestandteil der Integration. Die praktische Ansteuerung des FRGBW14 ist noch nicht abschließend validiert und bleibt offen.
-
-## FFG7B
-
-- A5-14-09 und F6-10-00 werden anhand des tatsächlich empfangenen ORG automatisch unterschieden, auch wenn im YAML das andere FFG7B-Profil gewählt wurde.
-- A5-14-09 wertet den Fensterzustand robust in Standard- und umgekehrter Byte-Darstellung aus.
-- Unterstützte Zustände: `geschlossen`, `gekippt`, `offen`.
-- A5-14-09 liefert zusätzlich die Batteriespannung.
-- Die Entity-Auswertung besitzt zusätzliche Decoderpfade aus `data_hex`, `value` und dem rohen ESP2-Frame.
-- F6-10-00 unterstützt zusätzlich die Zweizustandswerte von FTKE/FFTE (`70/50` und `30/10`).
-
-## Funk- / Bus-Diagnose
-
-Die Integration enthält eine eigene Diagnose für gesendete und empfangene Funk- und Bustelegramme.
-
-Die Diagnose kann über die Integrationsoptionen aktiviert werden.
-
-Seit v0.1.156 verwendet das Frontend die Datei:
-
-`frontend/diagnostics-panel.js`
-
-Ausführliche Telegrammdetails werden in der Funk-/Bus-Diagnose dargestellt. Zusätzlich besitzt jedes unterstützte importierte Gerät den Diagnose-Zeitstempel **Letztes Telegramm**, der beim Empfang eines passenden Telegramms aktualisiert wird. Bei zusammengehörigen FLGTF-Profilen sowie beim FTS14EM wird er pro physischem Gerät zusammengefasst.
-
-Seit v0.1.161 werden Zeitstempel in der lokalen Home-Assistant-Zeitzone dargestellt.
-
-Einzelne ungültige ESP2-Telegramme mit Checksum-Fehler werden verworfen, ohne die serielle FAM-USB-Verbindung vollständig neu zu öffnen.
-
-## Übersetzungen
-
-Die Integration enthält deutsche und englische Übersetzungen:
-
-- `translations/de.json`
-- `translations/en.json`
-
+Für Fehlermeldungen bitte Gerätetyp, EEP, Gateway, Softwarestand und **anonymisierte** Diagnose-Telegramme angeben.
