@@ -364,9 +364,9 @@ class TestStaticIntegrationGuards(unittest.TestCase):
                 return ast.get_source_segment(source, node) or ""
         self.fail(f"Function {function_name} not found in {path}")
 
-    def test_manifest_is_test_version(self):
+    def test_manifest_matches_release_version(self):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.164")
+        self.assertEqual(manifest["version"], "0.1.165")
 
     def test_options_flow_is_generalized(self):
         source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
