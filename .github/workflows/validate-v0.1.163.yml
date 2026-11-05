@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - test/v0.1.163-device-type
-  pull_request:
-    paths:
-      - 'custom_components/eltako_sensors_actuators/**'
-      - '.github/workflows/validate-v0.1.163.yml'
 
 permissions:
   contents: read
