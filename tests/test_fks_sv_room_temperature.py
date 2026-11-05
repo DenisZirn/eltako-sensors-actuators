@@ -229,6 +229,8 @@ class TestTemperatureValidationAndFksFallback(unittest.TestCase):
         self.assertEqual(room.temperature_to_celsius("21.5", "°C"), 21.5)
         self.assertEqual(room.temperature_to_celsius("68", "°F"), 20.0)
         self.assertEqual(room.temperature_to_celsius(0, "°C"), 0.0)
+        self.assertEqual(room.temperature_to_celsius(-15, "°C"), -15.0)
+        self.assertEqual(room.temperature_to_celsius(-7.5, "°C"), -7.5)
 
     def test_invalid_values_are_rejected(self):
         for value, unit in [
@@ -236,12 +238,19 @@ class TestTemperatureValidationAndFksFallback(unittest.TestCase):
             ("unavailable", "°C"),
             ("nan", "°C"),
             (math.inf, "°C"),
-            (-0.1, "°C"),
+            (-15.1, "°C"),
             (40.1, "°C"),
             (293.15, "K"),
         ]:
             with self.subTest(value=value, unit=unit):
                 self.assertIsNone(room.temperature_to_celsius(value, unit))
+
+    def test_fks_negative_temperature_uses_native_fallback(self):
+        source = const.ROOM_TEMPERATURE_SOURCE_EXTERNAL
+        self.assertEqual(
+            room.select_numeric_room_temperature(source, -7.5, 20.0),
+            (20.0, "fallback", const.ROOM_TEMPERATURE_SOURCE_NATIVE),
+        )
 
     def test_fks_external_fallback_and_recovery(self):
         source = const.ROOM_TEMPERATURE_SOURCE_EXTERNAL

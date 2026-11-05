@@ -128,7 +128,7 @@ def _resolve_fam_usb_if01_port(port: str, preferred_usb_serial: str | None = Non
         _LOGGER.debug("ELTAKO FAM-USB deterministic if01 resolver failed: %s", err)
 
     try:
-        from serial.tools import list_ports
+        from .serial_ports_compat import list_ports
     except Exception as err:  # pragma: no cover - depends on HA runtime
         _LOGGER.debug("ELTAKO FAM-USB if01 resolver unavailable: %s", err)
         return port
@@ -242,7 +242,7 @@ def _serial_candidates() -> list[dict[str, str]]:
         pass
 
     try:
-        from serial.tools import list_ports
+        from .serial_ports_compat import list_ports
         for portinfo in list_ports.comports(include_links=True):
             parts = [
                 str(getattr(portinfo, "device", "") or ""),
@@ -352,7 +352,7 @@ def _describe_serial_port_sync(port: str) -> dict[str, str | None]:
         pass
 
     try:
-        from serial.tools import list_ports
+        from .serial_ports_compat import list_ports
         for portinfo in list_ports.comports(include_links=True):
             dev = str(getattr(portinfo, "device", "") or "")
             if not dev:

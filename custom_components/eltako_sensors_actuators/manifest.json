@@ -8,9 +8,9 @@
   "integration_type": "hub",
   "iot_class": "local_push",
   "requirements": [
-    "pyserial"
+    "serialx==1.15.1"
   ],
-  "version": "0.1.164",
+  "version": "0.1.165",
   "documentation": "https://github.com/DenisZirn/eltako-sensors-actuators",
   "issue_tracker": "https://github.com/DenisZirn/eltako-sensors-actuators/issues"
 }

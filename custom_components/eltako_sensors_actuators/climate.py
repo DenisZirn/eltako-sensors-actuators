@@ -66,7 +66,8 @@ def _coerce_ha_temperature_to_celsius(
     """Validate the Celsius value handed to the entity by Home Assistant.
 
     Home Assistant's climate service converts from the installation's display
-    unit to ``temperature_unit`` before calling ``async_set_temperature``.
+    unit to the entity's native temperature unit before calling
+    ``async_set_temperature``.
     Because this entity declares Celsius, the value received here is already
     Celsius. A second Fahrenheit heuristic would corrupt legitimate service
     values and is therefore intentionally not performed.
@@ -112,14 +113,20 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
     _attr_hvac_mode = HVACMode.OFF
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    # HA 2026.11+: expose native temperature properties without using deprecated names.
+    # Earlier Core versions still use the previous climate API.
+    if hasattr(ClimateEntity, "native_temperature_unit"):
+        _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+    else:
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_precision = PRECISION_TENTHS
     _attr_target_temperature_step = 0.5
     _attr_supported_features = _SUPPORT_TARGET_TEMPERATURE
 
-    @property
-    def temperature_unit(self):
-        return UnitOfTemperature.CELSIUS
+    if not hasattr(ClimateEntity, "native_temperature_unit"):
+        @property
+        def temperature_unit(self):
+            return UnitOfTemperature.CELSIUS
 
     @property
     def precision(self):
@@ -139,9 +146,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._has_room_temperature_assignment = is_room_temperature_assignable_device(device)
         self._room_temperature_device_kind = room_temperature_device_kind(device)
         self._is_fks_hora = self._eep == "A5-20-04" and _futh55ed_mode(device) == "fks_hora"
-        # ELTAKO setpoints and feedback are natively Celsius. Keep this explicit
-        # on every instance so no legacy YAML temperature_unit value can replace it.
-        self._attr_temperature_unit = UnitOfTemperature.CELSIUS
+        # Native device values are Celsius. Choose only the API available in Core.
+        if hasattr(ClimateEntity, "native_temperature_unit"):
+            self._attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+        else:
+            self._attr_temperature_unit = UnitOfTemperature.CELSIUS
 
         if self._is_fks_sv:
             self._attr_supported_features = _SUPPORT_TARGET_TEMPERATURE
@@ -434,7 +443,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
             and self._external_temperature is not None
         ):
-            return self._external_temperature
+            # A5-10-06 DB1 encodes only 0..40 C. Preserve the external
+            # measured value for display and diagnostics, but send the
+            # nearest representable value (0 C) below freezing.
+            return max(0.0, self._external_temperature)
         return None
 
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
@@ -521,13 +533,22 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
-    @property
-    def current_temperature(self):
-        return self._current_temperature
+    if hasattr(ClimateEntity, "native_temperature_unit"):
+        @property
+        def native_current_temperature(self):
+            return self._current_temperature
 
-    @property
-    def target_temperature(self):
-        return self._target_temperature
+        @property
+        def native_target_temperature(self):
+            return self._target_temperature
+    else:
+        @property
+        def current_temperature(self):
+            return self._current_temperature
+
+        @property
+        def target_temperature(self):
+            return self._target_temperature
 
     @property
     def min_temp(self):
@@ -634,6 +655,20 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 base["interne_fks_sv_temperatur"] = self._internal_temperature
             elif self._room_temperature_device_kind == "a5_10_06":
                 base["interne_aktor_temperatur"] = self._internal_temperature
+                # This is the value that can be encoded in DB1. The
+                # external measurement above remains the genuine value.
+                protocol_temperature = (
+                    max(0.0, self._external_temperature)
+                    if self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                    and self._external_temperature is not None
+                    else None
+                )
+                base["protokoll_isttemperatur"] = protocol_temperature
+                base["protokoll_temperatur_begrenzt"] = (
+                    self._external_temperature is not None
+                    and self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                    and self._external_temperature < 0.0
+                )
 
         return base
 
