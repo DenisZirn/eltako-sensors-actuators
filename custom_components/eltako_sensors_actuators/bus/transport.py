@@ -7,8 +7,7 @@ from pathlib import Path
 from collections.abc import Iterable
 from typing import Protocol
 
-import serial
-from serial import rs485
+import serialx
 
 from .esp2 import PREAMBLE, ESP2Message
 from .esp3 import esp2_to_esp3_radio_erp1
@@ -35,31 +34,41 @@ class SerialTransport:
         self.delay = delay
         self.rs485_mode = rs485_mode
         self.protocol = str(protocol or "esp2").lower()
-        self._serial: serial.Serial | None = None
+        self._serial: serialx.BaseSerial | None = None
         self._lock = threading.Lock()
+        # serialx is based on RawIOBase: read(n) is allowed to return fewer
+        # than n bytes. Keep an RX byte stream between gateway polls so no
+        # radio telegram is lost when USB splits it across reads.
+        self._rx_buffer = bytearray()
 
     def open(self) -> None:
         if self._serial is not None and self._serial.is_open:
             if self.is_active():
                 return
             self.close()
-        self._serial = serial.Serial(
-            port=self.port,
+        self._serial = serialx.serial_for_url(
+            self.port,
             baudrate=self.baudrate,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=self.timeout,
+            byte_size=8,
+            parity=serialx.Parity.NONE,
+            stopbits=serialx.StopBits.ONE,
+            read_timeout=self.timeout,
             write_timeout=self.write_timeout,
         )
-        # FAM14/FGW14-USB can be half-duplex RS485 adapters. FAM-USB is a
-        # wireless EnOcean USB gateway and must stay in normal serial mode.
+        self._serial.open()
+        # A reopened port starts a fresh byte stream. Never splice a frame
+        # from an old USB session together with frames from a new session.
+        self._rx_buffer.clear()
+        # serialx has no equivalent of pyserial's rs485.RS485Settings.
+        # This implementation relies on USB-RS485 adapters handling direction
+        # automatically. Verify FGW14-USB/FAM14 send and receive on real
+        # hardware during hardware validation.
         if self.rs485_mode:
-            try:
-                self._serial.rs485_mode = rs485.RS485Settings()
-                _LOGGER.debug("ELTAKO serial transport RS485 mode enabled: port=%s", self.port)
-            except Exception as err:
-                _LOGGER.debug("ELTAKO serial transport RS485 mode not enabled: port=%s reason=%s", self.port, err)
+            _LOGGER.warning(
+                "ELTAKO serialx: RS485 kernel mode not configured; "
+                "verify hardware automatic direction control (port=%s)",
+                self.port,
+            )
         _LOGGER.info("ELTAKO serial transport opened: port=%s baudrate=%s rs485_mode=%s protocol=%s", self.port, self.baudrate, self.rs485_mode, self.protocol)
 
     def close(self) -> None:
@@ -69,6 +78,7 @@ class SerialTransport:
                     self._serial.close()
             finally:
                 self._serial = None
+                self._rx_buffer.clear()
                 _LOGGER.info("ELTAKO serial transport closed: port=%s", self.port)
 
     def is_active(self) -> bool:
@@ -91,7 +101,7 @@ class SerialTransport:
         else:
             frame = bytes(message) if isinstance(message, (bytes, bytearray)) else message.serialize()
         with self._lock:
-            self._serial.reset_output_buffer()
+            self._serial.reset_write_buffer()
             written = self._serial.write(frame)
             self._serial.flush()
             if self.delay:
@@ -135,7 +145,7 @@ class SerialTransport:
 
         delay = max(0.0, float(inter_frame_delay))
         with self._lock:
-            self._serial.reset_output_buffer()
+            self._serial.reset_write_buffer()
             for index, frame in enumerate(frames):
                 written = self._serial.write(frame)
                 self._serial.flush()
@@ -155,12 +165,69 @@ class SerialTransport:
         )
         return frames
 
-    def read_frame(self) -> bytes | None:
-        """Read one ESP2 frame if available, else return None.
+    def _take_esp2_frame(self) -> bytes | None:
+        """Extract one checksum-valid ESP2 frame from the persistent RX stream.
 
-        This function synchronizes on the A5 5A preamble and then reads the
-        remaining 12 bytes. It is intentionally small and strict; invalid frames
-        are logged at debug level and discarded by the caller.
+        All ESP2 radio variants share the same 14-byte framing, including RPS
+        press/release, 1BS contacts, 4BS sensors and separate physical battery
+        sender IDs. Invalid bytes are skipped one at a time, so valid frames
+        after noise or a truncated frame can still be recovered.
+        """
+        pending = self._rx_buffer
+        frame_size = 14
+
+        while pending:
+            start = pending.find(PREAMBLE)
+            if start < 0:
+                # Keep the first preamble byte if the next serial read starts
+                # with its second byte (A5 | 5A).
+                keep = 1 if pending[-1] == PREAMBLE[0] else 0
+                discarded = len(pending) - keep
+                if discarded:
+                    del pending[:discarded]
+                    _LOGGER.debug(
+                        "ELTAKO ESP2 resynchronization: skipped %d noise byte(s) port=%s",
+                        discarded, self.port,
+                    )
+                return None
+
+            if start:
+                del pending[:start]
+                _LOGGER.debug(
+                    "ELTAKO ESP2 resynchronization: skipped %d byte(s) port=%s",
+                    start, self.port,
+                )
+
+            if len(pending) < frame_size:
+                # Do not discard the partial frame on USB read timeout. The
+                # rest may arrive on the next read_frame() call.
+                return None
+
+            candidate = bytes(pending[:frame_size])
+            try:
+                ESP2Message.parse(candidate)
+            except ValueError as err:
+                _LOGGER.debug(
+                    "ELTAKO invalid ESP2 frame: port=%s error=%s candidate=%s",
+                    self.port, err, candidate.hex("-"),
+                )
+                # Shift one byte, not fourteen: a valid preamble may start
+                # inside a damaged frame or immediately afterwards.
+                del pending[0]
+                continue
+
+            del pending[:frame_size]
+            return candidate
+
+        return None
+
+    def read_frame(self) -> bytes | None:
+        """Receive an entire ESP2 frame without losing fragmented USB reads.
+
+        serialx.read() may return only the currently available bytes. Complete
+        frames are buffered and delivered individually in arrival order. A
+        short bounded readinto() coalesces USB fragments with low latency;
+        incomplete frames remain buffered across polls and timeouts.
         """
         self.open()
         if self._serial is None:
@@ -169,33 +236,37 @@ class SerialTransport:
             raise RuntimeError(f"Serial port is not active: {self.port}")
 
         with self._lock:
-            first = self._serial.read(1)
-            if not first:
-                return None
-            if first != PREAMBLE[:1]:
-                return None
-            second = self._serial.read(1)
-            if second != PREAMBLE[1:2]:
-                return None
-            rest = self._serial.read(12)
-            if len(rest) != 12:
-                return None
-            frame = PREAMBLE + rest
+            # Drain complete buffered frames first. In a USB burst this keeps
+            # individual press/release and battery telegrams in FIFO order.
+            frame = self._take_esp2_frame()
+            if frame is None:
+                chunk = self._serial.read(128)
+                if chunk:
+                    self._rx_buffer.extend(chunk)
+                    frame = self._take_esp2_frame()
 
-        # Validate before returning so gateway only handles valid frames.
-        # A single damaged ESP2 telegram is a framing/data error, not a serial
-        # transport failure. Discard it here so gateway.py does not close and
-        # reopen an otherwise healthy FAM-USB connection.
-        try:
-            ESP2Message.parse(frame)
-        except ValueError as err:
+            if frame is None and self._rx_buffer:
+                # A complete 14-byte frame takes ~15 ms at FAM-USB 9600 baud,
+                # ~2.5 ms at FGW14-USB 57600 baud. Collect subsequent bytes
+                # briefly so ordinary press/release events remain responsive.
+                # This time is strictly bounded to avoid delaying concurrent
+                # actuator sends on our shared RX/TX transport lock.
+                coalesce_time = min(0.05, max(0.01, 350.0 / max(1, self.baudrate)))
+                deadline = time.monotonic() + coalesce_time
+                scratch = bytearray(128)
+                while frame is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    received = self._serial.readinto(scratch, timeout=remaining)
+                    if not received:
+                        break
+                    self._rx_buffer.extend(scratch[:received])
+                    frame = self._take_esp2_frame()
+
+        if frame is not None:
             _LOGGER.debug(
-                "ELTAKO invalid ESP2 frame discarded without reopening transport: port=%s error=%s frame=%s",
-                self.port,
-                err,
-                frame.hex("-"),
+                "ELTAKO serial frame received: port=%s frame=%s",
+                self.port, frame.hex("-"),
             )
-            return None
-
-        _LOGGER.debug("ELTAKO serial frame received: port=%s frame=%s", self.port, frame.hex("-"))
         return frame

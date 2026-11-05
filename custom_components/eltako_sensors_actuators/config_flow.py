@@ -163,12 +163,12 @@ def _list_serial_ports() -> dict[str, dict[str, str]]:
     choices: dict[str, dict[str, str]] = {}
     grouped: dict[str, list[Any]] = {}
     try:
-        from serial.tools import list_ports
+        from .serial_ports_compat import list_ports
     except Exception as err:  # pragma: no cover - depends on HA runtime
         # Do not abort here. HA OS may still expose the stable
         # /dev/serial/by-id EnOcean Programmer path even when pyserial's port
         # enumeration is temporarily unavailable or incomplete.
-        _LOGGER.warning("pyserial list_ports unavailable, falling back to /dev/serial/by-id: %s", err)
+        _LOGGER.warning("serialx list_ports unavailable, falling back to /dev/serial/by-id: %s", err)
         list_ports = None
 
     if list_ports is not None:

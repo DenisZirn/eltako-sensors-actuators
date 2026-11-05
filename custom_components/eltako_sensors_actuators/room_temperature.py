@@ -17,8 +17,11 @@ from .const import (
     ROOM_TEMPERATURE_SOURCE_NATIVE,
 )
 
-MIN_ROOM_TEMPERATURE_C = 0.0
+# Sensor values can include outdoor temperatures down to -15 C.
+# A5-10-06 and A5-20-01 telegrams themselves still represent 0..40 C.
+MIN_ROOM_TEMPERATURE_C = -15.0
 MAX_ROOM_TEMPERATURE_C = 40.0
+MIN_PROTOCOL_ROOM_TEMPERATURE_C = 0.0
 
 _TEMP_UNITS_C = {"", "C", "°C", "CELSIUS"}
 _TEMP_UNITS_F = {"F", "°F", "FAHRENHEIT"}
@@ -214,7 +217,11 @@ def resolve_room_temperature_config(
 
 
 def temperature_to_celsius(value: Any, unit: Any = None) -> float | None:
-    """Convert a Home Assistant state to a valid 0..40 °C protocol value."""
+    """Read a valid external temperature (-15..40 °C), preserving its sign.
+
+    The separate transport encoders only accept 0..40 °C. Each device
+    must enforce that limit before encoding telegram bytes.
+    """
     text = "" if value is None else str(value).strip()
     if not text or text.lower() in {"unknown", "unavailable", "none", "nan"}:
         return None
@@ -251,6 +258,13 @@ def select_numeric_room_temperature(
     """
     external = temperature_to_celsius(external_temperature, "°C")
     native = temperature_to_celsius(native_temperature, "°C")
+    # FKS-SV A5-20-01 control telegrams strictly encode 0..40 C.
+    # Never let a negative sensor reading reach that encoder: it rejects
+    # out-of-range values and could otherwise interrupt the reply.
+    if external is not None and external < MIN_PROTOCOL_ROOM_TEMPERATURE_C:
+        external = None
+    if native is not None and native < MIN_PROTOCOL_ROOM_TEMPERATURE_C:
+        native = None
     if configured_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
         if external is not None:
             return external, "normal", ROOM_TEMPERATURE_SOURCE_EXTERNAL

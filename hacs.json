@@ -1,5 +1,8 @@
 {
   "name": "ELTAKO Sensors & Actuators",
   "hide_default_branch": true,
-  "render_readme": true
+  "render_readme": true,
+  "zip_release": true,
+  "filename": "ELTAKO_Sensors_Actuators.zip",
+  "homeassistant": "2026.11.0"
 }
