@@ -29,14 +29,14 @@ Die [öffentliche Katalogaufnahme](https://github.com/hacs/default/pull/13465) i
    `/config/custom_components/eltako_sensors_actuators/` kopieren.
 3. Kontrollieren, dass die Dateien direkt an dieser Stelle liegen:
 
-   `
+   ```text
    /config/custom_components/eltako_sensors_actuators/
      __init__.py
      manifest.json
      gateway.py
      bus/
      ...
-   `
+   ```
 
    **Keinen zusätzlichen verschachtelten Ordner** beim Entpacken erzeugen.
 4. Home Assistant vollständig neu starten.
