@@ -10,6 +10,13 @@ This release combines the tested Home Assistant climate API modernization with t
 - **Reliable EnOcean receive:** Buffer fragmented ESP2 frames instead of dropping partial USB reads, preserve FIFO order and checksum resynchronization. This fixes intermittent FT55 press/release states and protects 1BS/4BS sensors and separately addressed battery telegrams.
 - **Marketplace downloads:** Ship `ELTAKO_Sensors_Actuators.zip` as the release asset to support direct Marketplace installation and GitHub asset download counts.
 
+## Maintenance update: F2L14 FAM-USB sender-ID fix
+
+- **F2L14 control over FAM-USB:** Correct the outgoing rocker telegram's sender mapping. The configured and learned `sender.id` now determines the radio transmitter (translated to the FAM-USB base-ID range only when necessary), rather than the F2L14 actuator's `stage_1_id` feedback address.
+- **Status feedback unchanged:** `stage_1_id` and `stage_2_id` remain dedicated to actuator status telegrams. No change was made to FT55 or the generic ESP2 receive path.
+- **Hardware verified:** Stage 1, Stage 2, and Off worked with the FAM-USB in the field-tested v0.1.166b1 preview.
+- **No new version:** This is an in-place replacement of the existing **v0.1.165** release asset. Home Assistant/Marketplace will generally **not show an automatic update** for an unchanged version. Reinstall the updated ZIP manually to receive the fix if you installed v0.1.165 before this maintenance update.
+
 ## Compatibility and installation
 
 - Requires **Home Assistant 2026.11.0 or newer** for this release.
