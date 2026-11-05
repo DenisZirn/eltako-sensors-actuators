@@ -1,14 +1,17 @@
-name: Release v0.1.165
+name: Validate and maintain existing v0.1.165 release
 
 on:
+  pull_request:
   push:
-    branches: [main, release/v0.1.165-prep]
+    branches: [main]
     paths:
       - ".github/workflows/release-v0.1.165.yml"
       - "custom_components/eltako_sensors_actuators/**"
       - "hacs.json"
       - "tests/test_fks_sv_room_temperature.py"
       - "tests/test_serialx_rx.py"
+      - "tests/test_f2l14_sender_id.py"
+      - "RELEASE_NOTES_v0.1.165.md"
   workflow_dispatch:
 
 permissions:
@@ -46,6 +49,8 @@ jobs:
         run: python tests/test_fks_sv_room_temperature.py
       - name: Fragmented ESP2 receive and battery-ID regression
         run: python tests/test_serialx_rx.py
+      - name: F2L14 FAM-USB sender-ID regression
+        run: python tests/test_f2l14_sender_id.py
 
   hacs:
     name: HACS compliance
@@ -64,20 +69,18 @@ jobs:
       - uses: home-assistant/actions/hassfest@master
 
   publish:
-    name: Publish validated GitHub release
+    name: Replace asset on existing v0.1.165 release
     runs-on: ubuntu-latest
     needs: [regression, hacs, hassfest]
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[v0.1.165-hotfix]')
     steps:
       - uses: actions/checkout@v4
-      - name: Reject duplicate release
+      - name: Ensure v0.1.165 exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.1.165 >/dev/null 2>&1; then
-            echo "v0.1.165 already exists; refusing to overwrite"
-            exit 1
-          fi
+          gh release view v0.1.165 >/dev/null
+          gh release view v0.1.165 --json assets --jq '.assets[].name' | grep -Fx 'ELTAKO_Sensors_Actuators.zip'
       - name: Build Marketplace-compatible ZIP
         run: |
           python - <<'PY'
@@ -101,12 +104,11 @@ jobs:
               assert manifest['version'] == '0.1.165'
           print(output, output.stat().st_size, 'bytes')
           PY
-      - name: Publish official release
+      - name: Update existing release asset and release notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v0.1.165 ELTAKO_Sensors_Actuators.zip \
-            --target "${GITHUB_SHA}" \
-            --title "ELTAKO Sensors & Actuators v0.1.165" \
-            --notes-file RELEASE_NOTES_v0.1.165.md \
-            --latest
+          gh release upload v0.1.165 ELTAKO_Sensors_Actuators.zip --clobber
+          gh release edit v0.1.165 --notes-file RELEASE_NOTES_v0.1.165.md
+          gh release view v0.1.165 --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
+          echo "Existing release updated in place, no new tag created."
