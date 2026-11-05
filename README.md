@@ -129,7 +129,7 @@ Beispiel für einen Geräte-Eintrag (Auszug, keine vollständige Importdatei):
 binary_sensor:
   - id: "FE-EF-D6-FC"
     eep: "F6-02-01"
-    name: "Schlafzimmer Licht"
+    name: "Taster Schlafzimmer"
     device_type: "F2T55"
 ```
 
