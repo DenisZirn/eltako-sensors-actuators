@@ -1,5 +1,9 @@
 # ELTAKO Sensors & Actuators
 
+<!-- ha-marketplace:exclude-start -->
+[![Open in Home Assistant Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
+<!-- ha-marketplace:exclude-end -->
+
 Inoffizielle Home-Assistant-Integration zur lokalen Einbindung kompatibler ELTAKO-EnOcean-Sensoren und -Aktoren über **FAM-USB** (Funk) oder **FGW14-USB / FAM14** (Serie-14-Bus).
 
 **Aktuelle Version: v0.1.165** · Home Assistant 2026.11 oder neuer · Deutsch und Englisch · Lokale Kommunikation ohne Cloud-Zwang.
