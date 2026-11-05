@@ -140,9 +140,6 @@ Bei Mehrkanalaktoren und Geräten mit mehreren Betriebsarten sind zusätzlich di
 - Neue native Home-Assistant-Climate-Eigenschaften für Temperaturwerte.
 - Externe Temperaturquelle: −15 bis +40 °C mit protokollgerechter Begrenzung bei FHK14/FKS-SV.
 - Serielle USB-Kommunikation über `serialx`; FAM-USB und FGW14-USB im Praxistest geprüft.
-- Gepufferter ESP2-Empfang auch bei unvollständigen USB-Daten. FT55-Tastendruck und Loslassen werden wieder zuverlässig verarbeitet.
-- Empfangszuordnung für zusätzliche Telegramme mit separaten Batterie-IDs beibehalten.
-- Marketplace-kompatible Release-ZIP mit konstantem Dateinamen `ELTAKO_Sensors_Actuators.zip`.
 
 ## Änderungen in v0.1.164
 
