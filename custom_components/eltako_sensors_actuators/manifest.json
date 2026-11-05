@@ -1,19 +1,19 @@
 {
   "domain": "eltako_sensors_actuators",
   "name": "ELTAKO Sensors & Actuators",
+  "after_dependencies": [
+    "http"
+  ],
   "codeowners": [
     "@DenisZirn"
   ],
   "config_flow": true,
+  "documentation": "https://github.com/DenisZirn/eltako-sensors-actuators",
   "integration_type": "hub",
   "iot_class": "local_push",
+  "issue_tracker": "https://github.com/DenisZirn/eltako-sensors-actuators/issues",
   "requirements": [
     "serialx>=1.15.1"
   ],
-  "version": "0.1.165",
-  "documentation": "https://github.com/DenisZirn/eltako-sensors-actuators",
-  "issue_tracker": "https://github.com/DenisZirn/eltako-sensors-actuators/issues",
-  "after_dependencies": [
-    "http"
-  ]
+  "version": "0.1.165"
 }
