@@ -18,17 +18,11 @@ Nein, aber EEDTOY wird empfohlen, weil es Gerätekennungen, EEPs, Sender-IDs und
 
 Der aktuelle Import setzt einen **gezielten automatischen Reload** des betroffenen Config Entry. Nach einer **manuellen Dateiinstallation** oder einem Code-Update solltest du Home Assistant vollständig neu starten.
 
-## Warum zeigt der Marketplace kein Update für den F2L14-Fix?
-
-Der F2L14-Fix wurde in das **bestehende Release v0.1.165** eingepflegt und das ZIP-Asset ersetzt – **ohne eine neue Versionsnummer**. Dadurch erhalten schon installierte Nutzer normalerweise keine automatische Aktualisierungsbenachrichtigung. Aktuelle ZIP erneut installieren; siehe [Installation](installation.md).
 
 ## Warum kann ich senden, aber der Aktor reagiert nicht?
 
 `telegram_sent` bestätigt lediglich, dass der serielle Schreibvorgang durchgeführt wurde. Kontrolliere die im Aktor gelernte Sender-ID, `effective_sender_ids`, EEP, PCT14-Funktion und eine reale Statusrückmeldung. [Diagnose](diagnostics.md).
 
-## Warum ist mein FAM-USB auf `ttyUSB1` statt `ttyUSB0`?
-
-Linux kann die Reihenfolge dynamisch vergeben. Den persistenten `/dev/serial/by-id/`-Pfad nutzen; beim EnOcean Programmer normalerweise die Schnittstelle `if01`. [Gateways](gateways.md).
 
 ## Warum erscheinen nicht alle Batterieinformationen sofort?
 
