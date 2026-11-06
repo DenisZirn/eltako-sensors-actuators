@@ -52,7 +52,7 @@ Eine Config-Entry-Instanz entspricht einem physischen Gateway. Bei mehreren Gate
 
 - Bei einer **neuen Versionsnummer** kann der Marketplace ein Update anbieten.
 - Nach Code-Updates Home Assistant neu starten.
-- **Besonderheit v0.1.165:** Die installierbare ZIP wurde nachträglich mit einem getesteten **F2L14-FAM-USB-Fix** ersetzt, **ohne neue Versionsnummer**. Bei schon installiertem v0.1.165 erscheint deswegen in der Regel **kein automatischer Update-Hinweis**. In diesem Fall die aktuelle ZIP erneut manuell installieren.
+
 - YAML-Import und Änderung des seriellen Anschlusses lösen nach erfolgreichem Speichern einen **gezielten Reload** des betroffenen Eintrags aus. Eine Änderung der Raumtemperaturquelle wird dagegen direkt übernommen. Bei Bedarf gibt es den Dienst `eltako_sensors_actuators.reload_config`.
 
 [USB-Gateways einrichten →](gateways.md)
