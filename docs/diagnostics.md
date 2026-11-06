@@ -34,27 +34,6 @@ Bei einem Supportbericht **Zeitstempel, Geräte-ID, EEP, Gateway-Typ, Sender-ID 
 - `data_hex` / `frame`: Nutzdaten und komplettes ESP2-Frame.
 - `message_count` / `delay`: mehrere Telegramme bzw. zeitlich getrennte Sendevorgänge.
 
-## Häufige Fehlerbilder
-
-### FT55 bleibt nach dem Loslassen auf Ein
-
-Bei RPS/`F6-02-01` müssen **Drücken und Loslassen** erkannt werden. v0.1.165 puffert fragmentierte ESP2-Reads mit `serialx`. Wenn nur der Druck sichtbar ist, Empfangspfad, Funkreichweite und beschädigte Frames prüfen.
-
-### Aktor reagiert nicht, obwohl `telegram_sent` erscheint
-
-Zuerst `sender_id` mit `effective_sender_ids` vergleichen und die **im Aktor eingelernte** Senderadresse prüfen. Beim F2L14 am FAM-USB dürfen `stage_1_id` und `stage_2_id` nicht als ausgehender Sender genutzt werden; dafür existiert der v0.1.165-Wartungsfix.
-
-### Batteriemeldung fehlt
-
-Einige Geräte, insbesondere **F4USM61B**, senden Status/Kanäle und Batteriemeldungen über **verschiedene IDs**. Diese nicht zusammenführen. Batterie-Telegramme erscheinen außerdem möglicherweise deutlich seltener als normale Mess- oder Schalttelegramme.
-
-### Gateway verschwindet nach einem Neustart
-
-Stabilen `/dev/serial/by-id/`-Pfad statt `/dev/ttyUSB*` verwenden. Beim FAM-USB meist `if01` wählen. Siehe [Gateway-Anleitung](gateways.md).
-
-### Temperaturquelle bleibt auf Fallback
-
-In **Entwicklerwerkzeuge → Zustände** prüfen, ob die externe Temperatur-Entität einen gültigen °C-/°F-Wert liefert. Die gerätespezifischen Grenzen und Fallbacks stehen unter [Heizung](climate.md).
 
 ## Dienste für die Diagnose
 
