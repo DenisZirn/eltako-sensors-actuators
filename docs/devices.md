@@ -15,11 +15,11 @@ Die folgende Übersicht basiert auf dem Gerätekatalog der Integration **v0.1.16
 
 ## Wichtige Geräte und Einschränkungen
 
-- **F2L14:** `fan` mit Aus/Stufe 1/Stufe 2, einschließlich des getesteten FAM-USB-Fixes im bestehenden v0.1.165-Asset; siehe [Einlernen](teach-in.md).
+- **F2L14:** `fan` mit Aus/Stufe 1/Stufe 2.
 - **FMS14:** zwei separate Kanäle; A5-38-08-Steuerung.
 - **FRGBW71L:** RGBW-Steuerung unterstützt.
 - **FRGBW14:** Telegramme implementiert, **Hardwaresteuerung noch im Test**.
-- **FHK14/F4HK14:** Climate-Funktionen einschließlich externer Raumtemperaturquelle; korrekte Controller-Zuordnung im Aktor nötig.
+- **FHK14/F4HK14:** Steuerung über Home Assistant als Climate-Entität einschließlich externer Raumtemperaturquelle.
 - **FKS-SV:** bidirektionale Kommunikation im Ventil-Empfangsfenster.
 - **FAE14SSR / FHK61SSR:** laut Katalog **noch im Test**.
 
