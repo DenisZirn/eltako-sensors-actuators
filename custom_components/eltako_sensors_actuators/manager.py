@@ -16,6 +16,7 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr, en
 
 from .entity_base import device_key, legacy_device_key
 from .manager_importers import detect_import_format, parse_minisafe2, parse_pct14_xml
+from .series14_writer import write_sender_entries
 from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
 
 from .const import (
@@ -311,6 +312,95 @@ async def _async_reload_and_cleanup(
         removed_devices,
         remaining_devices,
     )
+
+
+
+def _device_option_value(device: dict[str, Any], key: str, default: Any = None) -> Any:
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    if device.get(key) not in (None, ""):
+        return device.get(key)
+    return raw.get(key, default)
+
+
+def _series14_device(device: dict[str, Any]) -> bool:
+    """Return True only when the device carries explicit Series-14 bus metadata."""
+    return bool(
+        _device_option_value(device, "bus_address")
+        or _device_option_value(device, "bus_base_id")
+    )
+
+
+def _series14_bus_offset(device: dict[str, Any]) -> int | None:
+    value = _id_to_int(_device_option_value(device, "bus_address"))
+    if value is None:
+        return None
+    return value & 0xFF
+
+
+def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None = None):
+    """Find an active FAM14/FGW14-USB entry that can own the RS485 port."""
+    candidates = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if gateway is None:
+            continue
+        gateway_type = str(getattr(gateway, "gateway_type", "") or "").lower()
+        if gateway_type not in {"fam14", "fgw14usb"}:
+            continue
+        candidates.append((entry, gateway))
+    if preferred_entry_id:
+        for entry, gateway in candidates:
+            if entry.entry_id == preferred_entry_id:
+                return entry, gateway
+    return candidates[0] if len(candidates) == 1 else (None, None)
+
+
+def _series14_program_entry(device: dict[str, Any]) -> dict[str, Any]:
+    """Create the exact sender-writer row from one HA device config."""
+    sender_id = str(_device_option_value(device, "sender_id") or "").strip()
+    sender_eep = str(_device_option_value(device, "sender_eep") or "").strip().upper()
+    bus_base_id = str(_device_option_value(device, "bus_base_id") or "").strip().upper()
+    bus_offset = _series14_bus_offset(device)
+    if not sender_id:
+        raise ValueError("Für dieses Gerät ist keine Sender-ID konfiguriert.")
+    if not sender_eep:
+        raise ValueError("Für dieses Gerät ist kein Sender-EEP konfiguriert.")
+    if not bus_base_id or bus_offset is None:
+        raise ValueError("PCT14-Busadresse/Base-ID fehlt. Gerät zuerst über PCT14 importieren oder Busadresse ergänzen.")
+    bus_device_id = _add_id_offset(bus_base_id, bus_offset)
+    if not bus_device_id:
+        raise ValueError("Series-14-Busadresse konnte nicht berechnet werden.")
+    return {
+        "device_id": bus_device_id,
+        "sender_id": sender_id,
+        "sender_eep": sender_eep,
+        "device_eep": str(device.get("eep") or "").upper(),
+        "device_type": str(device.get("device_type") or device.get("model") or ""),
+        "platform": str(device.get("platform") or ""),
+        "name": str(device.get("name") or ""),
+        "expected_bus_base_id": bus_base_id,
+        "source_gateway_type": "ha",
+        "source_gateway_base_id": str((device.get("gateway") or {}).get("base_id") or ""),
+        "f2l14_mode": str(_device_option_value(device, "f2l14_mode") or "exclusive"),
+    }
+
+
+def _teach_in_command_for_device(device: dict[str, Any]) -> str:
+    eep = str(device.get("eep") or "").strip().upper()
+    text = " ".join(
+        str(value or "")
+        for value in (
+            device.get("device_type"),
+            device.get("model"),
+            device.get("name"),
+            _device_option_value(device, "device_family"),
+        )
+    ).upper()
+    if "FRGBW71" in text:
+        return "frgbw_free_profile_teach_in"
+    if eep == "A5-20-04":
+        return "arm_fks_hora_teach_in"
+    return "teach_in"
 
 
 def _profile_map(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -867,6 +957,169 @@ async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str
     connection.send_result(msg["id"], {"subscribed": True})
 
 
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/program_device",
+        vol.Required("entry_id"): str,
+        vol.Required("index"): int,
+        vol.Optional("writer_entry_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_program_device(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Program Series-14 sender memory or send a radio teach-in telegram."""
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    if entry is None or entry.domain != DOMAIN:
+        connection.send_error(msg["id"], "entry_not_found", "ELTAKO config entry not found")
+        return
+    data = {**entry.data, **entry.options}
+    devices = [item for item in data.get(CONF_DEVICES) or [] if isinstance(item, dict)]
+    index = msg["index"]
+    if index < 0 or index >= len(devices):
+        connection.send_error(msg["id"], "invalid_index", "Geräteindex ist ungültig")
+        return
+    device = devices[index]
+
+    if _series14_device(device):
+        try:
+            writer_row = _series14_program_entry(device)
+        except ValueError as err:
+            connection.send_error(msg["id"], "series14_invalid", str(err))
+            return
+
+        writer_entry, writer_gateway = _series14_writer_entry(
+            hass,
+            msg.get("writer_entry_id"),
+        )
+        if writer_entry is None or writer_gateway is None:
+            connection.send_error(
+                msg["id"],
+                "series14_gateway_missing",
+                "Zum Schreiben wird ein aktiver FAM14- oder FGW14-USB-Eintrag benötigt.",
+            )
+            return
+
+        port = str(getattr(writer_gateway, "port", "") or "")
+        gateway_type = str(getattr(writer_gateway, "gateway_type", "") or "").lower()
+        if not port or gateway_type not in {"fam14", "fgw14usb"}:
+            connection.send_error(msg["id"], "series14_gateway_invalid", "RS485-Gateway ist nicht bereit.")
+            return
+
+        diagnostic_event(
+            hass,
+            "series14_program_start",
+            entry_id=entry.entry_id,
+            writer_entry_id=writer_entry.entry_id,
+            device_id=device.get("id"),
+            bus_address=_device_option_value(device, "bus_address"),
+            sender_id=_device_option_value(device, "sender_id"),
+            sender_eep=_device_option_value(device, "sender_eep"),
+            port=port,
+        )
+
+        # The normal ESP2 reader must release the same serial port before the
+        # eltako14bus memory writer takes exclusive ownership of the RS485 bus.
+        await writer_gateway.async_stop()
+        try:
+            result = await hass.async_add_executor_job(
+                lambda: __import__("asyncio").run(
+                    write_sender_entries(
+                        port,
+                        [writer_row],
+                        baud_rate=57600,
+                        gateway_type=gateway_type,
+                    )
+                )
+            )
+        except Exception as err:
+            diagnostic_event(
+                hass,
+                "series14_program_failed",
+                level="error",
+                entry_id=entry.entry_id,
+                writer_entry_id=writer_entry.entry_id,
+                error=str(err),
+            )
+            connection.send_error(msg["id"], "series14_write_failed", str(err))
+            return
+        finally:
+            try:
+                await writer_gateway.async_start()
+            except Exception:
+                _LOGGER.exception("Could not restart ELTAKO RS485 gateway after sender programming")
+
+        if not result.get("ok"):
+            connection.send_error(
+                msg["id"],
+                "series14_write_failed",
+                str(result.get("error") or "Sender-ID konnte nicht geschrieben werden."),
+            )
+            return
+        diagnostic_event(
+            hass,
+            "series14_program_finished",
+            entry_id=entry.entry_id,
+            writer_entry_id=writer_entry.entry_id,
+            counts=result.get("counts"),
+            events=result.get("events"),
+        )
+        connection.send_result(
+            msg["id"],
+            {
+                "mode": "series14",
+                "result": _json_value(result),
+                "writer_entry_id": writer_entry.entry_id,
+            },
+        )
+        return
+
+    gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if gateway is None:
+        connection.send_error(msg["id"], "gateway_not_active", "ELTAKO Gateway ist nicht aktiv.")
+        return
+    sender_id = str(_device_option_value(device, "sender_id") or "").strip()
+    if not sender_id:
+        connection.send_error(
+            msg["id"],
+            "sender_missing",
+            "Für diesen Aktor ist keine Sender-ID konfiguriert.",
+        )
+        return
+
+    command = _teach_in_command_for_device(device)
+    if command == "arm_fks_hora_teach_in":
+        ok = gateway.arm_fks_hora_teach_in(device)
+    else:
+        ok = await gateway.async_send_actuator_command(device, command)
+    if not ok:
+        connection.send_error(
+            msg["id"],
+            "teach_in_failed",
+            gateway.last_send_error or "Lerntelegramm konnte nicht gesendet werden.",
+        )
+        return
+    diagnostic_event(
+        hass,
+        "manager_teach_in_sent",
+        entry_id=entry.entry_id,
+        device_id=device.get("id"),
+        sender_id=sender_id,
+        sender_eep=_device_option_value(device, "sender_eep"),
+        command=command,
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "mode": "radio_teach_in",
+            "command": command,
+            "sender_id": sender_id,
+            "sender_eep": _device_option_value(device, "sender_eep"),
+        },
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/export_yaml",
@@ -899,6 +1152,7 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_import_preview)
         websocket_api.async_register_command(hass, websocket_manager_apply_import)
         websocket_api.async_register_command(hass, websocket_manager_learn)
+        websocket_api.async_register_command(hass, websocket_manager_program_device)
         websocket_api.async_register_command(hass, websocket_manager_export_yaml)
         manager["websocket_registered"] = True
 
