@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 import re
 from typing import Any
+import uuid
 
 import voluptuous as vol
 import yaml
@@ -13,6 +14,7 @@ from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+from homeassistant.helpers.storage import Store
 
 from .entity_base import device_key, legacy_device_key
 from .manager_importers import detect_import_format, parse_minisafe2, parse_pct14_xml
@@ -35,6 +37,8 @@ STATIC_BASE_URL = "/eltako_sensors_actuators_manager_static"
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 PANEL_FILE = FRONTEND_DIR / "manager-panel.js"
 CATALOG_FILE = Path(__file__).parent / "eedtoy_catalog.json"
+CUSTOM_PROFILE_STORAGE_VERSION = 1
+CUSTOM_PROFILE_STORAGE_KEY = f"{DOMAIN}.custom_device_profiles"
 
 
 def _json_value(value: Any) -> Any:
@@ -57,6 +61,81 @@ def _load_catalog_sync() -> dict[str, Any]:
     if not isinstance(data, dict) or not isinstance(data.get("devices"), list):
         raise ValueError("Invalid EEDTOY catalog")
     return data
+
+
+def _combined_catalog(hass: HomeAssistant) -> dict[str, Any]:
+    manager = hass.data.get(DATA_MANAGER, {})
+    base = manager.get("catalog") or {"devices": []}
+    custom_profiles = manager.get("custom_profiles") or []
+    devices = [
+        {**profile, "custom": False}
+        for profile in base.get("devices", [])
+        if isinstance(profile, dict)
+    ]
+    devices.extend(
+        {**profile, "custom": True}
+        for profile in custom_profiles
+        if isinstance(profile, dict)
+    )
+    return {
+        **base,
+        "devices": devices,
+        "custom_profile_count": len(custom_profiles),
+    }
+
+
+async def _async_save_custom_profiles(hass: HomeAssistant) -> None:
+    manager = hass.data.setdefault(DATA_MANAGER, {})
+    store: Store = manager["custom_profile_store"]
+    await store.async_save({"profiles": manager.get("custom_profiles") or []})
+
+
+def _custom_profile_payload(raw: dict[str, Any], *, existing_key: str | None = None) -> dict[str, Any]:
+    label = str(raw.get("label") or raw.get("device_type") or "").strip()
+    device_type = str(raw.get("device_type") or label or "").strip()
+    eep = str(raw.get("eep_out") or raw.get("eep") or "").strip().upper()
+    platform = str(raw.get("platform") or "sensor").strip().lower()
+    group = str(raw.get("group") or "Sonstige").strip()
+    if not label:
+        raise ValueError("Name des Geräteprofils fehlt.")
+    if not device_type:
+        raise ValueError("Gerätetyp fehlt.")
+    if not re.fullmatch(r"[A-Z0-9]{2}-[A-Z0-9]{2}-[A-Z0-9]{2}", eep):
+        raise ValueError("EEP muss im Format A5-xx-xx, F6-xx-xx, D5-xx-xx usw. angegeben werden.")
+    allowed_platforms = {"binary_sensor", "sensor", "light", "switch", "cover", "fan", "climate"}
+    if platform not in allowed_platforms:
+        raise ValueError(f"Nicht unterstützte Plattform: {platform}")
+    device_classes = raw.get("device_classes")
+    if isinstance(device_classes, str):
+        device_classes = [item.strip() for item in device_classes.split(",") if item.strip()]
+    if not isinstance(device_classes, list):
+        device_classes = []
+    default_dc = str(raw.get("default_dc") or "").strip() or None
+    if default_dc and default_dc not in device_classes:
+        device_classes = [default_dc, *device_classes]
+
+    key = existing_key or str(raw.get("key") or "").strip()
+    if not key.startswith("custom:"):
+        key = f"custom:{uuid.uuid4().hex}"
+
+    result = {
+        "key": key,
+        "label": label,
+        "device_type": device_type,
+        "group": group,
+        "platform": platform,
+        "eep_out": eep,
+        "eltako": str(raw.get("eltako") or device_type).strip(),
+        "device_family": str(raw.get("device_family") or "").strip() or None,
+        "device_classes": device_classes,
+        "default_dc": default_dc,
+        "needs_sender": bool(raw.get("needs_sender")),
+        "sender_eep": str(raw.get("sender_eep") or "").strip().upper() or None,
+        "teach_in_telegram": str(raw.get("teach_in_telegram") or "").strip().upper() or None,
+        "channels": int(raw.get("channels") or 0) or None,
+        "custom": True,
+    }
+    return {key: value for key, value in result.items() if value not in (None, "", [])}
 
 
 def _panel_version_sync() -> str:
@@ -404,8 +483,7 @@ def _teach_in_command_for_device(device: dict[str, Any]) -> str:
 
 
 def _profile_map(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
-    manager = hass.data.get(DATA_MANAGER, {})
-    catalog = manager.get("catalog") or {}
+    catalog = _combined_catalog(hass)
     result: dict[str, dict[str, Any]] = {}
     for profile in catalog.get("devices", []):
         if isinstance(profile, dict) and profile.get("key"):
@@ -554,7 +632,7 @@ def _export_yaml(entry) -> str:
 @websocket_api.require_admin
 @websocket_api.async_response
 async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    catalog = hass.data.get(DATA_MANAGER, {}).get("catalog") or {"devices": []}
+    catalog = _combined_catalog(hass)
     areas = [
         {"id": area.id, "name": area.name}
         for area in ar.async_get(hass).async_list_areas()
@@ -572,6 +650,76 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "beta": "0.2.0-beta.4",
         },
     )
+
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/save_profile",
+        vol.Required("profile"): dict,
+        vol.Optional("key"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_save_profile(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    manager = hass.data.setdefault(DATA_MANAGER, {})
+    profiles = [dict(item) for item in manager.get("custom_profiles") or [] if isinstance(item, dict)]
+    existing_key = str(msg.get("key") or "").strip() or None
+    if existing_key and not existing_key.startswith("custom:"):
+        connection.send_error(msg["id"], "system_profile_readonly", "Mitgelieferte Geräteprofile können nicht überschrieben werden. Bitte duplizieren.")
+        return
+    try:
+        profile = _custom_profile_payload(msg["profile"], existing_key=existing_key)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_profile", str(err))
+        return
+
+    if existing_key:
+        index = next((i for i, item in enumerate(profiles) if str(item.get("key")) == existing_key), None)
+        if index is None:
+            connection.send_error(msg["id"], "profile_not_found", "Eigenes Geräteprofil wurde nicht gefunden.")
+            return
+        profiles[index] = profile
+    else:
+        profiles.append(profile)
+
+    manager["custom_profiles"] = profiles
+    await _async_save_custom_profiles(hass)
+    connection.send_result(msg["id"], {"saved": True, "profile": _json_value(profile)})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/delete_profile",
+        vol.Required("key"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_delete_profile(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    key = str(msg["key"] or "")
+    if not key.startswith("custom:"):
+        connection.send_error(msg["id"], "system_profile_readonly", "Mitgelieferte Geräteprofile können nicht gelöscht werden.")
+        return
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        data = {**entry.data, **entry.options}
+        if any(str(device.get("profile_key") or "") == key for device in data.get(CONF_DEVICES) or [] if isinstance(device, dict)):
+            connection.send_error(
+                msg["id"],
+                "profile_in_use",
+                "Dieses Geräteprofil wird noch von mindestens einem konfigurierten Gerät verwendet.",
+            )
+            return
+    manager = hass.data.setdefault(DATA_MANAGER, {})
+    profiles = [dict(item) for item in manager.get("custom_profiles") or [] if isinstance(item, dict)]
+    new_profiles = [item for item in profiles if str(item.get("key") or "") != key]
+    if len(new_profiles) == len(profiles):
+        connection.send_error(msg["id"], "profile_not_found", "Eigenes Geräteprofil wurde nicht gefunden.")
+        return
+    manager["custom_profiles"] = new_profiles
+    await _async_save_custom_profiles(hass)
+    connection.send_result(msg["id"], {"deleted": True})
 
 
 @websocket_api.websocket_command(
@@ -1138,6 +1286,17 @@ async def websocket_manager_export_yaml(hass: HomeAssistant, connection, msg: di
 
 async def async_setup_manager(hass: HomeAssistant) -> None:
     manager = hass.data.setdefault(DATA_MANAGER, {})
+    if "custom_profile_store" not in manager:
+        manager["custom_profile_store"] = Store(
+            hass,
+            CUSTOM_PROFILE_STORAGE_VERSION,
+            CUSTOM_PROFILE_STORAGE_KEY,
+        )
+        stored = await manager["custom_profile_store"].async_load() or {}
+        profiles = stored.get("profiles", []) if isinstance(stored, dict) else []
+        manager["custom_profiles"] = [
+            item for item in profiles if isinstance(item, dict) and str(item.get("key") or "").startswith("custom:")
+        ]
     if "catalog" not in manager:
         try:
             manager["catalog"] = await hass.async_add_executor_job(_load_catalog_sync)
@@ -1147,6 +1306,8 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
 
     if not manager.get("websocket_registered"):
         websocket_api.async_register_command(hass, websocket_manager_get)
+        websocket_api.async_register_command(hass, websocket_manager_save_profile)
+        websocket_api.async_register_command(hass, websocket_manager_delete_profile)
         websocket_api.async_register_command(hass, websocket_manager_save_device)
         websocket_api.async_register_command(hass, websocket_manager_delete_device)
         websocket_api.async_register_command(hass, websocket_manager_import_preview)
