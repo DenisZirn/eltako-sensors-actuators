@@ -80,6 +80,74 @@ def _normalize_id(value: Any) -> str:
     return "-".join(compact[index : index + 2] for index in range(0, 8, 2))
 
 
+def _id_to_int(value: Any) -> int | None:
+    try:
+        normalized = _normalize_id(value)
+    except ValueError:
+        return None
+    return int(normalized.replace("-", ""), 16)
+
+
+def _add_id_offset(base_id: Any, offset: int) -> str | None:
+    base_value = _id_to_int(base_id)
+    if base_value is None:
+        return None
+    value = (base_value + int(offset)) & 0xFFFFFFFF
+    return "-".join(f"{(value >> shift) & 0xFF:02X}" for shift in (24, 16, 8, 0))
+
+
+def _pct14_payload_for_entry(payload: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """Translate one PCT14 row to the address space of the selected HA gateway."""
+    if str(payload.get("source") or "") != "PCT14":
+        return payload
+    result = dict(payload)
+    gateway_type = str(data.get("gateway_type") or "").lower()
+    selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
+    gateway_base_id = (
+        selected_gateway.get("base_id")
+        if isinstance(selected_gateway, dict)
+        else None
+    )
+    bus_base_id = result.get("bus_base_id")
+
+    def bus_offset(raw: Any) -> int | None:
+        value = _id_to_int(raw)
+        if value is None:
+            return None
+        return value
+
+    if gateway_type == "fam-usb" and bus_base_id:
+        offset = bus_offset(result.get("id"))
+        device_type = str(result.get("profile_key") or "")
+        # FWG14MS transmits from its dedicated radio ranges and FTS14EM has
+        # its own E1 ranges; neither is a normal Series-14 bus-address mapping.
+        if offset is not None and "FWG14MS" not in device_type and "FTS14EM" not in device_type:
+            translated = _add_id_offset(bus_base_id, offset)
+            if translated:
+                result["id"] = translated
+
+        if result.get("stage_1_id") and offset is not None:
+            stage_1_offset = bus_offset(result.get("stage_1_id"))
+            stage_2_offset = bus_offset(result.get("stage_2_id"))
+            if stage_1_offset is not None:
+                result["stage_1_id"] = _add_id_offset(bus_base_id, stage_1_offset)
+            if stage_2_offset is not None:
+                result["stage_2_id"] = _add_id_offset(bus_base_id, stage_2_offset)
+
+        # PCT14 controller sender IDs use bus offsets B0xx. On a FAM-USB the
+        # corresponding controller address is based on the FAM-USB base ID.
+        sender_offset = bus_offset(result.get("sender_id"))
+        if sender_offset is not None and gateway_base_id:
+            # EEDTOY maps the actor channel offset, not the literal 0xB0xx,
+            # onto the radio gateway base ID.
+            actor_offset = offset
+            if actor_offset is not None:
+                translated_sender = _add_id_offset(gateway_base_id, actor_offset)
+                if translated_sender:
+                    result["sender_id"] = translated_sender
+    return result
+
+
 def _entry_payload(hass: HomeAssistant, entry) -> dict[str, Any]:
     data = {**entry.data, **entry.options}
     gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
@@ -502,7 +570,7 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
             skipped += 1
             errors.append(f"Zeile {row_index + 1}: Geräteprofil fehlt")
             continue
-        payload = dict(raw_row)
+        payload = _pct14_payload_for_entry(dict(raw_row), data)
         if not payload.get("area"):
             payload["area"] = ""
         try:
