@@ -10,6 +10,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.translation import async_invalidate_translations
 
 from .const import (
     CONF_GATEWAY_TYPE,
@@ -34,6 +35,10 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up integration-wide services that must not block gateway entries."""
+    # Offline versions are manually swapped without a HACS package reload.
+    # Invalidate in-memory translations once so config, options and entity
+    # labels are loaded from the *current* translations/*.json files.
+    async_invalidate_translations(hass, {DOMAIN})
     try:
         await async_setup_diagnostics(hass)
     except Exception:
