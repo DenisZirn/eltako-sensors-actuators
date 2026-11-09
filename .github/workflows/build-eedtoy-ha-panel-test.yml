@@ -22,8 +22,8 @@ jobs:
       - name: Check manager JavaScript syntax
         run: node --check custom_components/eltako_sensors_actuators/frontend/manager-panel.js
 
-      - name: Run manager importer regression tests
-        run: python -m unittest tests.test_manager_importers
+      - name: Run integrated manager regression tests
+        run: python -m unittest tests.test_manager_importers tests.test_series14_writer
 
       - name: Verify integrated manager assets
         run: |
