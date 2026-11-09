@@ -1,0 +1,53 @@
+name: Build integrated EEDTOY offline test
+
+on:
+  push:
+    branches:
+      - feature/eedtoy-ha-panel
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check Python syntax
+        run: python -m compileall -q custom_components/eltako_sensors_actuators
+
+      - name: Check manager JavaScript syntax
+        run: node --check custom_components/eltako_sensors_actuators/frontend/manager-panel.js
+
+      - name: Verify integrated manager assets
+        run: |
+          test -f custom_components/eltako_sensors_actuators/manager.py
+          test -f custom_components/eltako_sensors_actuators/eedtoy_catalog.json
+          test -f custom_components/eltako_sensors_actuators/frontend/manager-panel.js
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          catalog = json.loads(Path("custom_components/eltako_sensors_actuators/eedtoy_catalog.json").read_text(encoding="utf-8"))
+          assert catalog["source"] == "EEDTOY"
+          assert len(catalog["devices"]) >= 80
+          print(f"EEDTOY catalog profiles: {len(catalog['devices'])}")
+          PY
+
+      - name: Build offline test ZIP
+        run: |
+          mkdir -p dist/custom_components
+          cp -R custom_components/eltako_sensors_actuators dist/custom_components/
+          find dist -type d -name __pycache__ -prune -exec rm -rf {} +
+          find dist -type f -name '*.pyc' -delete
+          cd dist
+          zip -qr ../ELTAKO_Sensors_Actuators_v0.2.0-beta.1_TEST.zip custom_components
+
+      - name: Upload offline test ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_v0.2.0-beta.1_TEST
+          path: ELTAKO_Sensors_Actuators_v0.2.0-beta.1_TEST.zip
+          if-no-files-found: error
