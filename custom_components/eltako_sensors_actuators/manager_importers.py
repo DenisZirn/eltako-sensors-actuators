@@ -220,11 +220,11 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
             raw_text = " ".join((part or "") for part in node.itertext()).upper()
             mode = "RT" if re.search(r"(^|[^A-Z])RT([^A-Z]|$)", raw_text) else "UT"
             rows.append({
-                "selected": True,
+                "selected": False,
                 "source": "PCT14",
                 "bus_base_id": base_id,
                 "profile_key": profile_key,
-                "id": _hex_id(address),
+                "id": "",
                 "name": f"FTS14EM {mode}",
                 "area": "",
                 "area_hint": f"PCT14 Adresse {address} · Basis-ID · {mode}",
@@ -232,7 +232,7 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
                 "sender_id": "",
                 "sender_eep": "",
                 "device_class": "",
-                "warning": "",
+                "warning": "E1-Basis-ID im Lernmodus ermitteln und hier eintragen",
             })
             continue
 
