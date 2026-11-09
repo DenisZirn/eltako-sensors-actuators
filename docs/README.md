@@ -1,6 +1,6 @@
 # Dokumentation – ELTAKO Sensors & Actuators
 
-**Home Assistant 2026.11+ · Integration v0.1.165 · Deutsch**
+**Home Assistant 2026.11+ · Integration v0.1.166 · Deutsch**
 
 Diese Dokumentation behandelt die unabhängige Home-Assistant-Custom-Integration **ELTAKO Sensors & Actuators** mit lokalen EnOcean- und Serie-14-Gateways. Sie ist keine offizielle ELTAKO-Produktdokumentation.
 
