@@ -241,13 +241,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.append(EltakoDeviceAddressSensor(gateway, device))
 
         if is_legacy_frw_device(device):
-            # Old FRW is an alarm, not a four-position pushbutton.
-            entities.append(
-                EltakoYamlValueSensor(
-                    gateway, device, "frw_status", "Rauchmelderstatus",
-                    getattr(SensorDeviceClass, "ENUM", None), None,
-                )
-            )
+            # Old FRW exposes its user-facing state only through the dedicated
+            # smoke and battery binary sensors in binary_sensor.py.
             continue
 
         # In modes 1, 2, 4, 5 and 7 the F4USM61B battery telegram is sent
@@ -536,7 +531,13 @@ def _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices: list[dict[
         if not isinstance(device, dict) or not is_legacy_frw_device(device):
             continue
         for base in {device_key(device), legacy_device_key(device)}:
-            for suffix in ("Gedrueckte Taste", "Gedrückte Taste", "Tastenposition", "Signalcode"):
+            for suffix in (
+                "Gedrueckte Taste",
+                "Gedrückte Taste",
+                "Tastenposition",
+                "Signalcode",
+                "Rauchmelderstatus",
+            ):
                 unique_id = f"{DOMAIN}_{entry.entry_id}_{base}_{suffix}".lower().replace(" ", "_").replace("/", "_")
                 entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
                 if entity_id:
