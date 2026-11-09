@@ -36,7 +36,12 @@ class EltakoManagerPanel extends HTMLElement {
   groups(){return [...new Set(this.catalog().map(x=>x.group).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"de"))}
   filteredCatalog(){var q=this.search.trim().toLowerCase();return this.catalog().filter(x=>(!this.group||this.categoryForGroup(x.group)===this.group)&&(!q||[x.label,x.device_type,x.eep_out,x.group,this.categoryForGroup(x.group),x.eltako,x.key].filter(Boolean).some(v=>String(v).toLowerCase().includes(q))))}
   canProgram(d){return !!(d&&d.sender_id&&["light","switch","cover","fan","climate"].includes(String(d.platform||"").toLowerCase()))}
-  isSeries14(d){return !!(d&&(d.bus_address||d.bus_base_id||d.raw?.bus_address||d.raw?.bus_base_id))}
+  isSeries14(d){
+    if(!d)return false;
+    if(d.bus_address||d.bus_base_id||d.raw?.bus_address||d.raw?.bus_base_id)return true;
+    var text=[d.device_type,d.model,d.profile_key,d.raw?.device_family].filter(Boolean).join(" ").toUpperCase();
+    return /(^|[^A-Z0-9])F[A-Z0-9-]*14[A-Z0-9-]*([^A-Z0-9]|$)/.test(text);
+  }
   profile(key){return this.catalog().find(x=>x.key===key)}
   profileShortName(p){
     if(!p)return "Gerät";
@@ -88,7 +93,7 @@ class EltakoManagerPanel extends HTMLElement {
     if(!ds.length)return h+"<div class='empty'>Noch keine Geräte konfiguriert.</div></div>";
     h+="<div class='scroll'><table><thead><tr><th>Name</th><th>ID</th><th>EEP</th><th>Typ</th><th>Raum</th><th></th></tr></thead><tbody>";
     ds.forEach((d,i)=>{
-      var program=this.canProgram(d)?("<button class='primary' data-program='"+i+"'>"+(this.isSeries14(d)?"Sender programmieren":"Einlernen")+"</button> "):"";
+      var program=(this.canProgram(d)&&!this.isSeries14(d))?("<button class='primary' data-program='"+i+"'>Einlernen</button> "):"";
       h+="<tr><td><strong>"+this.esc(d.name||"ELTAKO Gerät")+"</strong><div class='muted'>"+this.esc(d.platform||"")+(d.sender_id?" · Sender "+this.esc(d.sender_id):"")+"</div></td><td class='mono'>"+this.esc(d.id||"")+"</td><td><span class='badge'>"+this.esc(d.eep||"")+"</span></td><td>"+this.esc(d.device_type||d.profile_key||"")+"</td><td>"+this.esc(d.area||"—")+"</td><td class='right'>"+program+"<button data-edit='"+i+"'>Bearbeiten</button> <button class='danger' data-delete='"+i+"'>Löschen</button></td></tr>";
     });
     return h+"</tbody></table></div></div>";
