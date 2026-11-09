@@ -12,8 +12,9 @@ import yaml
 from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 
+from .entity_base import device_key, legacy_device_key
 from .manager_importers import detect_import_format, parse_minisafe2, parse_pct14_xml
 from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
 
@@ -171,6 +172,145 @@ def _entry_payload(hass: HomeAssistant, entry) -> dict[str, Any]:
         "devices": _json_value(data.get(CONF_DEVICES) or []),
         "last_telegram": last_payload,
     }
+
+
+
+def _registry_prefixes(entry_id: str, device: dict[str, Any]) -> tuple[str, ...]:
+    """Return current and legacy entity unique-id prefixes for one logical device."""
+    prefix = f"{DOMAIN}_{entry_id}_"
+    values = {
+        f"{prefix}{device_key(device)}".lower(),
+        f"{prefix}{legacy_device_key(device)}".lower(),
+    }
+    return tuple(sorted(values))
+
+
+def _same_logical_device(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Compare the stable technical identity used for registry cleanup."""
+    return device_key(left) == device_key(right)
+
+
+def _async_cleanup_removed_devices(
+    hass: HomeAssistant,
+    entry_id: str,
+    removed_devices: list[dict[str, Any]],
+    remaining_devices: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Remove stale entity/device registry rows after the config entry was reloaded.
+
+    Normal devices own one HA device. Some physical devices (for example FLGTF,
+    FTS14EM and F4USM61B) intentionally group several logical rows below one HA
+    device. For those, remove only the deleted row's entities while any remaining
+    row still references the same HA device. Shared diagnostics are removed only
+    when the whole HA device has become orphaned.
+    """
+    if not removed_devices:
+        return {"entities": 0, "devices": 0}
+
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    entry_entities = [
+        item
+        for item in er.async_entries_for_config_entry(entity_registry, entry_id)
+        if getattr(item, "platform", None) == DOMAIN
+    ]
+
+    removed_prefixes = {
+        prefix
+        for device in removed_devices
+        for prefix in _registry_prefixes(entry_id, device)
+    }
+    remaining_prefixes = {
+        prefix
+        for device in remaining_devices
+        for prefix in _registry_prefixes(entry_id, device)
+    }
+
+    target_device_ids: set[str] = {
+        item.device_id
+        for item in entry_entities
+        if item.device_id
+        and any(str(item.unique_id).lower().startswith(prefix) for prefix in removed_prefixes)
+    }
+
+    # Fallback for devices that currently have no ordinary entity row. The
+    # normal DeviceInfo identifier is (DOMAIN, entry_id, physical_id).
+    removed_ids = {
+        str(device.get("id") or "").strip().upper()
+        for device in removed_devices
+        if str(device.get("id") or "").strip()
+    }
+    if removed_ids:
+        for device_entry in dr.async_entries_for_config_entry(device_registry, entry_id):
+            for identifier in device_entry.identifiers:
+                if (
+                    len(identifier) >= 3
+                    and identifier[0] == DOMAIN
+                    and identifier[1] == entry_id
+                    and str(identifier[2]).strip().upper() in removed_ids
+                ):
+                    target_device_ids.add(device_entry.id)
+
+    removed_entity_count = 0
+    removed_device_count = 0
+
+    # Remove registry entries owned by the logical rows that disappeared.
+    for item in list(entry_entities):
+        if any(str(item.unique_id).lower().startswith(prefix) for prefix in removed_prefixes):
+            entity_registry.async_remove(item.entity_id)
+            removed_entity_count += 1
+
+    # Re-read registry data after the removals above.
+    current_entries = [
+        item
+        for item in er.async_entries_for_config_entry(entity_registry, entry_id)
+        if getattr(item, "platform", None) == DOMAIN
+    ]
+
+    for device_id in target_device_ids:
+        # A remaining logical row on this same HA device means this is a grouped
+        # device. Keep the device and any shared diagnostics.
+        has_remaining_peer = any(
+            item.device_id == device_id
+            and any(str(item.unique_id).lower().startswith(prefix) for prefix in remaining_prefixes)
+            for item in current_entries
+        )
+        if has_remaining_peer:
+            continue
+
+        # No configured row remains on this HA device. Remove shared diagnostics
+        # and any older registry entries that do not use the standard device-key
+        # prefix, then remove the orphaned HA device itself.
+        for item in list(current_entries):
+            if item.device_id != device_id:
+                continue
+            entity_registry.async_remove(item.entity_id)
+            removed_entity_count += 1
+
+        if device_registry.async_get(device_id) is not None:
+            device_registry.async_remove_device(device_id)
+            removed_device_count += 1
+
+    return {"entities": removed_entity_count, "devices": removed_device_count}
+
+
+async def _async_reload_and_cleanup(
+    hass: HomeAssistant,
+    entry,
+    *,
+    removed_devices: list[dict[str, Any]],
+    remaining_devices: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Reload one config entry, then prune stale registry objects."""
+    reloaded = await hass.config_entries.async_reload(entry.entry_id)
+    if not reloaded:
+        raise RuntimeError("ELTAKO config entry konnte nach der Änderung nicht neu geladen werden.")
+    return _async_cleanup_removed_devices(
+        hass,
+        entry.entry_id,
+        removed_devices,
+        remaining_devices,
+    )
 
 
 def _profile_map(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -388,6 +528,7 @@ async def websocket_manager_save_device(hass: HomeAssistant, connection, msg: di
         if isinstance(item, dict)
     ]
     index = msg.get("index")
+    replaced_device: dict[str, Any] | None = None
     if index is None:
         for current in devices:
             if (
@@ -407,13 +548,37 @@ async def websocket_manager_save_device(hass: HomeAssistant, connection, msg: di
         connection.send_error(msg["id"], "invalid_index", "Geräteindex ist ungültig")
         return
     else:
+        replaced_device = dict(devices[index])
         devices[index] = device
 
     options = dict(entry.options)
     options[CONF_DEVICES] = devices
-    options[CONF_RELOAD_AFTER_SAVE] = True
+    options.pop(CONF_RELOAD_AFTER_SAVE, None)
     hass.config_entries.async_update_entry(entry, options=options)
-    connection.send_result(msg["id"], {"saved": True, "index": index, "device": _json_value(device)})
+
+    cleanup = {"entities": 0, "devices": 0}
+    if replaced_device is not None and not _same_logical_device(replaced_device, device):
+        try:
+            cleanup = await _async_reload_and_cleanup(
+                hass,
+                entry,
+                removed_devices=[replaced_device],
+                remaining_devices=devices,
+            )
+        except RuntimeError as err:
+            connection.send_error(msg["id"], "reload_failed", str(err))
+            return
+    else:
+        # New devices and name/area-only edits still need a reload so entity
+        # setup reflects the updated options immediately.
+        if not await hass.config_entries.async_reload(entry.entry_id):
+            connection.send_error(msg["id"], "reload_failed", "ELTAKO config entry konnte nicht neu geladen werden.")
+            return
+
+    connection.send_result(
+        msg["id"],
+        {"saved": True, "index": index, "device": _json_value(device), "cleanup": cleanup},
+    )
 
 
 @websocket_api.websocket_command(
@@ -439,9 +604,24 @@ async def websocket_manager_delete_device(hass: HomeAssistant, connection, msg: 
     removed = devices.pop(index)
     options = dict(entry.options)
     options[CONF_DEVICES] = devices
-    options[CONF_RELOAD_AFTER_SAVE] = True
+    options.pop(CONF_RELOAD_AFTER_SAVE, None)
     hass.config_entries.async_update_entry(entry, options=options)
-    connection.send_result(msg["id"], {"deleted": True, "device": _json_value(removed)})
+
+    try:
+        cleanup = await _async_reload_and_cleanup(
+            hass,
+            entry,
+            removed_devices=[removed],
+            remaining_devices=devices,
+        )
+    except RuntimeError as err:
+        connection.send_error(msg["id"], "reload_failed", str(err))
+        return
+
+    connection.send_result(
+        msg["id"],
+        {"deleted": True, "device": _json_value(removed), "cleanup": cleanup},
+    )
 
 
 
@@ -564,9 +744,10 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
     runtime_gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if runtime_gateway is not None and getattr(runtime_gateway, "base_id", None):
         data["_runtime_base_id"] = getattr(runtime_gateway, "base_id")
-    devices: list[dict[str, Any]] = [] if msg.get("replace") else [
+    previous_devices = [
         dict(item) for item in data.get(CONF_DEVICES) or [] if isinstance(item, dict)
     ]
+    devices: list[dict[str, Any]] = [] if msg.get("replace") else list(previous_devices)
     added = 0
     skipped = 0
     errors: list[str] = []
@@ -615,11 +796,37 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
 
     options = dict(entry.options)
     options[CONF_DEVICES] = devices
-    options[CONF_RELOAD_AFTER_SAVE] = True
+    options.pop(CONF_RELOAD_AFTER_SAVE, None)
     hass.config_entries.async_update_entry(entry, options=options)
+
+    removed_devices: list[dict[str, Any]] = []
+    if msg.get("replace"):
+        removed_devices = [
+            old
+            for old in previous_devices
+            if not any(_same_logical_device(old, current) for current in devices)
+        ]
+
+    try:
+        cleanup = await _async_reload_and_cleanup(
+            hass,
+            entry,
+            removed_devices=removed_devices,
+            remaining_devices=devices,
+        )
+    except RuntimeError as err:
+        connection.send_error(msg["id"], "reload_failed", str(err))
+        return
+
     connection.send_result(
         msg["id"],
-        {"applied": True, "added": added, "skipped": skipped, "errors": errors},
+        {
+            "applied": True,
+            "added": added,
+            "skipped": skipped,
+            "errors": errors,
+            "cleanup": cleanup,
+        },
     )
 
 
