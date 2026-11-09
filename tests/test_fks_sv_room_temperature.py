@@ -366,7 +366,7 @@ class TestStaticIntegrationGuards(unittest.TestCase):
 
     def test_manifest_matches_release_version(self):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.166")
+        self.assertEqual(manifest["version"], "0.1.167")
 
     def test_options_flow_is_generalized(self):
         source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
