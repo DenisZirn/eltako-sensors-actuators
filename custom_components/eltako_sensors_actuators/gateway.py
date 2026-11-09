@@ -13,8 +13,10 @@ from .bus.decoder import decode_esp2_message
 from .device_profiles import (
     decode_eltako_a5_06_01,
     decode_legacy_frw_rps,
+    decode_fws81_rps,
     is_eltako_illuminance_device,
     is_legacy_frw_device,
+    is_fws81_device,
 )
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
 from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
@@ -1076,6 +1078,11 @@ class EltakoGateway:
                 "heating_mode_label", "temperature_reduction", "frost_protection",
             ):
                 decoded.pop(rocker_key, None)
+
+        # FWS81 shares an RPS-style envelope. Interpret the water state only
+        # for explicitly identified FWS81 devices and include the ESP2 status.
+        if device is not None and eep == "F6-05-01" and is_fws81_device(device) and msg.org == ORG_RPS:
+            decoded.update(decode_fws81_rps(msg.body[2], msg.body[10]))
 
         decoded.setdefault("physical_sender_id", physical_sender_id)
         decoded.setdefault("logical_sender_id", logical_sender_id)

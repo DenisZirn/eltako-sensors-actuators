@@ -143,3 +143,48 @@ def decode_legacy_frw_rps(code: int) -> dict[str, Any]:
                 "telegram_type": "frw_low_battery"}
     return {"frw_raw_code": raw, "ignored": True,
             "telegram_type": "frw_unknown"}
+
+
+def is_fws81_device(device: dict[str, Any]) -> bool:
+    """Return True only for ELTAKO FWS81 water sensors on F6-05-01."""
+    if not isinstance(device, dict):
+        return False
+    if not str(device.get("eep") or "").upper().startswith("F6-05-01"):
+        return False
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    technical_type = str(
+        device.get("device_type") or raw.get("device_type") or ""
+    ).strip().upper()
+    if technical_type:
+        return technical_type == "FWS81"
+    device_class = str(
+        device.get("device_class") or raw.get("device_class") or ""
+    ).strip().lower()
+    return device_class == "moisture"
+
+
+def decode_fws81_rps(data_byte: int, status: int) -> dict[str, Any]:
+    """Decode ELTAKO FWS81 water-state telegrams.
+
+    Confirmed FWS81 mapping:
+      data 0x11 + status 0x30 -> water detected
+      data 0x11 + status 0x20 -> no water
+    """
+    data = int(data_byte) & 0xFF
+    stat = int(status) & 0xFF
+    result = {
+        "fws81_data": data,
+        "fws81_status": stat,
+        "telegram_type": "fws81_water",
+    }
+    if data != 0x11:
+        result["ignored"] = True
+        return result
+    if stat == 0x30:
+        result["water"] = True
+        return result
+    if stat == 0x20:
+        result["water"] = False
+        return result
+    result["ignored"] = True
+    return result

@@ -9,7 +9,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICES, DOMAIN
 from .diagnostics import diagnostic_event
-from .device_profiles import is_legacy_frw_device
+from .device_profiles import is_fws81_device, is_legacy_frw_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity, _f4usm61b_mode, _futh55ed_mode, _is_f4usm61b_device, _is_futh55ed_device, _is_ffg7b_device, _is_frwb_device, _is_fts14em_device, _fts14em_inverted, device_key, legacy_device_key, normalize_eep, normalize_platform
 
@@ -156,6 +156,15 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 EltakoYamlBinarySensor(
                     gateway, device, "battery_low", BinarySensorDeviceClass.BATTERY,
                     suffix="Batterie niedrig",
+                )
+            )
+            continue
+
+        if is_fws81_device(device):
+            entities.append(
+                EltakoYamlBinarySensor(
+                    gateway, device, "water", BinarySensorDeviceClass.MOISTURE,
+                    suffix="Wasseralarm",
                 )
             )
             continue
