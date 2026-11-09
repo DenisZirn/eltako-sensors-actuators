@@ -569,7 +569,7 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "catalog": catalog,
             "areas": sorted(areas, key=lambda item: item["name"].casefold()),
             "entries": entries,
-            "beta": "0.2.0-beta.2",
+            "beta": "0.2.0-beta.4",
         },
     )
 
