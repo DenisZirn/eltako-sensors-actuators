@@ -561,6 +561,7 @@ def _extract_devices(gateway: dict[str, Any]) -> list[dict[str, Any]]:
                 "eep": _clean_string(item.get("eep")),
                 "name": _clean_string(item.get("name")) or f"ELTAKO {platform_name} {index + 1}",
                 "device_class": _clean_string(item.get("device_class")),
+                "area": _clean_string(item.get("area")),
                 "profile_key": _clean_string(item.get("profile_key")),
                 "device_type": _clean_string(item.get("device_type")),
                 "model": _clean_string(item.get("model")),
