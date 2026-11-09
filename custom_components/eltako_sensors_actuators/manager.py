@@ -101,9 +101,11 @@ def _pct14_payload_for_entry(payload: dict[str, Any], data: dict[str, Any]) -> d
     if str(payload.get("source") or "") != "PCT14":
         return payload
     result = dict(payload)
-    gateway_type = str(data.get("gateway_type") or "").lower()
     selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
-    gateway_base_id = (
+    configured_type = str(data.get("gateway_type") or "").lower()
+    selected_type = str(selected_gateway.get("device_type") or "").lower() if isinstance(selected_gateway, dict) else ""
+    gateway_type = selected_type if configured_type == "auto" and selected_type else configured_type
+    gateway_base_id = data.get("_runtime_base_id") or (
         selected_gateway.get("base_id")
         if isinstance(selected_gateway, dict)
         else None
@@ -270,6 +272,11 @@ def _build_device(
         "speed_count": profile.get("speed_count"),
         "rocker_positions": profile.get("rocker_positions"),
         "f2l14_mode": payload.get("f2l14_mode") or profile.get("f2l14_mode"),
+        "time_opens": payload.get("time_opens"),
+        "time_closes": payload.get("time_closes"),
+        "sender_id_source": payload.get("sender_id_source"),
+        "bus_address": payload.get("bus_address"),
+        "bus_base_id": payload.get("bus_base_id"),
         "gateway": _json_value(selected_gateway) if selected_gateway else None,
         "raw": raw,
     }
@@ -554,6 +561,9 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
 
     profiles = _profile_map(hass)
     data = {**entry.data, **entry.options}
+    runtime_gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime_gateway is not None and getattr(runtime_gateway, "base_id", None):
+        data["_runtime_base_id"] = getattr(runtime_gateway, "base_id")
     devices: list[dict[str, Any]] = [] if msg.get("replace") else [
         dict(item) for item in data.get(CONF_DEVICES) or [] if isinstance(item, dict)
     ]
