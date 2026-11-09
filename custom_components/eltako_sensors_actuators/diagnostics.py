@@ -187,13 +187,13 @@ async def async_setup_diagnostics(hass: HomeAssistant) -> None:
 
 
 async def async_set_diagnostics_enabled(hass: HomeAssistant, enabled: bool) -> None:
-    """Enable or disable collection and the sidebar panel dynamically."""
+    """Enable or disable collection and the internal diagnostics panel dynamically."""
     domain_data = hass.data.setdefault(DATA_DIAGNOSTICS, {})
     domain_data["enabled"] = bool(enabled)
 
     if enabled:
         # The options flow may enable diagnostics after a transient setup
-        # error. Never advertise a sidebar panel whose JS cannot be served.
+        # error. Never advertise the diagnostics route when its JS cannot be served.
         if not await _async_ensure_diagnostics_static_path(hass):
             _LOGGER.error("ELTAKO diagnostics cannot be enabled until panel JS is installed")
             return
@@ -203,14 +203,26 @@ async def async_set_diagnostics_enabled(hass: HomeAssistant, enabled: bool) -> N
                 # offline build's JS filename. Replace it, keeping its URL.
                 if frontend.async_panel_exists(hass, PANEL_URL_PATH):
                     frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
-                await panel_custom.async_register_panel(
+                # Keep diagnostics as an internal panel route. The integrated
+                # ELTAKO manager links to /eltako-diagnostics, so a second
+                # sidebar entry would only duplicate navigation.
+                frontend.async_register_built_in_panel(
                     hass,
+                    component_name="custom",
+                    sidebar_title=None,
+                    sidebar_icon=None,
                     frontend_url_path=PANEL_URL_PATH,
-                    webcomponent_name=PANEL_NAME,
-                    sidebar_title="Funk / Bus Diagnose",
-                    sidebar_icon="mdi:access-point-network",
-                    module_url=PANEL_MODULE_URL,
+                    config={
+                        "_panel_custom": {
+                            "name": PANEL_NAME,
+                            "embed_iframe": False,
+                            "trust_external": False,
+                            "handle_safe_area": False,
+                            "module_url": PANEL_MODULE_URL,
+                        }
+                    },
                     require_admin=True,
+                    show_in_sidebar=False,
                 )
                 domain_data["panel_registered"] = True
             except ValueError:
