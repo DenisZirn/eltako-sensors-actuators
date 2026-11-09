@@ -46,11 +46,11 @@ jobs:
           find dist -type d -name __pycache__ -prune -exec rm -rf {} +
           find dist -type f -name '*.pyc' -delete
           cd dist
-          zip -qr ../ELTAKO_Sensors_Actuators_v0.2.0-beta.5_TEST.zip custom_components
+          zip -qr ../ELTAKO_Sensors_Actuators_v0.2.0-beta.6_TEST.zip custom_components
 
       - name: Upload offline test ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: ELTAKO_Sensors_Actuators_v0.2.0-beta.5_TEST
-          path: ELTAKO_Sensors_Actuators_v0.2.0-beta.5_TEST.zip
+          name: ELTAKO_Sensors_Actuators_v0.2.0-beta.6_TEST
+          path: ELTAKO_Sensors_Actuators_v0.2.0-beta.6_TEST.zip
           if-no-files-found: error
