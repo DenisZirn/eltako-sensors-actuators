@@ -1,0 +1,5 @@
+# Ignore all Python bytecode in the integration repository.
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
