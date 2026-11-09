@@ -749,7 +749,7 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "entries": entries,
             "series14_writers": _series14_writer_payloads(hass),
             "series14_candidates": _series14_candidate_rows(hass),
-            "beta": "0.2.0-beta.5",
+            "beta": "0.2.0-beta.6",
         },
     )
 
