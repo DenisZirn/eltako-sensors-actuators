@@ -434,6 +434,106 @@ def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None =
     return candidates[0] if len(candidates) == 1 else (None, None)
 
 
+
+def _optional_normalized_id(value: Any) -> str:
+    try:
+        return _normalize_id(value)
+    except ValueError:
+        return ""
+
+
+def _series14_writer_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Return active RS485 gateways that can program Series-14 actor memory."""
+    result: list[dict[str, Any]] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if gateway is None:
+            continue
+        gateway_type = str(getattr(gateway, "gateway_type", "") or "").lower()
+        if gateway_type not in {"fam14", "fgw14usb"}:
+            continue
+        data = {**entry.data, **entry.options}
+        selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
+        base_id = (
+            getattr(gateway, "base_id", None)
+            or (
+                selected_gateway.get("base_id")
+                if isinstance(selected_gateway, dict)
+                else None
+            )
+        )
+        result.append(
+            {
+                "entry_id": entry.entry_id,
+                "title": entry.title,
+                "gateway_type": gateway_type,
+                "base_id": _optional_normalized_id(base_id),
+                "active": True,
+            }
+        )
+    return result
+
+
+def _series14_programmable_platform(device: dict[str, Any]) -> bool:
+    return str(device.get("platform") or "").lower() in {
+        "light",
+        "switch",
+        "cover",
+        "fan",
+        "climate",
+    }
+
+
+def _series14_candidate_rows(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Build the central-actor programming list shown in the manager dialog."""
+    rows: list[dict[str, Any]] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        data = {**entry.data, **entry.options}
+        devices = [
+            item
+            for item in data.get(CONF_DEVICES) or []
+            if isinstance(item, dict)
+        ]
+        for index, device in enumerate(devices):
+            if not _series14_device(device) or not _series14_programmable_platform(device):
+                continue
+            sender_id = str(_device_option_value(device, "sender_id") or "").strip()
+            sender_eep = str(_device_option_value(device, "sender_eep") or "").strip().upper()
+            bus_base_id = _optional_normalized_id(
+                _device_option_value(device, "bus_base_id")
+            )
+            bus_address = _optional_normalized_id(
+                _device_option_value(device, "bus_address")
+            )
+            issues: list[str] = []
+            if not bus_base_id:
+                issues.append("PCT14-Basis-ID fehlt")
+            if not bus_address:
+                issues.append("Busadresse fehlt")
+            if not sender_id:
+                issues.append("Sender-ID fehlt")
+            if not sender_eep:
+                issues.append("Sender-EEP fehlt")
+            rows.append(
+                {
+                    "source_entry_id": entry.entry_id,
+                    "source_entry_title": entry.title,
+                    "index": index,
+                    "name": str(device.get("name") or device.get("device_type") or "Series-14-Aktor"),
+                    "device_type": str(device.get("device_type") or device.get("model") or ""),
+                    "platform": str(device.get("platform") or ""),
+                    "eep": str(device.get("eep") or "").upper(),
+                    "bus_address": bus_address,
+                    "bus_base_id": bus_base_id,
+                    "sender_id": sender_id,
+                    "sender_eep": sender_eep,
+                    "valid": not issues,
+                    "issues": issues,
+                }
+            )
+    return rows
+
+
 def _series14_program_entry(device: dict[str, Any]) -> dict[str, Any]:
     """Create the exact sender-writer row from one HA device config."""
     sender_id = str(_device_option_value(device, "sender_id") or "").strip()
@@ -647,6 +747,8 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "catalog": catalog,
             "areas": sorted(areas, key=lambda item: item["name"].casefold()),
             "entries": entries,
+            "series14_writers": _series14_writer_payloads(hass),
+            "series14_candidates": _series14_candidate_rows(hass),
             "beta": "0.2.0-beta.5",
         },
     )
@@ -1106,6 +1208,216 @@ async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str
 
 
 
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/program_series14_bulk",
+        vol.Required("writer_entry_id"): str,
+        vol.Required("targets"): list,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Program selected PCT14 actors through one associated FAM14/FGW14-USB."""
+    writer_entry, writer_gateway = _series14_writer_entry(
+        hass,
+        msg["writer_entry_id"],
+    )
+    if writer_entry is None or writer_gateway is None:
+        connection.send_error(
+            msg["id"],
+            "series14_gateway_missing",
+            "Das ausgewählte FAM14/FGW14-USB ist nicht aktiv.",
+        )
+        return
+
+    port = str(getattr(writer_gateway, "port", "") or "")
+    gateway_type = str(getattr(writer_gateway, "gateway_type", "") or "").lower()
+    if not port or gateway_type not in {"fam14", "fgw14usb"}:
+        connection.send_error(
+            msg["id"],
+            "series14_gateway_invalid",
+            "Das ausgewählte RS485-Gateway ist nicht bereit.",
+        )
+        return
+
+    writer_base_id = _optional_normalized_id(getattr(writer_gateway, "base_id", None))
+    writer_rows: list[dict[str, Any]] = []
+    selected_devices: list[dict[str, Any]] = []
+    validation_errors: list[str] = []
+
+    for target in msg["targets"]:
+        if not isinstance(target, dict):
+            continue
+        source_entry = hass.config_entries.async_get_entry(
+            str(target.get("source_entry_id") or "")
+        )
+        if source_entry is None or source_entry.domain != DOMAIN:
+            validation_errors.append("Quell-Gateway wurde nicht gefunden.")
+            continue
+        source_data = {**source_entry.data, **source_entry.options}
+        devices = [
+            item
+            for item in source_data.get(CONF_DEVICES) or []
+            if isinstance(item, dict)
+        ]
+        try:
+            index = int(target.get("index"))
+        except (TypeError, ValueError):
+            validation_errors.append(f"{source_entry.title}: ungültiger Geräteindex")
+            continue
+        if index < 0 or index >= len(devices):
+            validation_errors.append(f"{source_entry.title}: Geräteindex {index} nicht vorhanden")
+            continue
+        device = devices[index]
+        if not _series14_device(device) or not _series14_programmable_platform(device):
+            validation_errors.append(
+                f"{device.get('name') or index}: kein programmierbarer Series-14-Aktor"
+            )
+            continue
+        try:
+            row = _series14_program_entry(device)
+        except ValueError as err:
+            validation_errors.append(
+                f"{device.get('name') or index}: {err}"
+            )
+            continue
+
+        expected_base = _optional_normalized_id(row.get("expected_bus_base_id"))
+        if writer_base_id and expected_base and writer_base_id != expected_base:
+            validation_errors.append(
+                f"{device.get('name') or index}: gehört zu FAM14 {expected_base}, ausgewählt ist {writer_base_id}"
+            )
+            continue
+
+        writer_rows.append(row)
+        selected_devices.append(
+            {
+                "source_entry_id": source_entry.entry_id,
+                "source_entry_title": source_entry.title,
+                "index": index,
+                "name": str(device.get("name") or device.get("device_type") or "Series-14-Aktor"),
+                "bus_address": _optional_normalized_id(_device_option_value(device, "bus_address")),
+                "bus_base_id": expected_base,
+                "sender_id": str(_device_option_value(device, "sender_id") or ""),
+                "sender_eep": str(_device_option_value(device, "sender_eep") or ""),
+                "writer_device_id": row.get("device_id"),
+            }
+        )
+
+    if validation_errors:
+        connection.send_error(
+            msg["id"],
+            "series14_validation_failed",
+            " | ".join(validation_errors),
+        )
+        return
+    if not writer_rows:
+        connection.send_error(
+            msg["id"],
+            "series14_no_targets",
+            "Keine gültigen Series-14-Aktoren ausgewählt.",
+        )
+        return
+
+    diagnostic_event(
+        hass,
+        "series14_bulk_program_start",
+        writer_entry_id=writer_entry.entry_id,
+        writer_title=writer_entry.title,
+        writer_base_id=writer_base_id,
+        target_count=len(writer_rows),
+        targets=selected_devices,
+    )
+
+    await writer_gateway.async_stop()
+    try:
+        result = await hass.async_add_executor_job(
+            lambda: __import__("asyncio").run(
+                write_sender_entries(
+                    port,
+                    writer_rows,
+                    baud_rate=57600,
+                    gateway_type=gateway_type,
+                )
+            )
+        )
+    except Exception as err:
+        diagnostic_event(
+            hass,
+            "series14_bulk_program_failed",
+            level="error",
+            writer_entry_id=writer_entry.entry_id,
+            error=str(err),
+        )
+        connection.send_error(
+            msg["id"],
+            "series14_write_failed",
+            str(err),
+        )
+        return
+    finally:
+        try:
+            await writer_gateway.async_start()
+        except Exception:
+            _LOGGER.exception(
+                "Could not restart ELTAKO RS485 gateway after bulk sender programming"
+            )
+
+    if not result.get("ok"):
+        connection.send_error(
+            msg["id"],
+            "series14_write_failed",
+            str(result.get("error") or "Sender-IDs konnten nicht geschrieben werden."),
+        )
+        return
+
+    by_device_id: dict[str, list[dict[str, Any]]] = {}
+    for event in result.get("events") or []:
+        by_device_id.setdefault(str(event.get("device_id") or ""), []).append(event)
+    device_results: list[dict[str, Any]] = []
+    for selected in selected_devices:
+        events = by_device_id.get(str(selected.get("writer_device_id") or ""), [])
+        statuses = [str(event.get("status") or "") for event in events]
+        if "error" in statuses:
+            status = "error"
+        elif "updated" in statuses:
+            status = "updated"
+        elif statuses and all(item == "exists" for item in statuses):
+            status = "exists"
+        elif "unsupported" in statuses:
+            status = "unsupported"
+        else:
+            status = statuses[0] if statuses else "unknown"
+        device_results.append(
+            {
+                **selected,
+                "status": status,
+                "events": _json_value(events),
+            }
+        )
+
+    diagnostic_event(
+        hass,
+        "series14_bulk_program_finished",
+        writer_entry_id=writer_entry.entry_id,
+        counts=result.get("counts"),
+        results=device_results,
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "writer_entry_id": writer_entry.entry_id,
+            "writer_title": writer_entry.title,
+            "fam14_base_id": result.get("fam14_base_id"),
+            "counts": _json_value(result.get("counts") or {}),
+            "results": _json_value(device_results),
+        },
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/program_device",
@@ -1313,6 +1625,7 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_import_preview)
         websocket_api.async_register_command(hass, websocket_manager_apply_import)
         websocket_api.async_register_command(hass, websocket_manager_learn)
+        websocket_api.async_register_command(hass, websocket_manager_program_series14_bulk)
         websocket_api.async_register_command(hass, websocket_manager_program_device)
         websocket_api.async_register_command(hass, websocket_manager_export_yaml)
         manager["websocket_registered"] = True
