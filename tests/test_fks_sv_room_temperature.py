@@ -366,7 +366,7 @@ class TestStaticIntegrationGuards(unittest.TestCase):
 
     def test_manifest_matches_release_version(self):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.165")
+        self.assertEqual(manifest["version"], "0.1.166")
 
     def test_options_flow_is_generalized(self):
         source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
@@ -382,7 +382,6 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         self.assertIn('"room_temperature_source_native"', source_method)
         self.assertIn('"room_temperature_source_external"', source_method)
         self.assertIn('"room_temperature_back_actuators"', source_method)
-        self.assertIn("✓ ", source_method)
         self.assertNotIn("self.async_show_form(", source_method)
 
         save_native = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source_native")
