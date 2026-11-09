@@ -79,6 +79,22 @@ class DeviceProfilesTest(unittest.TestCase):
         self.assertFalse(released["smoke_alarm"])
         self.assertFalse(released["battery_low"])
 
+    def test_fws81_water_states(self):
+        profile = {
+            "id": "FE-FE-AD-C8",
+            "eep": "F6-05-01",
+            "device_type": "FWS81",
+            "device_class": "moisture",
+        }
+        self.assertTrue(MODULE.is_fws81_device(profile))
+        wet = MODULE.decode_fws81_rps(0x11, 0x30)
+        self.assertTrue(wet["water"])
+        dry = MODULE.decode_fws81_rps(0x11, 0x20)
+        self.assertFalse(dry["water"])
+        self.assertTrue(
+            MODULE.decode_fws81_rps(0x10, 0x30).get("ignored")
+        )
+
     def test_duplicate_frw_status_entity_is_not_created(self):
         sensor_source = (
             Path(__file__).resolve().parents[1]
