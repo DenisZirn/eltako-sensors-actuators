@@ -27,6 +27,7 @@ from .const import (
 from .gateway import EltakoGateway
 from .entity_base import device_key, legacy_device_key, gateway_device_name, gateway_model
 from .diagnostics import async_set_diagnostics_enabled, async_setup_diagnostics, diagnostic_event
+from .manager import async_setup_manager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception:
         _LOGGER.exception(
             "ELTAKO diagnostics panel setup failed; continuing without the panel"
+        )
+    try:
+        await async_setup_manager(hass)
+    except Exception:
+        _LOGGER.exception(
+            "ELTAKO integrated device manager setup failed; continuing without the manager panel"
         )
     return True
 
