@@ -75,16 +75,20 @@ jobs:
       - uses: home-assistant/actions/hassfest@master
 
   publish:
-    name: Update existing GitHub release v0.1.166
+    name: Publish GitHub release v0.1.166
     runs-on: ubuntu-latest
     needs: [regression, hacs, hassfest]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release-v0.1.166]')
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure v0.1.166 exists
+      - name: Reject duplicate release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release view v0.1.166 >/dev/null
+        run: |
+          if gh release view v0.1.166 >/dev/null 2>&1; then
+            echo "v0.1.166 already exists; refusing to overwrite"
+            exit 1
+          fi
       - name: Build Marketplace-compatible ZIP
         run: |
           python - <<'PY'
@@ -113,9 +117,12 @@ jobs:
               assert manifest['version'] == '0.1.166'
           print(output, output.stat().st_size, 'bytes')
           PY
-      - name: Replace existing release asset
+      - name: Publish official release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload v0.1.166 ELTAKO_Sensors_Actuators.zip --clobber
-          gh release view v0.1.166 --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
+          gh release create v0.1.166 ELTAKO_Sensors_Actuators.zip \
+            --target "${GITHUB_SHA}" \
+            --title "ELTAKO Sensors & Actuators v0.1.166" \
+            --notes-file RELEASE_NOTES_v0.1.166.md \
+            --latest
