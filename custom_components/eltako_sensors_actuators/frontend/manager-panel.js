@@ -16,8 +16,25 @@ class EltakoManagerPanel extends HTMLElement {
   async load(keep){if(!this._hass)return;this.loading=true;if(!keep)this.message="";this.render();try{this.data=await this._hass.callWS({type:DOMAIN+"/manager/get"});var e=this.data.entries||[];if(!this.entryId||!e.some(x=>x.entry_id===this.entryId))this.entryId=e[0]?.entry_id||"";}catch(err){this.message="Fehler beim Laden: "+(err?.message||err)}this.loading=false;this.render()}
   entry(){return (this.data?.entries||[]).find(x=>x.entry_id===this.entryId)||null}
   catalog(){return this.data?.catalog?.devices||[]}
+  categoryForGroup(group){
+    var g=String(group||"");
+    if(["Taster / Schalter","Kontakt"].includes(g))return "Taster & Kontakte";
+    if(["Bewegungsmelder","Rauch / Hitze","Wasser"].includes(g))return "Sicherheit & Präsenz";
+    if(["Temperatur / Feuchte","Luftqualität","Wetterstation"].includes(g))return "Sensoren & Wetter";
+    if(["Raumregler / Klima","Heizung / Stellantrieb"].includes(g))return "Heizung & Klima";
+    if(["Licht / Dimmer","Licht / RGBW","Licht / Relais"].includes(g))return "Licht & Schalten";
+    if(g==="Jalousie / Rollladen")return "Beschattung";
+    if(g==="Lüftung")return "Lüftung";
+    if(g==="Zähler")return "Energie & Zähler";
+    if(g==="Funk-Modul")return "Funk- & Busmodule";
+    return g||"Sonstige";
+  }
+  categoryOrder(){return ["Taster & Kontakte","Sicherheit & Präsenz","Sensoren & Wetter","Heizung & Klima","Licht & Schalten","Beschattung","Lüftung","Energie & Zähler","Funk- & Busmodule","Sonstige"]}
+  categories(){return [...new Set(this.catalog().map(x=>this.categoryForGroup(x.group)))].sort((a,b)=>this.categoryOrder().indexOf(a)-this.categoryOrder().indexOf(b))}
   groups(){return [...new Set(this.catalog().map(x=>x.group).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"de"))}
-  filteredCatalog(){var q=this.search.trim().toLowerCase();return this.catalog().filter(x=>(!this.group||x.group===this.group)&&(!q||[x.label,x.device_type,x.eep_out,x.group,x.eltako,x.key].filter(Boolean).some(v=>String(v).toLowerCase().includes(q))))}
+  filteredCatalog(){var q=this.search.trim().toLowerCase();return this.catalog().filter(x=>(!this.group||this.categoryForGroup(x.group)===this.group)&&(!q||[x.label,x.device_type,x.eep_out,x.group,this.categoryForGroup(x.group),x.eltako,x.key].filter(Boolean).some(v=>String(v).toLowerCase().includes(q))))}
+  canProgram(d){return !!(d&&d.sender_id&&["light","switch","cover","fan","climate"].includes(String(d.platform||"").toLowerCase()))}
+  isSeries14(d){return !!(d&&(d.bus_address||d.bus_base_id||d.raw?.bus_address||d.raw?.bus_base_id))}
   profile(key){return this.catalog().find(x=>x.key===key)}
   style(){return [
     ":host{display:block;min-height:100%;color:var(--primary-text-color);background:var(--primary-background-color);font-family:Roboto,sans-serif}",
@@ -29,14 +46,14 @@ class EltakoManagerPanel extends HTMLElement {
     ".card,.stat,.profile{background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:14px}.card{padding:18px;margin-bottom:14px}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}.stat{padding:16px}.big{font-size:26px;font-weight:700}.small{color:var(--secondary-text-color);font-size:13px}",
     "table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--divider-color);vertical-align:middle}th{font-size:12px;color:var(--secondary-text-color);text-transform:uppercase}.right{text-align:right}.scroll{overflow:auto}",
     ".mono{font-family:monospace}.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--secondary-background-color);font-size:12px}.warn{color:var(--warning-color,#e18b00)}.empty{text-align:center;padding:38px;color:var(--secondary-text-color)}",
-    ".catalog{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}.profile{padding:15px}.profile h3{font-size:16px;margin:0 0 7px}.meta{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.msg{padding:11px 14px;border-radius:10px;background:var(--secondary-background-color);margin-bottom:14px}",
+    ".catalog{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}.profile{padding:15px}.profile h3{font-size:16px;margin:0 0 7px}.meta{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.msg{padding:11px 14px;border-radius:10px;background:var(--secondary-background-color);margin-bottom:14px}.category-section{margin:0 0 24px}.category-head{display:flex;align-items:center;justify-content:space-between;margin:4px 2px 10px}.category-head h2{font-size:19px;margin:0}.category-count{color:var(--secondary-text-color);font-size:13px}",
     ".modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:18px;z-index:10}.modal{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--card-background-color);border-radius:16px;padding:22px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:flex;flex-direction:column;gap:6px;color:var(--secondary-text-color);font-size:13px}.full{grid-column:1/-1}.footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}",
     ".last,.learn-event{padding:10px 12px;border-radius:10px;background:var(--secondary-background-color);display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.learn-live{border:2px solid var(--primary-color)}.import-drop{border:2px dashed var(--divider-color);padding:18px;border-radius:12px;text-align:center}",
     ".split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.preview-select{min-width:260px;max-width:500px}.tiny{font-size:12px}.green{color:var(--success-color,#2e9d55)}",
     "@media(max-width:800px){.page{padding:12px}.grid,.split{grid-template-columns:1fr}h1{font-size:23px}.right{white-space:nowrap}}"
   ].join("")}
   render(){var e=this.entry(),entries=this.data?.entries||[],devices=e?.devices||[];var h="<style>"+this.style()+"</style><div class='page'>";
-    h+="<div class='top'><div><h1>ELTAKO Gerätekonfiguration</h1><div class='sub'>EEDTOY direkt in Home Assistant · "+this.esc(this.data?.beta||"0.2.0-beta.2")+" · Katalog "+this.esc(this.data?.catalog?.source_version||"?")+"</div></div><div class='actions'>";
+    h+="<div class='top'><div><h1>ELTAKO Gerätekonfiguration</h1><div class='sub'>EEDTOY direkt in Home Assistant · "+this.esc(this.data?.beta||"0.2.0-beta.4")+" · Katalog "+this.esc(this.data?.catalog?.source_version||"?")+"</div></div><div class='actions'>";
     if(entries.length){h+="<select id='entry'>";entries.forEach(x=>h+="<option value='"+this.esc(x.entry_id)+"'"+(x.entry_id===this.entryId?" selected":"")+">"+this.esc(x.title||x.gateway_type||"ELTAKO")+" · "+this.esc(x.port||"")+"</option>");h+="</select>"}
     h+="<a class='btn' href='/eltako-diagnostics'>Funk-/Bus-Diagnose</a><button id='refresh'>Aktualisieren</button></div></div>";
     if(this.message)h+="<div class='msg'>"+this.esc(this.message)+"</div>";
@@ -47,16 +64,34 @@ class EltakoManagerPanel extends HTMLElement {
       if(this.tab==="devices")h+=this.renderDevices(e);if(this.tab==="learn")h+=this.renderLearn(e);if(this.tab==="catalog")h+=this.renderCatalog();if(this.tab==="import")h+=this.renderImport();if(this.tab==="export")h+=this.renderExport();
     }h+="</div>";if(this.editing)h+=this.renderModal(e);this.shadowRoot.innerHTML=h;this.bind()}
   tabButton(id,label){return "<button class='tab "+(this.tab===id?"active":"")+"' data-tab='"+id+"'>"+label+"</button>"}
-  renderDevices(e){var ds=e.devices||[],h="<div class='card'><div class='top' style='margin-bottom:10px'><div><strong>Geräte an diesem Gateway</strong><div class='muted'>Direkt bearbeiten, ohne externen YAML-Editor.</div></div><button class='primary' id='add'>+ Gerät hinzufügen</button></div>";
+  renderDevices(e){var ds=e.devices||[],h="<div class='card'><div class='top' style='margin-bottom:10px'><div><strong>Geräte an diesem Gateway</strong><div class='muted'>Direkt bearbeiten, einlernen und programmieren – ohne externen YAML-Editor.</div></div><button class='primary' id='add'>+ Gerät hinzufügen</button></div>";
     if(e.last_telegram?.sender_id)h+="<div class='last'><div><span class='muted'>Zuletzt empfangen:</span> <span class='mono'>"+this.esc(e.last_telegram.sender_id)+"</span> <span class='badge'>"+this.esc(e.last_telegram.eep||"EEP unbekannt")+"</span></div><button id='add-last'>Als Gerät übernehmen</button></div>";
     if(!ds.length)return h+"<div class='empty'>Noch keine Geräte konfiguriert.</div></div>";
-    h+="<div class='scroll'><table><thead><tr><th>Name</th><th>ID</th><th>EEP</th><th>Typ</th><th>Raum</th><th></th></tr></thead><tbody>";ds.forEach((d,i)=>h+="<tr><td><strong>"+this.esc(d.name||"ELTAKO Gerät")+"</strong><div class='muted'>"+this.esc(d.platform||"")+"</div></td><td class='mono'>"+this.esc(d.id||"")+"</td><td><span class='badge'>"+this.esc(d.eep||"")+"</span></td><td>"+this.esc(d.device_type||d.profile_key||"")+"</td><td>"+this.esc(d.area||"—")+"</td><td class='right'><button data-edit='"+i+"'>Bearbeiten</button> <button class='danger' data-delete='"+i+"'>Löschen</button></td></tr>");return h+"</tbody></table></div></div>"}
+    h+="<div class='scroll'><table><thead><tr><th>Name</th><th>ID</th><th>EEP</th><th>Typ</th><th>Raum</th><th></th></tr></thead><tbody>";
+    ds.forEach((d,i)=>{
+      var program=this.canProgram(d)?("<button class='primary' data-program='"+i+"'>"+(this.isSeries14(d)?"Sender programmieren":"Einlernen")+"</button> "):"";
+      h+="<tr><td><strong>"+this.esc(d.name||"ELTAKO Gerät")+"</strong><div class='muted'>"+this.esc(d.platform||"")+(d.sender_id?" · Sender "+this.esc(d.sender_id):"")+"</div></td><td class='mono'>"+this.esc(d.id||"")+"</td><td><span class='badge'>"+this.esc(d.eep||"")+"</span></td><td>"+this.esc(d.device_type||d.profile_key||"")+"</td><td>"+this.esc(d.area||"—")+"</td><td class='right'>"+program+"<button data-edit='"+i+"'>Bearbeiten</button> <button class='danger' data-delete='"+i+"'>Löschen</button></td></tr>";
+    });
+    return h+"</tbody></table></div></div>"}
   renderLearn(e){var h="<div class='card "+(this.learning?"learn-live":"")+"'><div class='top'><div><h3>Lernmodus</h3><div class='muted'>Telegramme des ausgewählten Gateways live empfangen und als neues Gerät übernehmen.</div></div><div class='actions'><button class='primary' id='learn-start' "+(this.learning?"disabled":"")+">Lernmodus starten</button><button id='learn-stop' "+(!this.learning?"disabled":"")+">Stoppen</button><button id='learn-clear'>Liste leeren</button></div></div>";
     h+="<p class='tiny muted'>Jetzt Sensor/Taster betätigen oder Teach-in/LRN auslösen. Eigene Gateway-Statusmeldungen werden ignoriert. Bei unbekanntem EEP schlägt die Oberfläche passende RORG-Profile vor.</p>";
     if(!this.learnEvents.length)return h+"<div class='empty'>Noch kein Telegramm im Lernmodus empfangen.</div></div>";
     this.learnEvents.slice().reverse().forEach((x,rev)=>{var idx=this.learnEvents.length-1-rev,p=x.profile_suggestions||[],best=p[0]||"";h+="<div class='learn-event'><div><strong class='mono'>"+this.esc(x.physical_sender_id||x.sender_id)+"</strong> <span class='badge'>"+this.esc(x.eep||x.decoded?.detected_eep||this.orgLabel(x.decoded?.org))+"</span><div class='tiny muted'>"+this.esc(x.decoded?.telegram_type||"Telegramm")+" · Vorschläge: "+this.esc(p.slice(0,4).map(k=>this.profile(k)?.device_type||k).join(", ")||"manuell auswählen")+"</div></div><button data-learn-add='"+idx+"' data-best='"+this.esc(best)+"'>Gerät anlegen</button></div>"});return h+"</div>"}
   orgLabel(org){var n=Number(org);return n===5?"F6/RPS":n===6?"A5/4BS":n===7?"D5/1BS":"EEP unbekannt"}
-  renderCatalog(){var list=this.filteredCatalog(),h="<div class='card'><div class='filters'><input id='search' style='flex:1;min-width:240px' placeholder='Gerät, EEP oder Typ suchen …' value='"+this.esc(this.search)+"'><select id='group'><option value=''>Alle Gruppen</option>";this.groups().forEach(g=>h+="<option value='"+this.esc(g)+"'"+(g===this.group?" selected":"")+">"+this.esc(g)+"</option>");h+="</select><span class='muted'>"+list.length+" Profile</span></div></div><div class='catalog'>";list.forEach(p=>h+="<div class='profile'><h3>"+this.esc(p.label||p.device_type||p.key)+"</h3><div class='muted'>"+this.esc(p.group||"")+"</div><div class='meta'><span class='badge'>"+this.esc(p.eep_out||"")+"</span><span class='badge'>"+this.esc(p.platform||"")+"</span>"+(p.needs_sender?"<span class='badge'>Sender-ID erforderlich</span>":"")+"</div><button class='primary' data-profile='"+this.esc(p.key)+"'>Dieses Gerät hinzufügen</button></div>");return h+"</div>"}
+  renderCatalog(){
+    var list=this.filteredCatalog(),h="<div class='card'><div class='filters'><input id='search' style='flex:1;min-width:240px' placeholder='Gerät, EEP, Kategorie oder Typ suchen …' value='"+this.esc(this.search)+"'><select id='group'><option value=''>Alle Kategorien</option>";
+    this.categories().forEach(g=>h+="<option value='"+this.esc(g)+"'"+(g===this.group?" selected":"")+">"+this.esc(g)+"</option>");
+    h+="</select><span class='muted'>"+list.length+" Profile</span></div></div>";
+    var categories=this.categoryOrder().filter(cat=>list.some(p=>this.categoryForGroup(p.group)===cat));
+    categories.forEach(cat=>{
+      var items=list.filter(p=>this.categoryForGroup(p.group)===cat);
+      h+="<section class='category-section'><div class='category-head'><h2>"+this.esc(cat)+"</h2><span class='category-count'>"+items.length+" Geräteprofile</span></div><div class='catalog'>";
+      items.forEach(p=>h+="<div class='profile'><h3>"+this.esc(p.label||p.device_type||p.key)+"</h3><div class='muted'>"+this.esc(p.group||"")+"</div><div class='meta'><span class='badge'>"+this.esc(p.eep_out||"")+"</span><span class='badge'>"+this.esc(p.platform||"")+"</span>"+(p.needs_sender?"<span class='badge'>Sender-ID erforderlich</span>":"")+"</div><button class='primary' data-profile='"+this.esc(p.key)+"'>Dieses Gerät hinzufügen</button></div>");
+      h+="</div></section>";
+    });
+    if(!categories.length)h+="<div class='card empty'>Keine passenden Geräteprofile gefunden.</div>";
+    return h;
+  }
   renderImport(){var p=this.preview,h="<div class='card'><h3>Konfiguration importieren</h3><p class='muted'>Unterstützt: PCT14 XML, MiniSafe2 E-Mail/TXT/JSON und EEDTOY/Home-Assistant-YAML. Das Format kann automatisch erkannt werden.</p><div class='split'><label>Format<select id='import-format'><option value='auto'>Automatisch erkennen</option><option value='pct14'>PCT14 XML</option><option value='minisafe2'>MiniSafe2</option><option value='eedtoy_yaml'>EEDTOY YAML</option></select></label><label>Datei<input id='import-file' type='file' accept='.xml,.txt,.json,.yaml,.yml'></label></div><label style='margin-top:12px'>Oder Inhalt einfügen<textarea id='import-text' placeholder='PCT14 XML, MiniSafe2-Konfiguration oder EEDTOY YAML …'>"+this.esc(this.importText)+"</textarea></label><div class='actions' style='margin-top:10px'><button class='primary' id='import-preview'>Import prüfen</button></div></div>";
     if(!p)return h;
     h+="<div class='card'><div class='top'><div><h3>Import-Vorschau</h3><div class='muted'>Format: "+this.esc(p.format)+" · "+(p.rows?.length||0)+" Geräte"+(p.summary?.base_id?" · Base-ID "+this.esc(p.summary.base_id):"")+"</div></div><label style='flex-direction:row;align-items:center'><input id='replace-import' type='checkbox' "+(this.replaceImport?"checked":"")+"> Vorhandene Geräte ersetzen</label></div>";
@@ -76,7 +111,28 @@ class EltakoManagerPanel extends HTMLElement {
   async previewImport(){this.importText=this.value("import-text");this.importFormat=this.value("import-format")||"auto";if(!this.importText.trim()){this.message="Bitte eine Datei wählen oder Importtext einfügen.";this.render();return}try{this.preview=await this._hass.callWS({type:DOMAIN+"/manager/import_preview",text:this.importText,filename:this.importFilename,format:this.importFormat});this.message="Import geprüft. Bitte Zuordnungen kontrollieren.";this.render()}catch(err){this.message="Importfehler: "+(err?.message||err);this.render()}}
   syncPreviewInputs(){if(!this.preview)return;this.preview.rows.forEach((row,i)=>{var c=this.shadowRoot.querySelector("[data-row-check='"+i+"']"),id=this.shadowRoot.querySelector("[data-row-id='"+i+"']"),p=this.shadowRoot.querySelector("[data-row-profile='"+i+"']"),a=this.shadowRoot.querySelector("[data-row-area='"+i+"']");if(c)row.selected=c.checked;if(id)row.id=id.value;if(p)row.profile_key=p.value;if(a)row.area=a.value});this.replaceImport=!!this.shadowRoot.getElementById("replace-import")?.checked}
   async applyImport(){this.syncPreviewInputs();try{var res=await this._hass.callWS({type:DOMAIN+"/manager/apply_import",entry_id:this.entryId,rows:this.preview.rows,replace:this.replaceImport});this.preview=null;this.message=res.added+" Gerät(e) übernommen, "+res.skipped+" übersprungen."+(res.errors?.length?" "+res.errors.join(" | "):"");await new Promise(r=>setTimeout(r,800));this.tab="devices";await this.load(true)}catch(err){this.message="Übernahme fehlgeschlagen: "+(err?.message||err);this.render()}}
-  bind(){var r=this.shadowRoot,x;r.getElementById("refresh")?.addEventListener("click",()=>this.load());r.getElementById("entry")?.addEventListener("change",e=>{this.stopLearning();this.entryId=e.target.value;this.render()});r.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{this.tab=b.dataset.tab;this.render()});r.getElementById("add")?.addEventListener("click",()=>this.openAdd());r.getElementById("add-last")?.addEventListener("click",()=>this.openAdd("",this.entry()?.last_telegram?.sender_id||""));r.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>this.openEdit(Number(b.dataset.edit)));r.querySelectorAll("[data-delete]").forEach(b=>b.onclick=()=>this.remove(Number(b.dataset.delete)));r.querySelectorAll("[data-profile]").forEach(b=>b.onclick=()=>this.openAdd(b.dataset.profile));
+  async programDevice(i){
+    var d=this.entry()?.devices?.[i];if(!d)return;
+    var series14=this.isSeries14(d);
+    var text=series14
+      ?"Sender-ID "+(d.sender_id||"")+" jetzt in "+(d.name||d.device_type||"Series-14-Aktor")+" schreiben?\n\nDafür wird ein aktives FAM14/FGW14-USB verwendet und der RS485-Bus kurz exklusiv übernommen."
+      :(d.name||d.device_type||"Aktor")+" jetzt in den physischen Einlernmodus bringen.\n\nDanach OK drücken – Home Assistant sendet das Lerntelegramm mit Sender-ID "+(d.sender_id||"")+".";
+    if(!confirm(text))return;
+    this.message=series14?"Sender-ID wird in den Series-14-Aktor geschrieben …":"Lerntelegramm wird gesendet …";this.render();
+    try{
+      var res=await this._hass.callWS({type:DOMAIN+"/manager/program_device",entry_id:this.entryId,index:i});
+      if(res.mode==="series14"){
+        var counts=res.result?.counts||{};
+        this.message="Series-14-Programmierung abgeschlossen: "+(counts.updated||0)+" geschrieben, "+(counts.exists||0)+" bereits vorhanden, "+(counts.error||0)+" Fehler.";
+      }else{
+        this.message=res.command==="arm_fks_hora_teach_in"
+          ?"Einlernen vorbereitet. Das Ventil muss jetzt sein bidirektionales Lerntelegramm senden."
+          :"Lerntelegramm wurde mit Sender-ID "+(res.sender_id||d.sender_id||"")+" gesendet.";
+      }
+    }catch(err){this.message="Einlernen/Programmieren fehlgeschlagen: "+(err?.message||err)}
+    this.render();
+  }
+  bind(){var r=this.shadowRoot,x;r.getElementById("refresh")?.addEventListener("click",()=>this.load());r.getElementById("entry")?.addEventListener("change",e=>{this.stopLearning();this.entryId=e.target.value;this.render()});r.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{this.tab=b.dataset.tab;this.render()});r.getElementById("add")?.addEventListener("click",()=>this.openAdd());r.getElementById("add-last")?.addEventListener("click",()=>this.openAdd("",this.entry()?.last_telegram?.sender_id||""));r.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>this.openEdit(Number(b.dataset.edit)));r.querySelectorAll("[data-delete]").forEach(b=>b.onclick=()=>this.remove(Number(b.dataset.delete)));r.querySelectorAll("[data-program]").forEach(b=>b.onclick=()=>this.programDevice(Number(b.dataset.program)));r.querySelectorAll("[data-profile]").forEach(b=>b.onclick=()=>this.openAdd(b.dataset.profile));
     x=r.getElementById("search");if(x)x.onchange=e=>{this.search=e.target.value;this.render()};x=r.getElementById("group");if(x)x.onchange=e=>{this.group=e.target.value;this.render()};
     r.getElementById("learn-start")?.addEventListener("click",()=>this.startLearning());r.getElementById("learn-stop")?.addEventListener("click",()=>this.stopLearning());r.getElementById("learn-clear")?.addEventListener("click",()=>{this.learnEvents=[];this.render()});r.querySelectorAll("[data-learn-add]").forEach(b=>b.onclick=()=>{var ev=this.learnEvents[Number(b.dataset.learnAdd)],best=b.dataset.best||"";this.openAdd(best,ev?.physical_sender_id||ev?.sender_id||"")});
     r.getElementById("import-file")?.addEventListener("change",async e=>{var f=e.target.files?.[0];if(f){this.importFilename=f.name;this.importText=await f.text();this.render()}});r.getElementById("import-preview")?.addEventListener("click",()=>this.previewImport());r.getElementById("import-cancel")?.addEventListener("click",()=>{this.preview=null;this.render()});r.getElementById("import-apply")?.addEventListener("click",()=>this.applyImport());
