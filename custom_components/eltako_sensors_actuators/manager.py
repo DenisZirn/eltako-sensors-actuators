@@ -14,6 +14,9 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 
+from .manager_importers import detect_import_format, parse_minisafe2, parse_pct14_xml
+from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
+
 from .const import (
     CONF_DEVICES,
     CONF_RELOAD_AFTER_SAVE,
@@ -167,10 +170,10 @@ def _build_device(
         "eltako": profile.get("eltako"),
         "sender_id": sender_id,
         "sender_eep": sender_eep,
-        "meter_tariffs": profile.get("meter_tariffs") or [],
+        "meter_tariffs": payload.get("meter_tariffs") or profile.get("meter_tariffs") or [],
         "room_temperature_entity": None,
-        "min_target_temperature": profile.get("min_target_temperature"),
-        "max_target_temperature": profile.get("max_target_temperature"),
+        "min_target_temperature": payload.get("min_target_temperature", profile.get("min_target_temperature")),
+        "max_target_temperature": payload.get("max_target_temperature", profile.get("max_target_temperature")),
         "initial_target_temperature": profile.get("initial_target_temperature"),
         "auto_teach_in": profile.get("auto_teach_in"),
         "fbht_temperature": profile.get("fbht_temperature"),
@@ -178,12 +181,12 @@ def _build_device(
         "device_family": profile.get("device_family"),
         "base_id": payload.get("base_id"),
         "physical_unique_id": payload.get("physical_unique_id"),
-        "operating_mode": profile.get("operating_mode"),
-        "id_range": payload.get("id_range"),
+        "operating_mode": payload.get("operating_mode", profile.get("operating_mode")),
+        "id_range": payload.get("id_range") or payload.get("fwg14ms_id_range"),
         "input_number": payload.get("input_number"),
         "id_count": profile.get("id_count"),
         "id_offset_start": profile.get("id_offset_start"),
-        "channel_count": profile.get("channels") or profile.get("channel_count"),
+        "channel_count": payload.get("channel_count") or profile.get("channels") or profile.get("channel_count"),
         "room_controller_mode": profile.get("room_controller_mode"),
         "futh55ed_mode": profile.get("futh55ed_mode"),
         "teach_in_telegram": profile.get("teach_in_telegram"),
@@ -198,7 +201,7 @@ def _build_device(
         "stage_2_id": payload.get("stage_2_id"),
         "speed_count": profile.get("speed_count"),
         "rocker_positions": profile.get("rocker_positions"),
-        "f2l14_mode": profile.get("f2l14_mode"),
+        "f2l14_mode": payload.get("f2l14_mode") or profile.get("f2l14_mode"),
         "gateway": _json_value(selected_gateway) if selected_gateway else None,
         "raw": raw,
     }
@@ -261,7 +264,7 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "catalog": catalog,
             "areas": sorted(areas, key=lambda item: item["name"].casefold()),
             "entries": entries,
-            "beta": "0.2.0-beta.1",
+            "beta": "0.2.0-beta.2",
         },
     )
 
@@ -366,6 +369,219 @@ async def websocket_manager_delete_device(hass: HomeAssistant, connection, msg: 
     connection.send_result(msg["id"], {"deleted": True, "device": _json_value(removed)})
 
 
+
+def _suggest_profile_keys(hass: HomeAssistant, telegram) -> list[str]:
+    """Return conservative catalog suggestions for one received telegram."""
+    decoded = getattr(telegram, "decoded", None) or {}
+    configured_eep = str(getattr(telegram, "eep", None) or "").upper()
+    detected_eep = str(decoded.get("detected_eep") or configured_eep or "").upper()
+    org = decoded.get("org")
+    candidates: list[str] = []
+    profiles = _profile_map(hass)
+
+    if detected_eep:
+        for key, profile in profiles.items():
+            if str(profile.get("eep_out") or "").upper() == detected_eep:
+                candidates.append(key)
+        if candidates:
+            return candidates[:20]
+
+    try:
+        org_value = int(org) if org is not None else None
+    except (TypeError, ValueError):
+        org_value = None
+    prefix = {0x05: "F6-", 0x06: "A5-", 0x07: "D5-"}.get(org_value)
+    if prefix:
+        for key, profile in profiles.items():
+            if str(profile.get("eep_out") or "").upper().startswith(prefix):
+                candidates.append(key)
+    return candidates[:30]
+
+
+def _yaml_preview_rows(hass: HomeAssistant, text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    parsed = parse_eedtoy_yaml(text)
+    profiles = _profile_map(hass)
+    rows: list[dict[str, Any]] = []
+    for device in parsed.devices:
+        row = dict(device)
+        profile_key = str(device.get("profile_key") or "")
+        if not profile_key or profile_key not in profiles:
+            matches = [
+                key for key, profile in profiles.items()
+                if str(profile.get("eep_out") or "").upper() == str(device.get("eep") or "").upper()
+                and (
+                    not device.get("device_type")
+                    or str(profile.get("device_type") or "").upper() == str(device.get("device_type") or "").upper()
+                )
+            ]
+            profile_key = matches[0] if len(matches) == 1 else ""
+        row.update(
+            {
+                "selected": True,
+                "source": "EEDTOY YAML",
+                "profile_key": profile_key,
+                "warning": "" if profile_key else "Geräteprofil prüfen/auswählen",
+            }
+        )
+        rows.append(row)
+    return rows, {
+        "format": "eedtoy_yaml",
+        "rows": rows,
+        "unsupported": [],
+        "summary": {
+            "devices": len(rows),
+            "gateways": parsed.gateway_count,
+        },
+    }
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/import_preview",
+        vol.Required("text"): str,
+        vol.Optional("filename", default=""): str,
+        vol.Optional("format", default="auto"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_import_preview(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Parse supported external configurations without changing HA."""
+    source = msg["text"]
+    selected_format = str(msg.get("format") or "auto").lower()
+    if selected_format == "auto":
+        selected_format = detect_import_format(source, msg.get("filename", ""))
+    catalog = hass.data.get(DATA_MANAGER, {}).get("catalog") or {"devices": []}
+    try:
+        if selected_format == "pct14":
+            result = await hass.async_add_executor_job(parse_pct14_xml, source, catalog)
+        elif selected_format == "minisafe2":
+            result = await hass.async_add_executor_job(parse_minisafe2, source, catalog)
+        elif selected_format in {"eedtoy", "eedtoy_yaml", "yaml"}:
+            _, result = _yaml_preview_rows(hass, source)
+        else:
+            raise ValueError(f"Unbekanntes Importformat: {selected_format}")
+    except (ValueError, EltakoYamlError) as err:
+        connection.send_error(msg["id"], "import_invalid", str(err))
+        return
+    connection.send_result(msg["id"], _json_value(result))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/apply_import",
+        vol.Required("entry_id"): str,
+        vol.Required("rows"): list,
+        vol.Optional("replace", default=False): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Apply selected rows from a preview in one atomic options update."""
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    if entry is None or entry.domain != DOMAIN:
+        connection.send_error(msg["id"], "entry_not_found", "ELTAKO config entry not found")
+        return
+
+    profiles = _profile_map(hass)
+    data = {**entry.data, **entry.options}
+    devices: list[dict[str, Any]] = [] if msg.get("replace") else [
+        dict(item) for item in data.get(CONF_DEVICES) or [] if isinstance(item, dict)
+    ]
+    added = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for row_index, raw_row in enumerate(msg["rows"]):
+        if not isinstance(raw_row, dict) or raw_row.get("selected") is False:
+            continue
+        profile_key = str(raw_row.get("profile_key") or "")
+        profile = profiles.get(profile_key)
+        if profile is None:
+            skipped += 1
+            errors.append(f"Zeile {row_index + 1}: Geräteprofil fehlt")
+            continue
+        payload = dict(raw_row)
+        if not payload.get("area"):
+            payload["area"] = ""
+        try:
+            device = _build_device(
+                profile=profile,
+                payload=payload,
+                selected_gateway=data.get(CONF_SELECTED_YAML_GATEWAY),
+            )
+        except ValueError as err:
+            skipped += 1
+            errors.append(f"{raw_row.get('name') or row_index + 1}: {err}")
+            continue
+
+        duplicate = next(
+            (
+                current for current in devices
+                if str(current.get("id") or "").upper() == str(device.get("id") or "").upper()
+                and str(current.get("eep") or "").upper() == str(device.get("eep") or "").upper()
+                and str(current.get("device_type") or "") == str(device.get("device_type") or "")
+            ),
+            None,
+        )
+        if duplicate is not None:
+            skipped += 1
+            continue
+
+        area_name = str(device.get("area") or "").strip()
+        if area_name:
+            ar.async_get(hass).async_get_or_create(area_name)
+        devices.append(device)
+        added += 1
+
+    options = dict(entry.options)
+    options[CONF_DEVICES] = devices
+    options[CONF_RELOAD_AFTER_SAVE] = True
+    hass.config_entries.async_update_entry(entry, options=options)
+    connection.send_result(
+        msg["id"],
+        {"applied": True, "added": added, "skipped": skipped, "errors": errors},
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/learn",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Subscribe to live gateway telegrams for interactive device learning."""
+    gateway = hass.data.get(DOMAIN, {}).get(msg["entry_id"])
+    if gateway is None:
+        connection.send_error(msg["id"], "entry_not_found", "ELTAKO gateway not active")
+        return
+
+    def on_telegram(telegram) -> None:
+        sender_id = str(getattr(telegram, "sender_id", "") or "")
+        if not sender_id or sender_id == "__gateway_status__":
+            return
+        decoded = getattr(telegram, "decoded", None) or {}
+        physical_sender = str(decoded.get("physical_sender_id") or sender_id)
+        connection.send_event(
+            msg["id"],
+            {
+                "sender_id": sender_id,
+                "physical_sender_id": physical_sender,
+                "eep": getattr(telegram, "eep", None),
+                "decoded": _json_value(decoded),
+                "raw": _json_value(getattr(telegram, "raw", None)),
+                "profile_suggestions": _suggest_profile_keys(hass, telegram),
+            },
+        )
+
+    connection.subscriptions[msg["id"]] = gateway.register_listener(on_telegram)
+    connection.send_result(msg["id"], {"subscribed": True})
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/export_yaml",
@@ -395,6 +611,9 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_get)
         websocket_api.async_register_command(hass, websocket_manager_save_device)
         websocket_api.async_register_command(hass, websocket_manager_delete_device)
+        websocket_api.async_register_command(hass, websocket_manager_import_preview)
+        websocket_api.async_register_command(hass, websocket_manager_apply_import)
+        websocket_api.async_register_command(hass, websocket_manager_learn)
         websocket_api.async_register_command(hass, websocket_manager_export_yaml)
         manager["websocket_registered"] = True
 
