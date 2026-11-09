@@ -41,11 +41,13 @@ class EltakoManagerPanel extends HTMLElement {
     return String(p.device_type||p.eltako||p.label||p.key||"Gerät").split(",")[0].trim();
   }
   gatewayShortName(entry){
+    var title=String(entry?.title||"").trim();
+    if(title)return title;
     var t=String(entry?.gateway_type||entry?.selected_gateway?.device_type||"ELTAKO").toLowerCase();
     if(t==="fam-usb")return "FAM-USB";
     if(t==="fgw14usb")return "FGW14-USB";
     if(t==="fam14")return "FAM14";
-    return String(entry?.title||entry?.gateway_type||"ELTAKO");
+    return "ELTAKO";
   }
   style(){return [
     ":host{display:block;min-height:100%;color:var(--primary-text-color);background:var(--primary-background-color);font-family:Roboto,sans-serif}",
