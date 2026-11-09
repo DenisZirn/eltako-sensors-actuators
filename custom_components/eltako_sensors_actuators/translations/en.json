@@ -72,9 +72,14 @@
       },
       "diagnostics": {
         "title": "Radio / bus diagnostics",
-        "description": "Enables or disables the diagnostics buffer and sidebar entry globally for all ELTAKO gateways.",
+        "description": "Diagnostics are currently {current_state}.",
         "data": {
           "diagnostics_enabled": "Show diagnostics"
+        },
+        "menu_options": {
+          "diagnostics_enable": "Enable diagnostics",
+          "diagnostics_disable": "Disable diagnostics",
+          "diagnostics_back_main": "← Back to main menu"
         }
       },
       "room_temperature_assignment": {
@@ -82,6 +87,9 @@
         "description": "Select the heating actuator that should receive a room-temperature source. Supported devices are FKS-SV and A5-10-06 FHK14/F4HK14/FAE14 actuators. The mapping is stored persistently by physical EnOcean ID.",
         "data": {
           "room_temperature_device_id": "Heating actuator"
+        },
+        "menu_options": {
+          "room_temperature_back_main": "← Back to main menu"
         }
       },
       "room_temperature_source": {
@@ -89,6 +97,11 @@
         "description": "Current assignment: {current_assignment}\n\nChoose the existing device/native or learned temperature source, or an external Home Assistant room-temperature sensor.",
         "data": {
           "room_temperature_source": "Temperature source"
+        },
+        "menu_options": {
+          "room_temperature_source_native": "Use internal / learned temperature source",
+          "room_temperature_source_external": "Use external Home Assistant temperature sensor",
+          "room_temperature_back_actuators": "← Back to actuator selection"
         }
       },
       "room_temperature_entity": {
