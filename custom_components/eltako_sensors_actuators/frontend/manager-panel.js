@@ -40,6 +40,13 @@ class EltakoManagerPanel extends HTMLElement {
     if(!p)return "Gerät";
     return String(p.device_type||p.eltako||p.label||p.key||"Gerät").split(",")[0].trim();
   }
+  gatewayShortName(entry){
+    var t=String(entry?.gateway_type||entry?.selected_gateway?.device_type||"ELTAKO").toLowerCase();
+    if(t==="fam-usb")return "FAM-USB";
+    if(t==="fgw14usb")return "FGW14-USB";
+    if(t==="fam14")return "FAM14";
+    return String(entry?.title||entry?.gateway_type||"ELTAKO");
+  }
   style(){return [
     ":host{display:block;min-height:100%;color:var(--primary-text-color);background:var(--primary-background-color);font-family:Roboto,sans-serif}",
     "*{box-sizing:border-box}.page{max-width:1550px;margin:auto;padding:22px}.top{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}",
@@ -58,7 +65,7 @@ class EltakoManagerPanel extends HTMLElement {
   ].join("")}
   render(){var e=this.entry(),entries=this.data?.entries||[],devices=e?.devices||[];var h="<style>"+this.style()+"</style><div class='page'>";
     h+="<div class='top'><div><h1>ELTAKO Gerätekonfiguration</h1><div class='sub'>EEDTOY direkt in Home Assistant · "+this.esc(this.data?.beta||"0.2.0-beta.4")+" · Katalog "+this.esc(this.data?.catalog?.source_version||"?")+"</div></div><div class='actions'>";
-    if(entries.length){h+="<select id='entry'>";entries.forEach(x=>h+="<option value='"+this.esc(x.entry_id)+"'"+(x.entry_id===this.entryId?" selected":"")+">"+this.esc(x.title||x.gateway_type||"ELTAKO")+" · "+this.esc(x.port||"")+"</option>");h+="</select>"}
+    if(entries.length){h+="<select id='entry'>";entries.forEach(x=>h+="<option value='"+this.esc(x.entry_id)+"'"+(x.entry_id===this.entryId?" selected":"")+">"+this.esc(this.gatewayShortName(x))+"</option>");h+="</select>"}
     h+="<a class='btn' href='/eltako-diagnostics'>Funk-/Bus-Diagnose</a><button id='refresh'>Aktualisieren</button></div></div>";
     if(this.message)h+="<div class='msg'>"+this.esc(this.message)+"</div>";
     if(this.loading&&!this.data)h+="<div class='card empty'>Konfiguration wird geladen …</div>";
