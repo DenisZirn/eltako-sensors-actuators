@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 import re
 
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -439,6 +439,7 @@ class EltakoBaseEntity(RestoreEntity):
                 or raw.get("device_family")
             )
             model = str(technical_model).strip() if technical_model else (f"EEP {eep}" if eep else "ELTAKO Device")
+            suggested_area = str(_device_option(self.device_config, "area", "") or "").strip() or None
 
             # FLGTF sends TVOC and temperature/humidity as two EnOcean IDs
             # (A5-09-0C and A5-04-02, usually ID + 1).  In Home Assistant this
@@ -486,6 +487,7 @@ class EltakoBaseEntity(RestoreEntity):
                 manufacturer="ELTAKO",
                 name=name,
                 model=model,
+                suggested_area=suggested_area,
                 via_device_id=dr.async_get_device_id_by_identifier(
                     self.gateway.hass,
                     (DOMAIN, self.gateway.entry_id),
@@ -562,7 +564,28 @@ class EltakoYamlEntity(EltakoBaseEntity):
             "max_target_temperature",
             "frost_temperature",
             "dimming_speed",
+            "area",
         ):
             value = _device_option(device, option, None)
             if value is not None:
                 self._attr_extra_state_attributes[option] = value
+
+    async def async_added_to_hass(self) -> None:
+        """Apply the EEDTOY room assignment to the Home Assistant device."""
+        await super().async_added_to_hass()
+
+        area_name = str(_device_option(self.device_config, "area", "") or "").strip()
+        if not area_name:
+            return
+
+        entity_entry = er.async_get(self.hass).async_get(self.entity_id)
+        if entity_entry is None or entity_entry.device_id is None:
+            return
+
+        area = ar.async_get(self.hass).async_get_or_create(area_name)
+        device_registry = dr.async_get(self.hass)
+        device_entry = device_registry.async_get(entity_entry.device_id)
+        if device_entry is None or device_entry.area_id == area.id:
+            return
+
+        device_registry.async_update_device(device_entry.id, area_id=area.id)
