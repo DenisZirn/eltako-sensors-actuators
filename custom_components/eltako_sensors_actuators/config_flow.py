@@ -543,19 +543,14 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 options=repaired_options,
             )
 
-        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
-        is_de = language.startswith("de")
-        # Supply explicit labels as a fallback as well as keeping translation
-        # entries in strings/de/en. This prevents an empty options menu when HA
-        # still has a stale translation cache from an earlier test build.
+        # Home Assistant's menu_options API expects a list of step IDs.
+        # User-visible labels come from translations/{language}.json.
+        # Passing {step_id: label} leads to empty rows in newer HA frontends.
         return self.async_show_menu(
             step_id="init",
-            menu_options={
-                "connection": "Gateway / seriellen Anschluss ändern" if is_de else "Change gateway / serial connection",
-                "yaml": "EEDTOY YAML importieren oder ersetzen" if is_de else "Import or replace EEDTOY YAML",
-                "room_temperature_assignment": "Raumtemperatursensor zuweisen" if is_de else "Assign room temperature sensor",
-                "diagnostics": "Funk / Bus Diagnose" if is_de else "Radio / bus diagnostics",
-            },
+            menu_options=[
+                "connection", "yaml", "room_temperature_assignment", "diagnostics"
+            ],
         )
 
     def _current_data(self) -> dict[str, Any]:
@@ -649,31 +644,37 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         choices = self._room_temperature_choices()
         device_choices = [(device_id, label) for device_id, label in choices.items() if device_id != _BACK]
         if not device_choices:
+            # The only menu item is a known, translated static step ID.
             return self.async_show_menu(
                 step_id="room_temperature_assignment",
-                menu_options={
-                    "room_temperature_back_main": (
-                        "← Zurück zum Hauptmenü"
-                        if str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower().startswith("de")
-                        else "← Back to main menu"
-                    )
-                },
+                menu_options=["room_temperature_back_main"],
             )
 
-        self._room_temperature_menu_targets = {}
-        menu_options: dict[str, str] = {}
-        for index, (device_id, label) in enumerate(device_choices):
-            step_key = f"room_temperature_device_{index}"
-            self._room_temperature_menu_targets[step_key] = device_id
-            menu_options[step_key] = label
+        # Dynamically generated menu step IDs do not have translation keys in
+        # strings.json. Use a labelled select form for variable device names;
+        # this works in all HA frontend versions and avoids blank menu items.
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selection = str(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID) or "")
+            if selection == _BACK:
+                return await self.async_step_init()
+            selected = normalize_enocean_id(selection)
+            if selected and selected in self._room_temperature_devices():
+                self._pending_room_temperature_device_id = selected
+                return await self.async_step_room_temperature_source()
+            errors[CONF_ROOM_TEMPERATURE_DEVICE_ID] = "missing_room_temperature_device"
 
-        language = str(getattr(getattr(self.hass, "config", None), "language", "") or "").lower()
-        menu_options["room_temperature_back_main"] = (
-            "← Zurück zum Hauptmenü" if language.startswith("de") else "← Back to main menu"
+        selection_default = (
+            self._pending_room_temperature_device_id
+            if self._pending_room_temperature_device_id in choices
+            else device_choices[0][0]
         )
-        return self.async_show_menu(
+        return self.async_show_form(
             step_id="room_temperature_assignment",
-            menu_options=menu_options,
+            data_schema=vol.Schema({
+                vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID, default=selection_default): vol.In(choices)
+            }),
+            errors=errors,
         )
 
     async def async_step_room_temperature_back_main(
@@ -725,19 +726,11 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_menu(
             step_id="room_temperature_source",
-            menu_options={
-                "room_temperature_source_native": (
-                    ("✓ " if current_source == ROOM_TEMPERATURE_SOURCE_NATIVE else "○ ")
-                    + labels[ROOM_TEMPERATURE_SOURCE_NATIVE]
-                ),
-                "room_temperature_source_external": (
-                    ("✓ " if current_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else "○ ")
-                    + labels[ROOM_TEMPERATURE_SOURCE_EXTERNAL]
-                ),
-                "room_temperature_back_actuators": (
-                    "← Zurück zur Aktorauswahl" if is_de else "← Back to actuator selection"
-                ),
-            },
+            menu_options=[
+                "room_temperature_source_native",
+                "room_temperature_source_external",
+                "room_temperature_back_actuators",
+            ],
             description_placeholders={
                 "current_assignment": self._room_temperature_assignment_text(device)
             },
@@ -833,20 +826,13 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_menu(
             step_id="diagnostics",
-            menu_options={
-                "diagnostics_enable": (
-                    ("✓ Funk-/Bus-Diagnose ist aktiviert" if current_enabled else "Funk-/Bus-Diagnose aktivieren")
-                    if is_de
-                    else ("✓ Radio/bus diagnostics is enabled" if current_enabled else "Enable radio/bus diagnostics")
-                ),
-                "diagnostics_disable": (
-                    ("Funk-/Bus-Diagnose deaktivieren" if current_enabled else "✓ Funk-/Bus-Diagnose ist deaktiviert")
-                    if is_de
-                    else ("Disable radio/bus diagnostics" if current_enabled else "✓ Radio/bus diagnostics is disabled")
-                ),
-                "diagnostics_back_main": (
-                    "← Zurück zum Hauptmenü" if is_de else "← Back to main menu"
-                ),
+            menu_options=[
+                "diagnostics_enable", "diagnostics_disable", "diagnostics_back_main"
+            ],
+            description_placeholders={
+                "current_state": (
+                    "aktiviert" if current_enabled else "deaktiviert"
+                ) if is_de else ("enabled" if current_enabled else "disabled"),
             },
         )
 
