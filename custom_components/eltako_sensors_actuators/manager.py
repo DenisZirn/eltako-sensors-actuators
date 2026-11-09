@@ -401,19 +401,78 @@ def _device_option_value(device: dict[str, Any], key: str, default: Any = None) 
     return raw.get(key, default)
 
 
+def _series14_type_text(device: dict[str, Any]) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (
+            device.get("device_type"),
+            device.get("model"),
+            device.get("profile_key"),
+            _device_option_value(device, "device_family"),
+        )
+    ).upper()
+
+
 def _series14_device(device: dict[str, Any]) -> bool:
-    """Return True only when the device carries explicit Series-14 bus metadata."""
-    return bool(
+    """Detect central Series-14 devices, including legacy EEDTOY imports."""
+    if (
         _device_option_value(device, "bus_address")
         or _device_option_value(device, "bus_base_id")
-    )
+    ):
+        return True
+    # Existing EEDTOY configurations prior to the integrated manager did not
+    # persist bus_address/bus_base_id. Their technical device type still
+    # identifies them unambiguously as Series-14 devices.
+    return bool(re.search(r"(?<![A-Z0-9])F[A-Z0-9-]*14[A-Z0-9-]*(?![A-Z0-9])", _series14_type_text(device)))
+
+
+def _series14_bus_address(device: dict[str, Any]) -> str:
+    """Return/derive the Series-14 bus address as 00-00-00-xx."""
+    explicit = _series14_bus_address(device)
+    if explicit:
+        return explicit
+
+    sender_id = _optional_normalized_id(_device_option_value(device, "sender_id"))
+    sender_value = _id_to_int(sender_id)
+    if sender_value is not None and (sender_value & 0xFFFFFF00) == 0x0000B000:
+        return _add_id_offset("00-00-00-00", sender_value & 0xFF) or ""
+
+    device_id = _optional_normalized_id(device.get("id"))
+    device_value = _id_to_int(device_id)
+    if device_value is not None and (device_value & 0xFFFFFF00) == 0:
+        return device_id
+
+    name = str(device.get("name") or "")
+    match = re.search(r"\b00-00-00-([0-9A-Fa-f]{2})\b", name)
+    if match:
+        return f"00-00-00-{match.group(1).upper()}"
+    return ""
 
 
 def _series14_bus_offset(device: dict[str, Any]) -> int | None:
-    value = _id_to_int(_device_option_value(device, "bus_address"))
+    value = _id_to_int(_series14_bus_address(device))
     if value is None:
         return None
     return value & 0xFF
+
+
+def _series14_bus_base_id(device: dict[str, Any]) -> str:
+    """Return/derive the PCT14/FAM14 base ID used by a Series-14 device."""
+    explicit = _series14_bus_base_id(device)
+    if explicit:
+        return explicit
+
+    offset = _series14_bus_offset(device)
+    device_value = _id_to_int(device.get("id"))
+    if offset is None or device_value is None:
+        return ""
+
+    # A direct FGW14/FAM14 bus entity uses 00-00-00-xx and does not encode the
+    # FAM14 base ID. A radio-visible PCT14 device (FAM-USB) does: ID=base+address.
+    if (device_value & 0xFFFFFF00) == 0:
+        return ""
+    base_value = (device_value - offset) & 0xFFFFFFFF
+    return "-".join(f"{(base_value >> shift) & 0xFF:02X}" for shift in (24, 16, 8, 0))
 
 
 def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None = None):
@@ -499,12 +558,8 @@ def _series14_candidate_rows(hass: HomeAssistant) -> list[dict[str, Any]]:
                 continue
             sender_id = str(_device_option_value(device, "sender_id") or "").strip()
             sender_eep = str(_device_option_value(device, "sender_eep") or "").strip().upper()
-            bus_base_id = _optional_normalized_id(
-                _device_option_value(device, "bus_base_id")
-            )
-            bus_address = _optional_normalized_id(
-                _device_option_value(device, "bus_address")
-            )
+            bus_base_id = _series14_bus_base_id(device)
+            bus_address = _series14_bus_address(device)
             issues: list[str] = []
             if not bus_base_id:
                 issues.append("PCT14-Basis-ID fehlt")
@@ -538,7 +593,7 @@ def _series14_program_entry(device: dict[str, Any]) -> dict[str, Any]:
     """Create the exact sender-writer row from one HA device config."""
     sender_id = str(_device_option_value(device, "sender_id") or "").strip()
     sender_eep = str(_device_option_value(device, "sender_eep") or "").strip().upper()
-    bus_base_id = str(_device_option_value(device, "bus_base_id") or "").strip().upper()
+    bus_base_id = _series14_bus_base_id(device)
     bus_offset = _series14_bus_offset(device)
     if not sender_id:
         raise ValueError("Für dieses Gerät ist keine Sender-ID konfiguriert.")
@@ -1298,7 +1353,7 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
                 "source_entry_title": source_entry.title,
                 "index": index,
                 "name": str(device.get("name") or device.get("device_type") or "Series-14-Aktor"),
-                "bus_address": _optional_normalized_id(_device_option_value(device, "bus_address")),
+                "bus_address": _series14_bus_address(device),
                 "bus_base_id": expected_base,
                 "sender_id": str(_device_option_value(device, "sender_id") or ""),
                 "sender_eep": str(_device_option_value(device, "sender_eep") or ""),
