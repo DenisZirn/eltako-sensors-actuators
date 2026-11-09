@@ -406,6 +406,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
     _remove_obsolete_wall_rocker_entities(hass, entry, devices)
     _migrate_eltako_illuminance_entities(hass, entry, devices)
+    _remove_obsolete_illuminance_raw_entities(hass, entry, devices)
     _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices)
     _migrate_a5_12_01_registry_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
@@ -522,6 +523,40 @@ def _migrate_eltako_illuminance_entities(hass, entry, devices: list[dict[str, An
                 registry.async_remove(old_entity)
         except Exception:
             _LOGGER.exception("Failed to migrate A5-06-01 illuminance sensor %s", old_entity)
+
+
+def _remove_obsolete_illuminance_raw_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove stale A5-06-01 raw-value entities left by older/test builds."""
+    registry = er.async_get(hass)
+    owned = [
+        item
+        for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if item.platform == DOMAIN and item.domain == "sensor"
+    ]
+    for device in devices or []:
+        if not isinstance(device, dict) or not is_eltako_illuminance_device(device):
+            continue
+        if normalize_platform(device.get("platform")) != "sensor":
+            continue
+        base = device_key(device)
+        desired_unique_id = _yaml_entity_unique_id(entry.entry_id, device, "Helligkeit").lower()
+        legacy_unique_ids = {
+            f"{DOMAIN}_{entry.entry_id}_{base}".lower(),
+            f"{DOMAIN}_{entry.entry_id}_{legacy_device_key(device)}".lower(),
+        }
+        for item in list(owned):
+            uid = str(item.unique_id or "").lower()
+            if uid == desired_unique_id:
+                continue
+            if uid in legacy_unique_ids or (
+                base in uid
+                and any(token in uid for token in ("raw", "helligkeitssensor", "brightness_raw"))
+            ):
+                try:
+                    registry.async_remove(item.entity_id)
+                    _LOGGER.info("Removed obsolete A5-06-01 raw entity %s", item.entity_id)
+                except Exception:
+                    _LOGGER.exception("Failed removing obsolete A5-06-01 raw entity %s", item.entity_id)
 
 
 def _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
