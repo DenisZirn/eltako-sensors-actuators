@@ -79,6 +79,16 @@ class DeviceProfilesTest(unittest.TestCase):
         self.assertFalse(released["smoke_alarm"])
         self.assertFalse(released["battery_low"])
 
+    def test_duplicate_frw_status_entity_is_not_created(self):
+        sensor_source = (
+            Path(__file__).resolve().parents[1]
+            / "custom_components"
+            / "eltako_sensors_actuators"
+            / "sensor.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('"frw_status", "Rauchmelderstatus"', sensor_source)
+        self.assertIn('"Rauchmelderstatus"', sensor_source)
+
     def test_frwb_and_normal_rockers_are_not_legacy_frw(self):
         self.assertFalse(MODULE.is_legacy_frw_device({"device_type": "FRWB", "eep": "A5-30-03"}))
         self.assertFalse(MODULE.is_legacy_frw_device({"device_type": "FT55", "eep": "F6-02-01"}))
