@@ -9,6 +9,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICES, DOMAIN
 from .diagnostics import diagnostic_event
+from .device_profiles import is_legacy_frw_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity, _f4usm61b_mode, _futh55ed_mode, _is_f4usm61b_device, _is_futh55ed_device, _is_ffg7b_device, _is_frwb_device, _is_fts14em_device, _fts14em_inverted, device_key, legacy_device_key, normalize_eep, normalize_platform
 
@@ -143,6 +144,21 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             continue
         platform = normalize_platform(device.get("platform"))
         eep = normalize_eep(device.get("eep"))
+
+        if is_legacy_frw_device(device):
+            entities.append(
+                EltakoYamlBinarySensor(
+                    gateway, device, "smoke_alarm", BinarySensorDeviceClass.SMOKE,
+                    suffix="Rauchalarm",
+                )
+            )
+            entities.append(
+                EltakoYamlBinarySensor(
+                    gateway, device, "battery_low", BinarySensorDeviceClass.BATTERY,
+                    suffix="Batterie niedrig",
+                )
+            )
+            continue
 
         if _is_fts14em_device(device) and eep == "F6-02-01":
             entities.append(EltakoFTS14EMInputBinarySensor(gateway, device))
@@ -350,6 +366,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         )
 
     _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices)
+    _remove_obsolete_frw_rocker_binary_entities(hass, entry, devices)
 
     _LOGGER.info(
         "ELTAKO binary_sensor setup entry=%s imported_devices=%s binary_entities=%s",
@@ -360,6 +377,33 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     async_add_entities(entities)
 
 
+
+
+def _remove_obsolete_frw_rocker_binary_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove only legacy FRW button rows, keeping actual FT55 rockers intact."""
+    registry = er.async_get(hass)
+    suffixes = (*ROCKER_POSITION_LABELS.values(), "Taster gedrückt", "Taste oben", "Taste unten")
+    for device in devices or []:
+        if not isinstance(device, dict) or not is_legacy_frw_device(device):
+            continue
+        for base in {device_key(device), legacy_device_key(device)}:
+            # Old fallback could also expose one unsuffixed 'pressed' binary sensor.
+            candidates = [f"{DOMAIN}_{entry.entry_id}_{base}"]
+            candidates.extend(
+                f"{DOMAIN}_{entry.entry_id}_{base}_{suffix}".lower().replace(" ", "_").replace("/", "_")
+                for suffix in suffixes
+            )
+            for unique_id in candidates:
+                entity_id = registry.async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+                if entity_id:
+                    entity_entry = registry.async_get(entity_id)
+                    if (entity_entry is None or entity_entry.platform != DOMAIN
+                            or entity_entry.config_entry_id != entry.entry_id):
+                        continue
+                    try:
+                        registry.async_remove(entity_id)
+                    except Exception:
+                        _LOGGER.exception("Failed to remove obsolete FRW rocker entity %s", entity_id)
 
 
 def _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices: list[dict[str, Any]]) -> None:

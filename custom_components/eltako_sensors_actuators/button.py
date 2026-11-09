@@ -296,8 +296,10 @@ class EltakoTeachInButton(EltakoYamlEntity, ButtonEntity):
         label = suffix or ("Funk-Lerntelegramm senden" if gateway_type == "fam-usb" else "Lerntelegramm senden")
         super().__init__(gateway, device, suffix=label)
         self._attr_translation_key = "send_teach_in"
-        if hasattr(self, "_attr_name"):
-            del self._attr_name
+        # Keep a functional fallback entity name. If HA has stale translations
+        # and _attr_name is absent, HA displays only the physical device name.
+        # Do not alter unique_id: it was already computed by EltakoYamlEntity.
+        self._attr_name = label
         self._teach_in_command = command
         self._attr_icon = icon
 
@@ -353,8 +355,7 @@ class EltakoFrgbwFreeProfileTeachInButton(EltakoYamlEntity, ButtonEntity):
     def __init__(self, gateway, device: dict[str, Any]) -> None:
         super().__init__(gateway, device, suffix="Lerntelegramm senden")
         self._attr_translation_key = "send_teach_in"
-        if hasattr(self, "_attr_name"):
-            del self._attr_name
+        self._attr_name = "Lerntelegramm senden"
         self._attr_icon = "mdi:palette"
 
     async def async_press(self) -> None:

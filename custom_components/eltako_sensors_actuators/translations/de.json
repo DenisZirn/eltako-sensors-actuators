@@ -72,9 +72,14 @@
       },
       "diagnostics": {
         "title": "Funk / Bus Diagnose",
-        "description": "Aktiviert oder deaktiviert den Diagnosepuffer und den Seitenleistenpunkt global für alle ELTAKO-Gateways.",
+        "description": "Die Diagnose ist derzeit {current_state}.",
         "data": {
           "diagnostics_enabled": "Diagnose anzeigen"
+        },
+        "menu_options": {
+          "diagnostics_enable": "Diagnose aktivieren",
+          "diagnostics_disable": "Diagnose deaktivieren",
+          "diagnostics_back_main": "← Zurück zum Hauptmenü"
         }
       },
       "room_temperature_assignment": {
@@ -82,6 +87,9 @@
         "description": "Wähle den Heizungsaktor aus, dem eine Raumtemperaturquelle zugeordnet werden soll. Unterstützt werden FKS-SV sowie FHK14/F4HK14 und FAE14-Aktoren mit A5-10-06. Die Zuordnung erfolgt dauerhaft über die physische EnOcean-ID.",
         "data": {
           "room_temperature_device_id": "Heizungsaktor"
+        },
+        "menu_options": {
+          "room_temperature_back_main": "← Zurück zum Hauptmenü"
         }
       },
       "room_temperature_source": {
@@ -89,6 +97,11 @@
         "description": "Aktuelle Zuordnung: {current_assignment}\n\nWähle die bestehende geräteeigene bzw. eingelernte Temperaturquelle oder einen externen Home-Assistant-Raumtemperatursensor.",
         "data": {
           "room_temperature_source": "Temperaturquelle"
+        },
+        "menu_options": {
+          "room_temperature_source_native": "Interne / eingelernte Temperaturquelle verwenden",
+          "room_temperature_source_external": "Externen Home-Assistant-Temperatursensor verwenden",
+          "room_temperature_back_actuators": "← Zurück zur Aktorauswahl"
         }
       },
       "room_temperature_entity": {

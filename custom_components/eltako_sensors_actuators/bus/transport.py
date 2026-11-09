@@ -43,7 +43,10 @@ class SerialTransport:
 
     def open(self) -> None:
         if self._serial is not None and self._serial.is_open:
-            if self.is_active():
+            # open() runs in HA's executor. Detect a disappeared Linux USB
+            # device here, rather than performing Path.exists() on the event
+            # loop via is_active() / the Connected binary sensor.
+            if self.is_active() and self._port_path_available():
                 return
             self.close()
         self._serial = serialx.serial_for_url(
@@ -82,12 +85,22 @@ class SerialTransport:
                 _LOGGER.info("ELTAKO serial transport closed: port=%s", self.port)
 
     def is_active(self) -> bool:
-        if self._serial is None or not self._serial.is_open:
-            return False
+        """Non-blocking connection snapshot, safe for Home Assistant's event loop.
+
+        Do not access the filesystem here. This property is read frequently by
+        the reader, sender and Connected binary sensor. USB hot-unplug is
+        instead detected by open()/read_frame() in an executor thread.
+        """
+        return self._serial is not None and self._serial.is_open
+
+    def _port_path_available(self) -> bool:
+        """Check for a removed Linux USB device (executor thread ONLY)."""
         try:
-            if str(self.port).startswith("/dev/") and not Path(str(self.port)).exists():
-                return False
+            if str(self.port).startswith("/dev/"):
+                return Path(str(self.port)).exists()
         except Exception:
+            # Preserve the former behavior on filesystem lookup failures:
+            # let the serial read/write report the actual connection error.
             pass
         return True
 

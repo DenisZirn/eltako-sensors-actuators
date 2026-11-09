@@ -65,6 +65,7 @@ except Exception:  # pragma: no cover
 
 from .const import CONF_DEVICES, DOMAIN
 from .bus.eep_a5_09_04 import decode_a5_09_04
+from .device_profiles import is_eltako_illuminance_device, is_legacy_frw_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import (
     EltakoBaseEntity,
@@ -239,6 +240,16 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         if device.get("id"):
             entities.append(EltakoDeviceAddressSensor(gateway, device))
 
+        if is_legacy_frw_device(device):
+            # Old FRW is an alarm, not a four-position pushbutton.
+            entities.append(
+                EltakoYamlValueSensor(
+                    gateway, device, "frw_status", "Rauchmelderstatus",
+                    getattr(SensorDeviceClass, "ENUM", None), None,
+                )
+            )
+            continue
+
         # In modes 1, 2, 4, 5 and 7 the F4USM61B battery telegram is sent
         # separately from the physical sender ID using A5-07-01. EEDTOY
         # exports that address as physical_unique_id. Create exactly one battery entity
@@ -362,6 +373,14 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.extend(_a5_20_01_entities(gateway, device))
         elif eep == "A5-07-01":
             entities.extend(_a5_07_01_entities(gateway, device))
+        elif eep == "A5-06-01" and is_eltako_illuminance_device(device):
+            # Keep the standard Helligkeit entity, now as a numeric lux sensor.
+            entities.append(
+                EltakoYamlValueSensor(
+                    gateway, device, "brightness", "Helligkeit",
+                    SensorDeviceClass.ILLUMINANCE, LUX_UNIT, state_class="measurement",
+                )
+            )
         else:
             entities.append(EltakoYamlGenericSensor(gateway, device))
 
@@ -391,6 +410,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices)
     _remove_obsolete_fts14em_rocker_entities(hass, entry, devices)
     _remove_obsolete_wall_rocker_entities(hass, entry, devices)
+    _migrate_eltako_illuminance_entities(hass, entry, devices)
+    _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices)
     _migrate_a5_12_01_registry_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
@@ -476,6 +497,57 @@ _FLGTF_ENTITY_SUFFIXES: dict[str, tuple[tuple[str, str], ...]] = {
 def _yaml_entity_unique_id(entry_id: str, device: dict[str, Any], suffix: str) -> str:
     base = f"{device_key(device)}_{suffix}".lower().replace(" ", "_").replace("/", "_")
     return f"{DOMAIN}_{entry_id}_{base}"
+
+
+def _migrate_eltako_illuminance_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Reuse the existing FAH/FHD60SB sensor ID/history when replacing raw text."""
+    registry = er.async_get(hass)
+    for device in devices or []:
+        if not isinstance(device, dict) or not is_eltako_illuminance_device(device):
+            continue
+        if normalize_platform(device.get("platform")) != "sensor":
+            continue
+        old_unique_id = f"{DOMAIN}_{entry.entry_id}_{device_key(device)}".lower()
+        new_unique_id = _yaml_entity_unique_id(entry.entry_id, device, "Helligkeit")
+        old_entity = registry.async_get_entity_id("sensor", DOMAIN, old_unique_id)
+        if not old_entity:
+            continue
+        old_entry = registry.async_get(old_entity)
+        if (old_entry is None or old_entry.platform != DOMAIN
+                or old_entry.config_entry_id != entry.entry_id):
+            continue
+        existing = registry.async_get_entity_id("sensor", DOMAIN, new_unique_id)
+        try:
+            if not existing:
+                registry.async_update_entity(old_entity, new_unique_id=new_unique_id)
+                _LOGGER.info("Migrated A5-06-01 raw brightness sensor %s to lux", old_entity)
+            else:
+                # The numeric sensor already exists; remove only the obsolete
+                # generic raw one, never the active numeric entity.
+                registry.async_remove(old_entity)
+        except Exception:
+            _LOGGER.exception("Failed to migrate A5-06-01 illuminance sensor %s", old_entity)
+
+
+def _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove RPS button helper entities for an explicitly identified legacy FRW."""
+    registry = er.async_get(hass)
+    for device in devices or []:
+        if not isinstance(device, dict) or not is_legacy_frw_device(device):
+            continue
+        for base in {device_key(device), legacy_device_key(device)}:
+            for suffix in ("Gedrueckte Taste", "Gedrückte Taste", "Tastenposition", "Signalcode"):
+                unique_id = f"{DOMAIN}_{entry.entry_id}_{base}_{suffix}".lower().replace(" ", "_").replace("/", "_")
+                entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+                if entity_id:
+                    entity_entry = registry.async_get(entity_id)
+                    if (entity_entry is None or entity_entry.platform != DOMAIN
+                            or entity_entry.config_entry_id != entry.entry_id):
+                        continue
+                    try:
+                        registry.async_remove(entity_id)
+                    except Exception:
+                        _LOGGER.exception("Failed to remove legacy FRW helper %s", entity_id)
 
 
 def _is_legacy_duplicated_flgtf_entity_id(entity_id: str) -> bool:
@@ -854,6 +926,31 @@ def _migrate_a5_12_01_registry_entities(hass, entry, devices: list[dict[str, Any
                     _LOGGER.exception("Failed to remove duplicate A5-12-01 meter entity %s", candidate.entity_id)
 
 
+def _remove_owned_legacy_sensor_entities(registry, entry, unique_ids: set[str], label: str) -> None:
+    """Remove only our own obsolete sensors from this config entry.
+
+    Never scan and remove arbitrary registry entries by unique_id alone:
+    another integration may use the same ID. The platform lookup plus the
+    config_entry_id guard also protects other ELTAKO gateway entries.
+    """
+    for unique_id in sorted(unique_ids):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        if entity_id is None:
+            continue
+        entity_entry = registry.async_get(entity_id)
+        if (
+            entity_entry is None
+            or entity_entry.platform != DOMAIN
+            or entity_entry.config_entry_id != entry.entry_id
+        ):
+            continue
+        try:
+            registry.async_remove(entity_id)
+            _LOGGER.info("Removed obsolete %s entity %s", label, entity_id)
+        except Exception:
+            _LOGGER.exception("Failed to remove obsolete %s entity %s", label, entity_id)
+
+
 def _remove_obsolete_gateway_path_entities(hass, entry) -> None:
     """Remove legacy gateway path sensors from the entity registry.
 
@@ -872,14 +969,7 @@ def _remove_obsolete_gateway_path_entities(hass, entry) -> None:
         f"{DOMAIN}_{entry.entry_id}_gateway_stable_serial_path".lower(),
     }
 
-    for entity_entry in list(registry.entities.values()):
-        unique_id = str(getattr(entity_entry, "unique_id", "") or "").lower()
-        if unique_id in obsolete_unique_ids:
-            _LOGGER.info("Removing obsolete gateway path diagnostic entity %s", entity_entry.entity_id)
-            try:
-                registry.async_remove(entity_entry.entity_id)
-            except Exception:
-                _LOGGER.exception("Failed to remove obsolete gateway path entity %s", entity_entry.entity_id)
+    _remove_owned_legacy_sensor_entities(registry, entry, obsolete_unique_ids, "gateway path")
 
 def _remove_obsolete_d5_battery_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
     """Remove battery voltage entities from D5 contact devices without battery."""
@@ -907,14 +997,7 @@ def _remove_obsolete_d5_battery_entities(hass, entry, devices: list[dict[str, An
             legacy["eep"] = "D5-00-01"
             obsolete_unique_ids.add(f"{DOMAIN}_{entry.entry_id}_{device_key(legacy)}_batteriespannung")
 
-    for entity_entry in list(registry.entities.values()):
-        unique_id = str(getattr(entity_entry, "unique_id", "") or "")
-        if unique_id in obsolete_unique_ids:
-            _LOGGER.info("Removing obsolete D5-00-01 battery voltage entity %s", entity_entry.entity_id)
-            try:
-                registry.async_remove(entity_entry.entity_id)
-            except Exception:
-                _LOGGER.exception("Failed to remove obsolete entity %s", entity_entry.entity_id)
+    _remove_owned_legacy_sensor_entities(registry, entry, obsolete_unique_ids, "D5-00-01 battery voltage")
 
 
 def _remove_obsolete_weather_brightness_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
@@ -943,14 +1026,7 @@ def _remove_obsolete_weather_brightness_entities(hass, entry, devices: list[dict
     if not obsolete_unique_ids:
         return
 
-    for entity_entry in list(registry.entities.values()):
-        unique_id = str(getattr(entity_entry, "unique_id", "") or "")
-        if unique_id in obsolete_unique_ids:
-            _LOGGER.info("Removing obsolete A5-13-01 generic brightness entity %s", entity_entry.entity_id)
-            try:
-                registry.async_remove(entity_entry.entity_id)
-            except Exception:
-                _LOGGER.exception("Failed to remove obsolete entity %s", entity_entry.entity_id)
+    _remove_owned_legacy_sensor_entities(registry, entry, obsolete_unique_ids, "A5-13-01 generic brightness")
 
 
 def _remove_obsolete_fbh_temperature_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
@@ -997,15 +1073,7 @@ def _remove_obsolete_a5_04_03_generic_entities(hass, entry, devices: list[dict[s
         and normalize_platform(device.get("platform")) == "sensor"
         and normalize_eep(device.get("eep")) == "A5-04-03"
     }
-    for entity_entry in list(registry.entities.values()):
-        unique_id = str(getattr(entity_entry, "unique_id", "") or "")
-        if unique_id not in obsolete_unique_ids:
-            continue
-        try:
-            registry.async_remove(entity_entry.entity_id)
-            _LOGGER.info("Removed obsolete A5-04-03 raw-value entity %s", entity_entry.entity_id)
-        except Exception:
-            _LOGGER.exception("Failed to remove obsolete A5-04-03 entity %s", entity_entry.entity_id)
+    _remove_owned_legacy_sensor_entities(registry, entry, obsolete_unique_ids, "A5-04-03 raw-value")
 
 
 def _meter_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
@@ -1791,6 +1859,11 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
 
+        if key == "frw_status":
+            self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
+            self._attr_options = ["Frei", "Rauchalarm"]
+            self._attr_icon = "mdi:smoke-detector"
+
         if key in {"button_label_de", "button_position"}:
             self._attr_device_class = getattr(SensorDeviceClass, "ENUM", None)
             self._attr_options = [
@@ -1839,6 +1912,14 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
                 value = float(value)
         except (TypeError, ValueError):
             pass
+        # After migrating the former generic A5-06-01 raw sensor, its
+        # restored state can still contain a telegram such as 63-00-00-09.
+        # Never publish that string as a numeric illuminance measurement.
+        if self.key == "brightness" and is_eltako_illuminance_device(self.device_config):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return
         if self.key in {"button_label_de", "button_position"}:
             value = _normalize_rocker_position(value)
         self._value = value

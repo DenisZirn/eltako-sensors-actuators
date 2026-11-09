@@ -10,6 +10,12 @@ from typing import Any
 from pathlib import Path
 
 from .bus.decoder import decode_esp2_message
+from .device_profiles import (
+    decode_eltako_a5_06_01,
+    decode_legacy_frw_rps,
+    is_eltako_illuminance_device,
+    is_legacy_frw_device,
+)
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
 from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
 from .bus.eep_series14 import build_series14_switch_command
@@ -610,22 +616,9 @@ def _validate_fks_sv_sender_allocations(devices: list[dict[str, Any]]) -> None:
             sender_seen[sender] = (physical, group, allow_shared)
 
 
-def _serial_port_path_available(port: str) -> bool:
-    """Return whether a Linux serial path still exists.
-
-    USB hot-plug can leave a pyserial object looking open although the device
-    node disappeared. For /dev/ttyUSB* and /dev/serial/by-id/* we must treat a
-    missing path as disconnected so the gateway closes and reopens the port.
-    """
-    try:
-        if not port:
-            return False
-        path = Path(str(port))
-        if str(path).startswith("/dev/"):
-            return path.exists()
-    except Exception:
-        return True
-    return True
+# Path availability is intentionally checked by SerialTransport.open() in
+# the existing executor-backed serial I/O. Do not stat /dev paths here: this
+# module's reader, sender and entity properties run on HA's event loop.
 
 
 @dataclass(slots=True)
@@ -1066,6 +1059,23 @@ class EltakoGateway:
             decoded["temperature"] = round((db1 / 255.0) * 50.0, 1)
             decoded["temperature_raw"] = db1
             decoded["telegram_type"] = "fbht_motion_brightness_temperature"
+
+        # A5-06-01 is shared by several makers. Only ELTAKO FAH/FHD60SB
+        # models use the two brightness ranges described in their manuals.
+        if device is not None and eep == "A5-06-01" and is_eltako_illuminance_device(device) and msg.org == ORG_4BS:
+            decoded.update(decode_eltako_a5_06_01(bytes(msg.body[2:6])))
+
+        # Legacy FRW smoke alarms send RPS frames matching a rocker EEP.
+        # Decode those frames only for explicitly identified FRW devices.
+        if device is not None and eep == "F6-02-01" and is_legacy_frw_device(device) and msg.org == ORG_RPS:
+            decoded.update(decode_legacy_frw_rps(msg.body[2]))
+            for rocker_key in (
+                "pressed", "button_action", "button_position", "button_label_de",
+                "button_label", "pushed_buttons", "last_action", "rocker",
+                "signal_code", "signal_code_decimal", "heating_mode",
+                "heating_mode_label", "temperature_reduction", "frost_protection",
+            ):
+                decoded.pop(rocker_key, None)
 
         decoded.setdefault("physical_sender_id", physical_sender_id)
         decoded.setdefault("logical_sender_id", logical_sender_id)
@@ -1886,10 +1896,11 @@ class EltakoGateway:
         converted back into a raw ESP2 frame. A single reader is more predictable
         and keeps FAM14/FGW14-USB traffic observable.
         """
+        # is_active() is a memory-only check. USB disconnects are detected by
+        # executor-backed SerialTransport.open()/read_frame(), whose failures
+        # trigger the existing reader retry / reconnect path.
         if self._transport is not None and self._transport.is_active():
-            if _serial_port_path_available(self.port):
-                return
-            _LOGGER.info("ELTAKO serial path disappeared, reopening transport: port=%s gateway_type=%s", self.port, self.gateway_type)
+            return
 
         if self._transport is not None:
             await self.hass.async_add_executor_job(self._transport.close)
