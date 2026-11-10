@@ -729,29 +729,46 @@ async def read_fam14_bus_base_id(
         except Exception:
             pass
 
-        lock_result = await asyncio.wait_for(locking.lock_bus(bus), timeout=4.0)
+        try:
+            lock_result = await asyncio.wait_for(locking.lock_bus(bus), timeout=8.0)
+        except asyncio.TimeoutError:
+            return {"ok": False, "stage": "lock_bus", "error": "Zeitüberschreitung beim Sperren des Series-14-Busses."}
+
         locked = lock_result == locking.LOCKED
         if not locked:
-            return {"ok": False, "error": "Series-14-Bus konnte nicht gesperrt werden."}
+            return {"ok": False, "stage": "lock_bus", "error": "Series-14-Bus konnte nicht gesperrt werden."}
 
-        fam14: FAM14 = await asyncio.wait_for(
-            create_busobject(bus=bus, id=255),
-            timeout=4.0,
-        )
+        # EEDTOY performs the FAM14 discovery without a tight per-call timeout.
+        # Real installations may need several seconds while the bus settles and
+        # device 255 answers, especially directly after switching serial owners.
+        await asyncio.sleep(0.25)
+
+        try:
+            fam14: FAM14 = await asyncio.wait_for(
+                create_busobject(bus=bus, id=255),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False, "stage": "create_busobject_255", "error": "Zeitüberschreitung beim Ansprechen des FAM14 auf Busadresse 255."}
+
         if fam14 is None:
-            return {"ok": False, "error": "FAM14 auf Busadresse 255 wurde nicht gefunden."}
+            return {"ok": False, "stage": "create_busobject_255", "error": "FAM14 auf Busadresse 255 wurde nicht gefunden."}
 
-        base_bytes = await asyncio.wait_for(
-            fam14.get_base_id_in_bytes(),
-            timeout=4.0,
-        )
+        try:
+            base_bytes = await asyncio.wait_for(
+                fam14.get_base_id_in_bytes(),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False, "stage": "get_base_id", "error": "Zeitüberschreitung beim Lesen der Base-ID vom FAM14 auf Busadresse 255."}
+
         base_id = norm_id(b2s(base_bytes))
         if not base_id or base_id == "00-00-00-00":
             return {"ok": False, "error": "FAM14 meldet keine gültige Base-ID."}
 
         return {"ok": True, "fam14_base_id": base_id}
     except asyncio.TimeoutError:
-        return {"ok": False, "error": "Zeitüberschreitung beim Lesen der FAM14-Base-ID."}
+        return {"ok": False, "stage": "unexpected_timeout", "error": "Unerwartete Zeitüberschreitung beim Lesen der FAM14-Base-ID."}
     except Exception as err:
         return {"ok": False, "error": f"{type(err).__name__}: {err}"}
     finally:
