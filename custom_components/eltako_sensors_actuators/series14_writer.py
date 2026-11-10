@@ -696,93 +696,208 @@ async def ensure_programmed_for_device(fam14_base_id_int: int, dev: Any, sender_
             log(message)
     return events
 
+def _format_fam14_base_id(value: Any) -> str:
+    """Format FAM14 Base-ID exactly like the EEDTOY detector."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return norm_id(value)
+    if isinstance(value, int):
+        raw = value.to_bytes(4, "big", signed=False)
+        return "-".join(f"{byte:02X}" for byte in raw)
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value[:4])
+        if len(raw) == 4:
+            return "-".join(f"{byte:02X}" for byte in raw)
+    if isinstance(value, list) and len(value) >= 4:
+        return "-".join(f"{int(byte) & 0xFF:02X}" for byte in value[:4])
+    return norm_id(str(value))
+
+
 async def read_fam14_bus_base_id(
     port: str,
-    baud_rate: int = 57600,
+    baud_rate: int | None = None,
 ) -> Dict[str, Any]:
-    """Read the real FAM14 bus Base-ID through bus object address 255.
+    """Detect a directly connected FAM14 and read its real bus Base-ID.
 
-    This is intentionally an explicit Series-14 bus operation. It must never
-    run in Home Assistant's startup path.
+    Mirrors EEDTOY's hardware-confirmed write-gateway detector:
+    try 57600 first, then 9600; only a transport with suppress_echo=True is
+    treated as a real FAM14 and allowed to enter the bus-lock sequence.
     """
     from eltakobus import locking
-    from eltakobus.device import FAM14, create_busobject
+    from eltakobus.device import create_busobject
     from eltakobus.serial import RS485SerialInterfaceV2
-    from eltakobus.util import b2s
 
-    bus = None
-    locked = False
-    try:
-        bus = RS485SerialInterfaceV2(
-            port,
-            baud_rate=baud_rate,
-            delay_message=0.001 if baud_rate == 57600 else 0.2,
-            auto_reconnect=False,
-        )
-        bus.start()
-        bus.is_serial_connected.wait(timeout=2)
-        if not bus.is_active():
-            return {"ok": False, "error": f"Port {port} geöffnet, aber Series-14-Bus ist nicht aktiv."}
+    candidates = [int(baud_rate)] if baud_rate else [57600, 9600]
+    attempts: list[dict[str, Any]] = []
 
+    for candidate_baud in candidates:
+        bus = None
+        locked = False
         try:
-            bus.set_callback(None)
-        except Exception:
-            pass
-
-        try:
-            lock_result = await asyncio.wait_for(locking.lock_bus(bus), timeout=8.0)
-        except asyncio.TimeoutError:
-            return {"ok": False, "stage": "lock_bus", "error": "Zeitüberschreitung beim Sperren des Series-14-Busses."}
-
-        locked = lock_result == locking.LOCKED
-        if not locked:
-            return {"ok": False, "stage": "lock_bus", "error": "Series-14-Bus konnte nicht gesperrt werden."}
-
-        # EEDTOY performs the FAM14 discovery without a tight per-call timeout.
-        # Real installations may need several seconds while the bus settles and
-        # device 255 answers, especially directly after switching serial owners.
-        await asyncio.sleep(0.25)
-
-        try:
-            fam14: FAM14 = await asyncio.wait_for(
-                create_busobject(bus=bus, id=255),
-                timeout=10.0,
+            bus = RS485SerialInterfaceV2(
+                port,
+                baud_rate=candidate_baud,
+                delay_message=0.001 if candidate_baud == 57600 else 0.2,
+                auto_reconnect=False,
             )
-        except asyncio.TimeoutError:
-            return {"ok": False, "stage": "create_busobject_255", "error": "Zeitüberschreitung beim Ansprechen des FAM14 auf Busadresse 255."}
+            bus.start()
+            bus.is_serial_connected.wait(timeout=2)
 
-        if fam14 is None:
-            return {"ok": False, "stage": "create_busobject_255", "error": "FAM14 auf Busadresse 255 wurde nicht gefunden."}
+            if not bus.is_active():
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "open",
+                        "error": "RS485Interface nicht aktiv",
+                    }
+                )
+                continue
 
-        try:
-            base_bytes = await asyncio.wait_for(
-                fam14.get_base_id_in_bytes(),
-                timeout=10.0,
-            )
-        except asyncio.TimeoutError:
-            return {"ok": False, "stage": "get_base_id", "error": "Zeitüberschreitung beim Lesen der Base-ID vom FAM14 auf Busadresse 255."}
+            suppress_echo = bool(getattr(bus, "suppress_echo", False))
+            if not suppress_echo:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "identify",
+                        "suppress_echo": False,
+                        "error": "Kein direkt angeschlossener FAM14 (suppress_echo=False)",
+                    }
+                )
+                continue
 
-        base_id = norm_id(b2s(base_bytes))
-        if not base_id or base_id == "00-00-00-00":
-            return {"ok": False, "error": "FAM14 meldet keine gültige Base-ID."}
-
-        return {"ok": True, "fam14_base_id": base_id}
-    except asyncio.TimeoutError:
-        return {"ok": False, "stage": "unexpected_timeout", "error": "Unerwartete Zeitüberschreitung beim Lesen der FAM14-Base-ID."}
-    except Exception as err:
-        return {"ok": False, "error": f"{type(err).__name__}: {err}"}
-    finally:
-        if bus is not None:
             try:
-                if locked:
-                    await asyncio.wait_for(locking.unlock_bus(bus), timeout=2.0)
+                bus.set_callback(None)
             except Exception:
                 pass
+
             try:
-                bus.stop()
-                bus.join(0.8)
-            except Exception:
-                pass
+                lock_result = await asyncio.wait_for(
+                    locking.lock_bus(bus),
+                    timeout=8.0,
+                )
+            except asyncio.TimeoutError:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "lock_bus",
+                        "suppress_echo": True,
+                        "error": "Zeitüberschreitung beim Sperren des Series-14-Busses",
+                    }
+                )
+                continue
+
+            locked = lock_result == locking.LOCKED
+            if not locked:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "lock_bus",
+                        "suppress_echo": True,
+                        "error": "Series-14-Bus konnte nicht gesperrt werden",
+                    }
+                )
+                continue
+
+            try:
+                fam14 = await asyncio.wait_for(
+                    create_busobject(bus=bus, id=255),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "create_busobject_255",
+                        "suppress_echo": True,
+                        "error": "Zeitüberschreitung beim Ansprechen von FAM14 Adresse 255",
+                    }
+                )
+                continue
+
+            if fam14 is None:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "create_busobject_255",
+                        "suppress_echo": True,
+                        "error": "FAM14 auf Busadresse 255 wurde nicht gefunden",
+                    }
+                )
+                continue
+
+            try:
+                base_value = await asyncio.wait_for(
+                    fam14.get_base_id(),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "get_base_id",
+                        "suppress_echo": True,
+                        "error": "Zeitüberschreitung beim Lesen der FAM14-Base-ID",
+                    }
+                )
+                continue
+
+            base_id = _format_fam14_base_id(base_value)
+            if not base_id or base_id == "00-00-00-00":
+                attempts.append(
+                    {
+                        "baud_rate": candidate_baud,
+                        "stage": "get_base_id",
+                        "suppress_echo": True,
+                        "error": "FAM14 meldet keine gültige Base-ID",
+                    }
+                )
+                continue
+
+            return {
+                "ok": True,
+                "fam14_base_id": base_id,
+                "baud_rate": candidate_baud,
+                "suppress_echo": True,
+                "attempts": attempts,
+            }
+        except Exception as err:
+            attempts.append(
+                {
+                    "baud_rate": candidate_baud,
+                    "stage": "exception",
+                    "error": f"{type(err).__name__}: {err}",
+                }
+            )
+        finally:
+            if bus is not None:
+                try:
+                    if locked:
+                        await asyncio.wait_for(
+                            locking.unlock_bus(bus),
+                            timeout=2.0,
+                        )
+                except Exception:
+                    pass
+                try:
+                    bus.stop()
+                    bus.join(0.8)
+                except Exception:
+                    pass
+
+    details = "; ".join(
+        f"{item.get('baud_rate')} Baud/{item.get('stage')}: {item.get('error')}"
+        for item in attempts
+    )
+    return {
+        "ok": False,
+        "stage": "detect_fam14",
+        "attempts": attempts,
+        "error": (
+            "Direkt angeschlossener FAM14 konnte nicht verifiziert werden. "
+            + (details or "Keine gültige Antwort.")
+        ),
+    }
 
 
 async def write_sender_entries(port: str, entries: list[dict[str, Any]], baud_rate: int = 57600, gateway_type: str = "fam14") -> Dict[str, Any]:
