@@ -600,6 +600,11 @@ def _extract_devices(gateway: dict[str, Any]) -> list[dict[str, Any]]:
                 "speed_count": item.get("speed_count"),
                 "rocker_positions": item.get("rocker_positions"),
                 "f2l14_mode": _clean_string(item.get("f2l14_mode")),
+                "bus_address": _clean_string(item.get("bus_address")),
+                "bus_base_id": _clean_string(item.get("bus_base_id")),
+                "sender_id_source": _clean_string(item.get("sender_id_source")),
+                "time_opens": item.get("time_opens"),
+                "time_closes": item.get("time_closes"),
                 "gateway": gateway_info,
                 "raw": _json_safe(item),
             }
