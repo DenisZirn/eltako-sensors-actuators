@@ -77,7 +77,7 @@ class EltakoManagerPanel extends HTMLElement {
     "@media(max-width:800px){.page{padding:12px}.grid,.split{grid-template-columns:1fr}h1{font-size:23px}.right{white-space:nowrap}}"
   ].join("")}
   render(){var e=this.entry(),entries=this.data?.entries||[],devices=e?.devices||[];var h="<style>"+this.style()+"</style><div class='page'>";
-    h+="<div class='top'><div><h1>ELTAKO Gerätekonfiguration</h1><div class='sub'>EEDTOY direkt in Home Assistant · "+this.esc(this.data?.beta||"0.2.0-beta.8")+" · Katalog "+this.esc(this.data?.catalog?.source_version||"?")+"</div></div><div class='actions'>";
+    h+="<div class='top'><div><h1>ELTAKO Gerätekonfiguration</h1><div class='sub'>EEDTOY direkt in Home Assistant · "+this.esc(this.data?.beta||"0.2.0-beta.9")+" · Katalog "+this.esc(this.data?.catalog?.source_version||"?")+"</div></div><div class='actions'>";
     if(entries.length){h+="<select id='entry'>";entries.forEach(x=>h+="<option value='"+this.esc(x.entry_id)+"'"+(x.entry_id===this.entryId?" selected":"")+">"+this.esc(this.gatewayShortName(x))+"</option>");h+="</select>"}
     h+="<a class='btn' href='/eltako-diagnostics'>Funk-/Bus-Diagnose</a><button id='refresh'>Aktualisieren</button></div></div>";
     if(this.message)h+="<div class='msg'>"+this.esc(this.message)+"</div>";
