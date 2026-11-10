@@ -1649,6 +1649,225 @@ async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str
 
 
 
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/assign_series14_sender_ids",
+        vol.Required("writer_entry_id"): str,
+        vol.Required("sender_entry_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_assign_series14_sender_ids(
+    hass: HomeAssistant,
+    connection,
+    msg: dict[str, Any],
+) -> None:
+    """Assign globally unique FAM-USB sender IDs to legacy/missing Series-14 rows."""
+
+    writer_entry = hass.config_entries.async_get_entry(msg["writer_entry_id"])
+    if writer_entry is None or writer_entry.domain != DOMAIN:
+        connection.send_error(
+            msg["id"],
+            "series14_gateway_missing",
+            "Das ausgewählte FAM14/FGW14-USB wurde nicht gefunden.",
+        )
+        return
+
+    writer_type, writer_base_id = _gateway_type_and_base(hass, writer_entry)
+    if writer_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+        connection.send_error(
+            msg["id"],
+            "series14_gateway_invalid",
+            "Das ausgewählte Gateway ist kein FAM14/FGW14-USB.",
+        )
+        return
+
+    sender_gateway = next(
+        (
+            item
+            for item in _fam_usb_sender_payloads(hass)
+            if item["entry_id"] == msg["sender_entry_id"]
+        ),
+        None,
+    )
+    if sender_gateway is None:
+        connection.send_error(
+            msg["id"],
+            "fam_usb_sender_missing",
+            "Das ausgewählte FAM-USB wurde nicht gefunden oder hat keine gültige Base-ID.",
+        )
+        return
+
+    fam_base_id = sender_gateway["base_id"]
+    fam_base_value = _id_to_int(fam_base_id)
+    if fam_base_value is None:
+        connection.send_error(
+            msg["id"],
+            "fam_usb_base_invalid",
+            "Die Base-ID des ausgewählten FAM-USB ist ungültig.",
+        )
+        return
+
+    # Reserve every address already used inside this FAM-USB sender pool.
+    # This is intentionally global across all config entries / FAM14 buses.
+    used: set[str] = set()
+    for device in _all_devices(hass):
+        for value in (device.get("id"), _device_option_value(device, "sender_id")):
+            normalized = _optional_normalized_id(value)
+            if normalized and _sender_id_matches_fam_usb(normalized, fam_base_id):
+                used.add(normalized)
+
+    def allocate_next() -> str:
+        for offset in range(1, 0x80):
+            candidate = _add_id_offset(fam_base_id, offset)
+            if candidate and candidate not in used:
+                used.add(candidate)
+                return candidate
+        raise ValueError("Der FAM-USB-Senderbereich mit 127 Adressen ist vollständig belegt.")
+
+    updated_entries: dict[str, list[dict[str, Any]]] = {}
+    assignments: list[dict[str, Any]] = []
+    preserved = 0
+    skipped: list[dict[str, Any]] = []
+
+    for source_entry in hass.config_entries.async_entries(DOMAIN):
+        source_data = {**source_entry.data, **source_entry.options}
+        selected_gateway = (
+            source_data.get(CONF_SELECTED_YAML_GATEWAY)
+            if isinstance(source_data.get(CONF_SELECTED_YAML_GATEWAY), dict)
+            else None
+        )
+        devices = [
+            dict(item)
+            for item in source_data.get(CONF_DEVICES) or []
+            if isinstance(item, dict)
+        ]
+        changed = False
+
+        for index, original in enumerate(devices):
+            if not _series14_device(original) or not _series14_programmable_platform(original):
+                continue
+
+            device = _canonicalize_series14_metadata(original)
+            bus_base_id = _series14_bus_base_id(device)
+
+            # Legacy rows edited through the manager gain their bus base from
+            # the currently selected Series-14 gateway. Apply the same safe
+            # canonicalization in bulk, but only to rows that live on this
+            # writer entry. Never guess another config entry's bus.
+            if not bus_base_id and source_entry.entry_id == writer_entry.entry_id and writer_base_id:
+                raw = dict(device.get("raw") or {})
+                device["bus_base_id"] = writer_base_id
+                raw["bus_base_id"] = writer_base_id
+                if selected_gateway and not device.get("gateway"):
+                    device["gateway"] = _json_value(selected_gateway)
+                device["raw"] = raw
+                bus_base_id = writer_base_id
+
+            if writer_base_id and bus_base_id and bus_base_id != writer_base_id:
+                continue
+            if not bus_base_id:
+                skipped.append(
+                    {
+                        "source_entry_id": source_entry.entry_id,
+                        "index": index,
+                        "name": str(device.get("name") or device.get("device_type") or index),
+                        "reason": "Buszuordnung fehlt",
+                    }
+                )
+                continue
+
+            current_sender = _optional_normalized_id(_device_option_value(device, "sender_id"))
+            if current_sender and _sender_id_matches_fam_usb(current_sender, fam_base_id):
+                # Keep a valid manually assigned / already migrated ID.
+                preserved += 1
+                if device != original:
+                    devices[index] = device
+                    changed = True
+                continue
+
+            try:
+                sender_id = allocate_next()
+            except ValueError as err:
+                connection.send_error(msg["id"], "fam_usb_pool_full", str(err))
+                return
+
+            sender_eep = str(_device_option_value(device, "sender_eep") or "").strip().upper()
+            device["sender_id"] = sender_id
+            device["sender_id_source"] = "auto_fam_usb"
+            raw = dict(device.get("raw") or {})
+            raw["sender"] = {"id": sender_id, "eep": sender_eep or None}
+            raw["sender_id_source"] = "auto_fam_usb"
+            device["raw"] = raw
+            devices[index] = _canonicalize_series14_metadata(device)
+            changed = True
+            assignments.append(
+                {
+                    "source_entry_id": source_entry.entry_id,
+                    "source_entry_title": source_entry.title,
+                    "index": index,
+                    "name": str(device.get("name") or device.get("device_type") or index),
+                    "old_sender_id": current_sender,
+                    "sender_id": sender_id,
+                    "bus_base_id": bus_base_id,
+                    "bus_address": _series14_bus_address(device),
+                }
+            )
+
+        if changed:
+            updated_entries[source_entry.entry_id] = devices
+
+    for entry_id, devices in updated_entries.items():
+        source_entry = hass.config_entries.async_get_entry(entry_id)
+        if source_entry is None:
+            continue
+        options = dict(source_entry.options)
+        options[CONF_DEVICES] = devices
+        options.pop(CONF_RELOAD_AFTER_SAVE, None)
+        hass.config_entries.async_update_entry(source_entry, options=options)
+
+    # Reload only after all IDs have been persisted, so the global pool cannot
+    # be allocated twice while entries are reloading one by one.
+    reload_errors: list[str] = []
+    for entry_id in updated_entries:
+        try:
+            if not await hass.config_entries.async_reload(entry_id):
+                reload_errors.append(entry_id)
+        except Exception:
+            _LOGGER.exception("Series-14 sender-ID assignment reload failed: entry=%s", entry_id)
+            reload_errors.append(entry_id)
+
+    diagnostic_event(
+        hass,
+        "series14_sender_ids_assigned",
+        sender_entry_id=sender_gateway["entry_id"],
+        sender_base_id=fam_base_id,
+        writer_entry_id=writer_entry.entry_id,
+        writer_base_id=writer_base_id,
+        assigned=len(assignments),
+        preserved=preserved,
+        skipped=len(skipped),
+    )
+
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": not reload_errors,
+            "sender_entry_id": sender_gateway["entry_id"],
+            "sender_base_id": fam_base_id,
+            "writer_entry_id": writer_entry.entry_id,
+            "writer_base_id": writer_base_id,
+            "assigned": len(assignments),
+            "preserved": preserved,
+            "skipped": _json_value(skipped),
+            "assignments": _json_value(assignments),
+            "reload_errors": reload_errors,
+        },
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/program_series14_bulk",
@@ -2096,6 +2315,7 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_apply_import)
         websocket_api.async_register_command(hass, websocket_manager_learn)
         websocket_api.async_register_command(hass, websocket_manager_learn_fts14em)
+        websocket_api.async_register_command(hass, websocket_manager_assign_series14_sender_ids)
         websocket_api.async_register_command(hass, websocket_manager_program_series14_bulk)
         websocket_api.async_register_command(hass, websocket_manager_program_device)
         websocket_api.async_register_command(hass, websocket_manager_export_yaml)
