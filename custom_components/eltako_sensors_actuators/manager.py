@@ -22,10 +22,18 @@ from .series14_writer import write_sender_entries
 from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
 
 from .const import (
+    CONF_CONNECTION_KIND,
     CONF_DEVICES,
+    CONF_GATEWAY_TYPE,
     CONF_RELOAD_AFTER_SAVE,
     CONF_SELECTED_YAML_GATEWAY,
+    CONNECTION_KIND_ENOCEAN_USB,
+    CONNECTION_KIND_RS485_BUS,
     DOMAIN,
+    GATEWAY_TYPE_AUTO,
+    GATEWAY_TYPE_FAM14,
+    GATEWAY_TYPE_FAM_USB,
+    GATEWAY_TYPE_FGW14USB,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -223,6 +231,7 @@ def _pct14_payload_for_entry(payload: dict[str, Any], data: dict[str, Any]) -> d
 def _entry_payload(hass: HomeAssistant, entry) -> dict[str, Any]:
     data = {**entry.data, **entry.options}
     gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    effective_gateway_type, effective_base_id = _gateway_type_and_base(hass, entry)
     last = getattr(gateway, "last_telegram", None) if gateway is not None else None
     last_payload = None
     if last is not None:
@@ -235,7 +244,9 @@ def _entry_payload(hass: HomeAssistant, entry) -> dict[str, Any]:
     return {
         "entry_id": entry.entry_id,
         "title": entry.title,
-        "gateway_type": data.get("gateway_type"),
+        "gateway_type": effective_gateway_type or data.get("gateway_type"),
+        "configured_gateway_type": data.get("gateway_type"),
+        "base_id": effective_base_id,
         "port": data.get("port"),
         "selected_gateway": _json_value(data.get(CONF_SELECTED_YAML_GATEWAY)),
         "devices": _json_value(data.get(CONF_DEVICES) or []),
@@ -431,10 +442,10 @@ def _series14_bus_address(device: dict[str, Any]) -> str:
     if device_value is not None and (device_value & 0xFFFFFF00) == 0:
         return device_id
 
-    if device_value is not None and _series14_device(device):
-        low_byte = device_value & 0xFF
-        if low_byte:
-            return _add_id_offset("00-00-00-00", low_byte) or ""
+    name = str(device.get("name") or "")
+    match = re.search(r"\b00-00-00-([0-9A-Fa-f]{2})\b", name)
+    if match:
+        return f"00-00-00-{match.group(1).upper()}"
 
     gateway = device.get("gateway")
     gateway_base_id = (
@@ -448,10 +459,10 @@ def _series14_bus_address(device: dict[str, Any]) -> str:
         if 0 <= offset <= 0xFF:
             return _add_id_offset("00-00-00-00", offset) or ""
 
-    name = str(device.get("name") or "")
-    match = re.search(r"\b00-00-00-([0-9A-Fa-f]{2})\b", name)
-    if match:
-        return f"00-00-00-{match.group(1).upper()}"
+    if device_value is not None and _series14_device(device):
+        low_byte = device_value & 0xFF
+        if low_byte:
+            return _add_id_offset("00-00-00-00", low_byte) or ""
     return ""
 
 
@@ -510,15 +521,93 @@ def _canonicalize_series14_metadata(device: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _optional_normalized_id(value: Any) -> str:
+    try:
+        return _normalize_id(value)
+    except ValueError:
+        return ""
+
+
+def _normalize_manager_gateway_type(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    compact = re.sub(r"[^a-z0-9]+", "", text)
+    if compact in {"famusb", "enoceanusb", "enoceanprogrammer"}:
+        return GATEWAY_TYPE_FAM_USB
+    if compact in {"fgw14usb", "fgw14", "rs485bus", "rs485"}:
+        return GATEWAY_TYPE_FGW14USB
+    if compact == "fam14":
+        return GATEWAY_TYPE_FAM14
+    if compact == "auto":
+        return GATEWAY_TYPE_AUTO
+    return text
+
+
+def _infer_fam_usb_base_from_entry(entry) -> str:
+    """Infer FAM-USB base from existing Series-14 sender IDs."""
+    data = {**entry.data, **entry.options}
+    candidates: dict[str, int] = {}
+    for device in data.get(CONF_DEVICES) or []:
+        if not isinstance(device, dict) or not _series14_device(device):
+            continue
+        sender_value = _id_to_int(_device_option_value(device, "sender_id"))
+        bus_offset = _series14_bus_offset(device)
+        if sender_value is None or bus_offset is None or not (1 <= bus_offset <= 0x7F):
+            continue
+        base_value = (sender_value - bus_offset) & 0xFFFFFFFF
+        base_id = "-".join(
+            f"{(base_value >> shift) & 0xFF:02X}"
+            for shift in (24, 16, 8, 0)
+        )
+        candidates[base_id] = candidates.get(base_id, 0) + 1
+    if not candidates:
+        return ""
+    return max(candidates.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def _gateway_type_and_base(hass: HomeAssistant, entry) -> tuple[str, str]:
+    """Resolve effective gateway type/base from runtime, selection and connection metadata."""
+    data = {**entry.data, **entry.options}
+    gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
+
+    runtime_type = _normalize_manager_gateway_type(getattr(gateway, "gateway_type", ""))
+    selected_type = _normalize_manager_gateway_type(
+        selected_gateway.get("device_type") if isinstance(selected_gateway, dict) else ""
+    )
+    configured_type = _normalize_manager_gateway_type(data.get(CONF_GATEWAY_TYPE))
+    connection_kind = str(data.get(CONF_CONNECTION_KIND) or "").strip().lower()
+
+    gateway_type = ""
+    for candidate in (runtime_type, selected_type, configured_type):
+        if candidate in {GATEWAY_TYPE_FAM_USB, GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+            gateway_type = candidate
+            break
+    if not gateway_type:
+        if connection_kind == CONNECTION_KIND_ENOCEAN_USB:
+            gateway_type = GATEWAY_TYPE_FAM_USB
+        elif connection_kind == CONNECTION_KIND_RS485_BUS:
+            gateway_type = GATEWAY_TYPE_FGW14USB
+        else:
+            gateway_type = configured_type or runtime_type or GATEWAY_TYPE_AUTO
+
+    base_id = _optional_normalized_id(
+        getattr(gateway, "base_id", None)
+        or (selected_gateway.get("base_id") if isinstance(selected_gateway, dict) else None)
+    )
+    if gateway_type == GATEWAY_TYPE_FAM_USB and not base_id:
+        base_id = _infer_fam_usb_base_from_entry(entry)
+    return gateway_type, base_id
+
+
 def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None = None):
-    """Find an active FAM14/FGW14-USB entry that can own the RS485 port."""
+    """Find an active RS485 entry usable for Series-14 memory programming."""
     candidates = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if gateway is None:
             continue
-        gateway_type = str(getattr(gateway, "gateway_type", "") or "").lower()
-        if gateway_type not in {"fam14", "fgw14usb"}:
+        gateway_type, _base_id = _gateway_type_and_base(hass, entry)
+        if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
             continue
         candidates.append((entry, gateway))
     if preferred_entry_id:
@@ -528,49 +617,17 @@ def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None =
     return candidates[0] if len(candidates) == 1 else (None, None)
 
 
-
-def _optional_normalized_id(value: Any) -> str:
-    try:
-        return _normalize_id(value)
-    except ValueError:
-        return ""
-
-
-
-def _gateway_type_and_base(hass: HomeAssistant, entry) -> tuple[str, str]:
-    data = {**entry.data, **entry.options}
-    gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
-    configured_type = str(data.get("gateway_type") or "").strip().lower()
-    selected_type = (
-        str(selected_gateway.get("device_type") or "").strip().lower()
-        if isinstance(selected_gateway, dict)
-        else ""
-    )
-    runtime_type = str(getattr(gateway, "gateway_type", "") or "").strip().lower()
-    gateway_type = runtime_type or (selected_type if configured_type == "auto" and selected_type else configured_type)
-    base_id = (
-        getattr(gateway, "base_id", None)
-        or (
-            selected_gateway.get("base_id")
-            if isinstance(selected_gateway, dict)
-            else None
-        )
-    )
-    return gateway_type, _optional_normalized_id(base_id)
-
-
 def _fam_usb_sender_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         gateway_type, base_id = _gateway_type_and_base(hass, entry)
-        if gateway_type != "fam-usb" or not base_id:
+        if gateway_type != GATEWAY_TYPE_FAM_USB or not base_id:
             continue
         result.append(
             {
                 "entry_id": entry.entry_id,
                 "title": entry.title,
-                "gateway_type": "fam-usb",
+                "gateway_type": GATEWAY_TYPE_FAM_USB,
                 "base_id": base_id,
                 "active": hass.data.get(DOMAIN, {}).get(entry.entry_id) is not None,
             }
@@ -676,25 +733,15 @@ def _series14_writer_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
         gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if gateway is None:
             continue
-        gateway_type = str(getattr(gateway, "gateway_type", "") or "").lower()
-        if gateway_type not in {"fam14", "fgw14usb"}:
+        gateway_type, base_id = _gateway_type_and_base(hass, entry)
+        if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
             continue
-        data = {**entry.data, **entry.options}
-        selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
-        base_id = (
-            getattr(gateway, "base_id", None)
-            or (
-                selected_gateway.get("base_id")
-                if isinstance(selected_gateway, dict)
-                else None
-            )
-        )
         result.append(
             {
                 "entry_id": entry.entry_id,
                 "title": entry.title,
                 "gateway_type": gateway_type,
-                "base_id": _optional_normalized_id(base_id),
+                "base_id": base_id,
                 "active": True,
             }
         )
@@ -1521,8 +1568,10 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
         return
 
     port = str(getattr(writer_gateway, "port", "") or "")
-    gateway_type = str(getattr(writer_gateway, "gateway_type", "") or "").lower()
-    if not port or gateway_type not in {"fam14", "fgw14usb"}:
+    gateway_type = _normalize_manager_gateway_type(getattr(writer_gateway, "gateway_type", ""))
+    if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+        gateway_type, _writer_base_fallback = _gateway_type_and_base(hass, writer_entry)
+    if not port or gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
         connection.send_error(
             msg["id"],
             "series14_gateway_invalid",
@@ -1778,7 +1827,7 @@ async def websocket_manager_program_device(hass: HomeAssistant, connection, msg:
 
         port = str(getattr(writer_gateway, "port", "") or "")
         gateway_type = str(getattr(writer_gateway, "gateway_type", "") or "").lower()
-        if not port or gateway_type not in {"fam14", "fgw14usb"}:
+        if not port or gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
             connection.send_error(msg["id"], "series14_gateway_invalid", "RS485-Gateway ist nicht bereit.")
             return
 
