@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import time
 from typing import Any
 import uuid
 
@@ -1504,6 +1505,109 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
     )
 
 
+def _parse_fts14em_learning_telegram(telegram) -> dict[str, Any] | None:
+    """Parse one already validated ESP2 telegram for FTS14EM E1 learning."""
+    raw = bytes(getattr(telegram, "raw", b"") or b"")
+    if len(raw) != 14:
+        return None
+    body = raw[2:13]
+    if len(body) != 11 or body[1] != 0x05:
+        return None
+    if body[3] != 0x00 or body[4] != 0x00 or body[5] != 0x00:
+        return None
+    data = body[2]
+    if data not in (0x70, 0x00):
+        return None
+    sender = body[6:10]
+    if len(sender) != 4:
+        return None
+    if sender[0] != 0x00 or sender[1] != 0x00:
+        return None
+    if sender[2] < 0x10 or sender[2] > 0x14 or sender[3] != 0x01:
+        return None
+    sender_id = "-".join(f"{value:02X}" for value in sender)
+    return {
+        "id": sender_id,
+        "pressed": data == 0x70,
+        "released": data == 0x00,
+        "data_byte3": data,
+        "rorg": "05",
+    }
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/learn_fts14em",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_learn_fts14em(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Learn an FTS14EM E1 base ID after five deliberate presses."""
+    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    gateway = hass.data.get(DOMAIN, {}).get(msg["entry_id"])
+    if entry is None or gateway is None:
+        connection.send_error(msg["id"], "entry_not_found", "ELTAKO Gateway ist nicht aktiv.")
+        return
+
+    gateway_type, _base_id = _gateway_type_and_base(hass, entry)
+    if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+        connection.send_error(
+            msg["id"],
+            "fts14em_requires_rs485",
+            "FTS14EM kann nur über FAM14/FGW14-USB am Series-14-Bus eingelernt werden.",
+        )
+        return
+
+    counts: dict[str, int] = {}
+    armed: dict[str, bool] = {}
+    last_counted_at: dict[str, float] = {}
+
+    def on_telegram(telegram) -> None:
+        parsed = _parse_fts14em_learning_telegram(telegram)
+        if parsed is None:
+            return
+
+        sender_id = parsed["id"]
+        if parsed["released"]:
+            armed[sender_id] = True
+            return
+        if not parsed["pressed"]:
+            return
+
+        now = time.monotonic()
+        if armed.get(sender_id, True) is False and now - last_counted_at.get(sender_id, 0.0) < 0.25:
+            return
+
+        armed[sender_id] = False
+        last_counted_at[sender_id] = now
+        count = counts.get(sender_id, 0) + 1
+        counts[sender_id] = count
+
+        connection.send_event(
+            msg["id"],
+            {
+                "id": sender_id,
+                "count": count,
+                "required": 5,
+                "complete": count >= 5,
+                "rorg": "05",
+                "data_byte3": "0x70",
+            },
+        )
+
+    connection.subscriptions[msg["id"]] = gateway.register_listener(on_telegram)
+    connection.send_result(
+        msg["id"],
+        {
+            "subscribed": True,
+            "required": 5,
+            "message": "Dieselbe an E1 angeschlossene Taste fünfmal drücken.",
+        },
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/learn",
@@ -1989,6 +2093,7 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_import_preview)
         websocket_api.async_register_command(hass, websocket_manager_apply_import)
         websocket_api.async_register_command(hass, websocket_manager_learn)
+        websocket_api.async_register_command(hass, websocket_manager_learn_fts14em)
         websocket_api.async_register_command(hass, websocket_manager_program_series14_bulk)
         websocket_api.async_register_command(hass, websocket_manager_program_device)
         websocket_api.async_register_command(hass, websocket_manager_export_yaml)
