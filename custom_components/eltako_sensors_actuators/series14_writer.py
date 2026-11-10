@@ -696,6 +696,78 @@ async def ensure_programmed_for_device(fam14_base_id_int: int, dev: Any, sender_
             log(message)
     return events
 
+async def read_fam14_bus_base_id(
+    port: str,
+    baud_rate: int = 57600,
+) -> Dict[str, Any]:
+    """Read the real FAM14 bus Base-ID through bus object address 255.
+
+    This is intentionally an explicit Series-14 bus operation. It must never
+    run in Home Assistant's startup path.
+    """
+    from eltakobus import locking
+    from eltakobus.device import FAM14, create_busobject
+    from eltakobus.serial import RS485SerialInterfaceV2
+    from eltakobus.util import b2s
+
+    bus = None
+    locked = False
+    try:
+        bus = RS485SerialInterfaceV2(
+            port,
+            baud_rate=baud_rate,
+            delay_message=0.001 if baud_rate == 57600 else 0.2,
+            auto_reconnect=False,
+        )
+        bus.start()
+        bus.is_serial_connected.wait(timeout=2)
+        if not bus.is_active():
+            return {"ok": False, "error": f"Port {port} geöffnet, aber Series-14-Bus ist nicht aktiv."}
+
+        try:
+            bus.set_callback(None)
+        except Exception:
+            pass
+
+        lock_result = await asyncio.wait_for(locking.lock_bus(bus), timeout=4.0)
+        locked = lock_result == locking.LOCKED
+        if not locked:
+            return {"ok": False, "error": "Series-14-Bus konnte nicht gesperrt werden."}
+
+        fam14: FAM14 = await asyncio.wait_for(
+            create_busobject(bus=bus, id=255),
+            timeout=4.0,
+        )
+        if fam14 is None:
+            return {"ok": False, "error": "FAM14 auf Busadresse 255 wurde nicht gefunden."}
+
+        base_bytes = await asyncio.wait_for(
+            fam14.get_base_id_in_bytes(),
+            timeout=4.0,
+        )
+        base_id = norm_id(b2s(base_bytes))
+        if not base_id or base_id == "00-00-00-00":
+            return {"ok": False, "error": "FAM14 meldet keine gültige Base-ID."}
+
+        return {"ok": True, "fam14_base_id": base_id}
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "Zeitüberschreitung beim Lesen der FAM14-Base-ID."}
+    except Exception as err:
+        return {"ok": False, "error": f"{type(err).__name__}: {err}"}
+    finally:
+        if bus is not None:
+            try:
+                if locked:
+                    await asyncio.wait_for(locking.unlock_bus(bus), timeout=2.0)
+            except Exception:
+                pass
+            try:
+                bus.stop()
+                bus.join(0.8)
+            except Exception:
+                pass
+
+
 async def write_sender_entries(port: str, entries: list[dict[str, Any]], baud_rate: int = 57600, gateway_type: str = "fam14") -> Dict[str, Any]:
     from eltakobus import locking
     from eltakobus.device import FAM14, create_busobject
