@@ -13,6 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.translation import async_invalidate_translations
 
 from .const import (
+    CONF_BASE_ID,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
     CONF_RELOAD_AFTER_SAVE,
@@ -72,12 +73,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry_id=entry.entry_id,
         port=data[CONF_PORT],
         gateway_type=data[CONF_GATEWAY_TYPE],
+        base_id=data.get(CONF_BASE_ID),
         devices=devices if isinstance(devices, list) else [],
         selected_gateway=data.get(CONF_SELECTED_YAML_GATEWAY) if isinstance(data.get(CONF_SELECTED_YAML_GATEWAY), dict) else None,
     )
 
     diagnostic_event(hass, "config_entry_setup", entry_id=entry.entry_id, gateway_type=data.get(CONF_GATEWAY_TYPE), port=data.get(CONF_PORT))
     await gateway.async_start()
+
+    if gateway.base_id and str(data.get(CONF_BASE_ID) or "").upper() != str(gateway.base_id).upper():
+        persisted_options = dict(entry.options)
+        persisted_options[CONF_BASE_ID] = str(gateway.base_id).upper()
+        hass.config_entries.async_update_entry(entry, options=persisted_options)
+        _LOGGER.info(
+            "Stored ELTAKO gateway Base-ID entry_id=%s base_id=%s",
+            entry.entry_id,
+            gateway.base_id,
+        )
+
     _async_ensure_gateway_device(hass, entry, gateway)
 
     # YAML imports set a one-shot reload flag. The listener clears it before
