@@ -789,22 +789,6 @@ class EltakoGateway:
             result.ok
             and result.detected_gateway_type == GATEWAY_TYPE_FAM_USB
             and not result.base_id
-        ):
-            detected_base_id = await self.hass.async_add_executor_job(
-                _read_fam_usb_base_id_sync,
-                self.port,
-            )
-            if detected_base_id:
-                result.base_id = detected_base_id
-                result.message = (
-                    "FAM-USB / EnOcean USB-Gateway erkannt. "
-                    f"Base-ID {detected_base_id} per AB-58 gelesen."
-                )
-
-        if (
-            result.ok
-            and result.detected_gateway_type == GATEWAY_TYPE_FAM_USB
-            and not result.base_id
             and not self.base_id
         ):
             recovered_base_id = _infer_fam_usb_base_id_from_devices(self._devices)
