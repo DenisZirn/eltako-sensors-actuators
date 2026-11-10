@@ -428,7 +428,7 @@ def _series14_device(device: dict[str, Any]) -> bool:
 
 def _series14_bus_address(device: dict[str, Any]) -> str:
     """Return/derive the Series-14 bus address as 00-00-00-xx."""
-    explicit = _series14_bus_address(device)
+    explicit = _optional_normalized_id(_device_option_value(device, "bus_address"))
     if explicit:
         return explicit
 
@@ -458,7 +458,7 @@ def _series14_bus_offset(device: dict[str, Any]) -> int | None:
 
 def _series14_bus_base_id(device: dict[str, Any]) -> str:
     """Return/derive the PCT14/FAM14 base ID used by a Series-14 device."""
-    explicit = _series14_bus_base_id(device)
+    explicit = _optional_normalized_id(_device_option_value(device, "bus_base_id"))
     if explicit:
         return explicit
 
@@ -473,6 +473,35 @@ def _series14_bus_base_id(device: dict[str, Any]) -> str:
         return ""
     base_value = (device_value - offset) & 0xFFFFFFFF
     return "-".join(f"{(base_value >> shift) & 0xFF:02X}" for shift in (24, 16, 8, 0))
+
+
+def _canonicalize_series14_metadata(device: dict[str, Any]) -> dict[str, Any]:
+    """Ensure every Series-14 ingress path produces the same bus metadata."""
+    if not _series14_device(device):
+        return device
+
+    result = dict(device)
+    raw = dict(result.get("raw") or {})
+
+    bus_address = _series14_bus_address(result)
+    bus_base_id = _series14_bus_base_id(result)
+
+    # Direct FAM14/FGW14 imports may expose the bus address as the device ID.
+    # In that case the selected gateway can still carry the PCT14/FAM14 base ID.
+    if not bus_base_id:
+        gateway = result.get("gateway")
+        if isinstance(gateway, dict):
+            bus_base_id = _optional_normalized_id(gateway.get("base_id"))
+
+    if bus_address:
+        result["bus_address"] = bus_address
+        raw["bus_address"] = bus_address
+    if bus_base_id:
+        result["bus_base_id"] = bus_base_id
+        raw["bus_base_id"] = bus_base_id
+
+    result["raw"] = raw
+    return result
 
 
 def _series14_writer_entry(hass: HomeAssistant, preferred_entry_id: str | None = None):
@@ -743,7 +772,7 @@ def _build_device(
         "gateway": _json_value(selected_gateway) if selected_gateway else None,
         "raw": raw,
     }
-    return device
+    return _canonicalize_series14_metadata(device)
 
 
 def _device_to_export_item(device: dict[str, Any]) -> dict[str, Any]:
@@ -751,14 +780,34 @@ def _device_to_export_item(device: dict[str, Any]) -> dict[str, Any]:
     raw["id"] = device.get("id")
     raw["eep"] = device.get("eep")
     raw["name"] = device.get("name")
-    for key in ("device_type", "device_family", "profile_key", "device_class", "area", "eltako", "teach_in_telegram"):
-        value = device.get(key)
+    canonical = _canonicalize_series14_metadata(device)
+    for key in (
+        "device_type",
+        "device_family",
+        "profile_key",
+        "device_class",
+        "area",
+        "eltako",
+        "teach_in_telegram",
+        "bus_address",
+        "bus_base_id",
+        "sender_id_source",
+        "time_opens",
+        "time_closes",
+        "stage_1_id",
+        "stage_2_id",
+        "f2l14_mode",
+        "operating_mode",
+        "id_range",
+        "channel_count",
+    ):
+        value = canonical.get(key)
         if value not in (None, "", []):
             raw[key] = value
-    if device.get("sender_id") or device.get("sender_eep"):
+    if canonical.get("sender_id") or canonical.get("sender_eep"):
         raw["sender"] = {
-            "id": device.get("sender_id"),
-            "eep": device.get("sender_eep"),
+            "id": canonical.get("sender_id"),
+            "eep": canonical.get("sender_eep"),
         }
     return {key: value for key, value in raw.items() if value not in (None, "")}
 
