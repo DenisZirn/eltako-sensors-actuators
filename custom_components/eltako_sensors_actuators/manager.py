@@ -442,6 +442,11 @@ def _series14_bus_address(device: dict[str, Any]) -> str:
     if device_value is not None and (device_value & 0xFFFFFF00) == 0:
         return device_id
 
+    if device_value is not None and _series14_device(device):
+        low_byte = device_value & 0xFF
+        if low_byte:
+            return _add_id_offset("00-00-00-00", low_byte) or ""
+
     gateway = device.get("gateway")
     gateway_base_id = (
         _optional_normalized_id(gateway.get("base_id"))
@@ -792,7 +797,20 @@ def _build_device(
     ):
         bus_offset = _series14_bus_offset(device)
         if bus_offset is not None:
-            auto_sender = _add_id_offset("00-00-B0-00", bus_offset)
+            selected_type = (
+                str(selected_gateway.get("device_type") or "").strip().lower()
+                if isinstance(selected_gateway, dict)
+                else ""
+            )
+            selected_base = (
+                _optional_normalized_id(selected_gateway.get("base_id"))
+                if isinstance(selected_gateway, dict)
+                else ""
+            )
+            if selected_type == "fam-usb" and selected_base:
+                auto_sender = _add_id_offset(selected_base, bus_offset)
+            else:
+                auto_sender = _add_id_offset("00-00-B0-00", bus_offset)
             if auto_sender:
                 device["sender_id"] = auto_sender
                 device["sender_id_source"] = "auto_series14"
