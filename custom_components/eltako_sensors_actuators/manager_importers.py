@@ -200,6 +200,7 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
             rows.append({
                 "selected": True,
                 "source": "PCT14",
+                "bus_system_id": f"pct14:{base_id}" if base_id else "",
                 "bus_base_id": base_id,
                 "profile_key": profile_key,
                 "id": selected_range["base_id"],
@@ -222,6 +223,7 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
             rows.append({
                 "selected": False,
                 "source": "PCT14",
+                "bus_system_id": f"pct14:{base_id}" if base_id else "",
                 "bus_base_id": base_id,
                 "profile_key": profile_key,
                 "id": "",
@@ -257,6 +259,7 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
             rows.append({
                 "selected": True,
                 "source": "PCT14",
+                "bus_system_id": f"pct14:{base_id}" if base_id else "",
                 "bus_base_id": base_id,
                 "profile_key": profile_key,
                 "id": stage_1,
@@ -316,6 +319,7 @@ def parse_pct14_xml(text: str, catalog: dict[str, Any]) -> dict[str, Any]:
             rows.append({
                 "selected": True,
                 "source": "PCT14",
+                "bus_system_id": f"pct14:{base_id}" if base_id else "",
                 "bus_base_id": base_id,
                 "profile_key": profile_key,
                 "id": device_id,
