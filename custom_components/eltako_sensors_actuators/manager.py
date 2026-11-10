@@ -217,17 +217,6 @@ def _pct14_payload_for_entry(payload: dict[str, Any], data: dict[str, Any]) -> d
             if stage_2_offset is not None:
                 result["stage_2_id"] = _add_id_offset(bus_base_id, stage_2_offset)
 
-        # PCT14 controller sender IDs use bus offsets B0xx. On a FAM-USB the
-        # corresponding controller address is based on the FAM-USB base ID.
-        sender_offset = bus_offset(result.get("sender_id"))
-        if sender_offset is not None and gateway_base_id:
-            # EEDTOY maps the actor channel offset, not the literal 0xB0xx,
-            # onto the radio gateway base ID.
-            actor_offset = offset
-            if actor_offset is not None:
-                translated_sender = _add_id_offset(gateway_base_id, actor_offset)
-                if translated_sender:
-                    result["sender_id"] = translated_sender
     return result
 
 
@@ -547,6 +536,139 @@ def _optional_normalized_id(value: Any) -> str:
         return ""
 
 
+
+def _gateway_type_and_base(hass: HomeAssistant, entry) -> tuple[str, str]:
+    data = {**entry.data, **entry.options}
+    gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    selected_gateway = data.get(CONF_SELECTED_YAML_GATEWAY)
+    configured_type = str(data.get("gateway_type") or "").strip().lower()
+    selected_type = (
+        str(selected_gateway.get("device_type") or "").strip().lower()
+        if isinstance(selected_gateway, dict)
+        else ""
+    )
+    runtime_type = str(getattr(gateway, "gateway_type", "") or "").strip().lower()
+    gateway_type = runtime_type or (selected_type if configured_type == "auto" and selected_type else configured_type)
+    base_id = (
+        getattr(gateway, "base_id", None)
+        or (
+            selected_gateway.get("base_id")
+            if isinstance(selected_gateway, dict)
+            else None
+        )
+    )
+    return gateway_type, _optional_normalized_id(base_id)
+
+
+def _fam_usb_sender_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        gateway_type, base_id = _gateway_type_and_base(hass, entry)
+        if gateway_type != "fam-usb" or not base_id:
+            continue
+        result.append(
+            {
+                "entry_id": entry.entry_id,
+                "title": entry.title,
+                "gateway_type": "fam-usb",
+                "base_id": base_id,
+                "active": hass.data.get(DOMAIN, {}).get(entry.entry_id) is not None,
+            }
+        )
+    return result
+
+
+def _sender_id_matches_fam_usb(sender_id: Any, base_id: Any) -> bool:
+    sender_value = _id_to_int(sender_id)
+    base_value = _id_to_int(base_id)
+    if sender_value is None or base_value is None:
+        return False
+    offset = sender_value - base_value
+    return 1 <= offset <= 0x7F
+
+
+def _fam_usb_for_sender(hass: HomeAssistant, sender_id: Any) -> dict[str, Any] | None:
+    matches = [
+        item
+        for item in _fam_usb_sender_payloads(hass)
+        if _sender_id_matches_fam_usb(sender_id, item.get("base_id"))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _all_devices(hass: HomeAssistant) -> list[dict[str, Any]]:
+    devices: list[dict[str, Any]] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        data = {**entry.data, **entry.options}
+        devices.extend(
+            dict(item)
+            for item in data.get(CONF_DEVICES) or []
+            if isinstance(item, dict)
+        )
+    return devices
+
+
+def _next_free_fam_usb_sender_id(
+    hass: HomeAssistant,
+    fam_usb_entry_id: str,
+    extra_devices: list[dict[str, Any]] | None = None,
+) -> str:
+    fam_usb = next(
+        (
+            item
+            for item in _fam_usb_sender_payloads(hass)
+            if item["entry_id"] == fam_usb_entry_id
+        ),
+        None,
+    )
+    if fam_usb is None:
+        raise ValueError("Das ausgewählte FAM-USB wurde nicht gefunden oder hat keine gültige Base-ID.")
+
+    used: set[str] = set()
+    for device in [*_all_devices(hass), *(extra_devices or [])]:
+        for value in (device.get("id"), _device_option_value(device, "sender_id")):
+            normalized = _optional_normalized_id(value)
+            if normalized:
+                used.add(normalized)
+
+    for offset in range(1, 0x80):
+        candidate = _add_id_offset(fam_usb["base_id"], offset)
+        if candidate and candidate not in used:
+            return candidate
+    raise ValueError("Der FAM-USB-Senderbereich mit 127 Adressen ist vollständig belegt.")
+
+
+def _preferred_fam_usb_entry_id(
+    hass: HomeAssistant,
+    preferred_entry_id: str | None = None,
+) -> str | None:
+    senders = _fam_usb_sender_payloads(hass)
+    if preferred_entry_id and any(item["entry_id"] == preferred_entry_id for item in senders):
+        return preferred_entry_id
+    return senders[0]["entry_id"] if len(senders) == 1 else None
+
+
+def _existing_pct14_sender(
+    devices: list[dict[str, Any]],
+    payload: dict[str, Any],
+    fam_usb_base_id: str,
+) -> str:
+    bus_system_id = str(payload.get("bus_system_id") or "")
+    bus_address = _optional_normalized_id(payload.get("bus_address") or payload.get("id"))
+    profile_key = str(payload.get("profile_key") or "")
+    for device in devices:
+        if str(_device_option_value(device, "bus_system_id") or "") != bus_system_id:
+            continue
+        if _series14_bus_address(device) != bus_address:
+            continue
+        if profile_key and str(device.get("profile_key") or "") != profile_key:
+            continue
+        sender = _optional_normalized_id(_device_option_value(device, "sender_id"))
+        if sender and _sender_id_matches_fam_usb(sender, fam_usb_base_id):
+            return sender
+    return ""
+
+
 def _series14_writer_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Return active RS485 gateways that can program Series-14 actor memory."""
     result: list[dict[str, Any]] = []
@@ -615,6 +737,9 @@ def _series14_candidate_rows(hass: HomeAssistant) -> list[dict[str, Any]]:
                 issues.append("Sender-ID fehlt")
             if not sender_eep:
                 issues.append("Sender-EEP fehlt")
+            sender_gateway = _fam_usb_for_sender(hass, sender_id)
+            if sender_id and sender_gateway is None:
+                issues.append("Sender-ID gehört zu keinem konfigurierten FAM-USB")
             rows.append(
                 {
                     "source_entry_id": entry.entry_id,
@@ -625,8 +750,12 @@ def _series14_candidate_rows(hass: HomeAssistant) -> list[dict[str, Any]]:
                     "platform": str(device.get("platform") or ""),
                     "eep": str(device.get("eep") or "").upper(),
                     "bus_address": bus_address,
+                    "bus_system_id": str(_device_option_value(device, "bus_system_id") or ""),
                     "bus_base_id": bus_base_id,
                     "sender_id": sender_id,
+                    "sender_gateway_entry_id": sender_gateway.get("entry_id") if sender_gateway else "",
+                    "sender_gateway_title": sender_gateway.get("title") if sender_gateway else "",
+                    "sender_gateway_base_id": sender_gateway.get("base_id") if sender_gateway else "",
                     "sender_eep": sender_eep,
                     "valid": not issues,
                     "issues": issues,
@@ -784,43 +913,13 @@ def _build_device(
         "time_opens": payload.get("time_opens"),
         "time_closes": payload.get("time_closes"),
         "sender_id_source": payload.get("sender_id_source"),
+        "bus_system_id": payload.get("bus_system_id"),
         "bus_address": payload.get("bus_address"),
         "bus_base_id": payload.get("bus_base_id"),
         "gateway": _json_value(selected_gateway) if selected_gateway else None,
         "raw": raw,
     }
     device = _canonicalize_series14_metadata(device)
-    if (
-        _series14_device(device)
-        and bool(profile.get("needs_sender"))
-        and not device.get("sender_id")
-    ):
-        bus_offset = _series14_bus_offset(device)
-        if bus_offset is not None:
-            selected_type = (
-                str(selected_gateway.get("device_type") or "").strip().lower()
-                if isinstance(selected_gateway, dict)
-                else ""
-            )
-            selected_base = (
-                _optional_normalized_id(selected_gateway.get("base_id"))
-                if isinstance(selected_gateway, dict)
-                else ""
-            )
-            if selected_type == "fam-usb" and selected_base:
-                auto_sender = _add_id_offset(selected_base, bus_offset)
-            else:
-                auto_sender = _add_id_offset("00-00-B0-00", bus_offset)
-            if auto_sender:
-                device["sender_id"] = auto_sender
-                device["sender_id_source"] = "auto_series14"
-                raw = dict(device.get("raw") or {})
-                raw["sender"] = {
-                    "id": auto_sender,
-                    "eep": device.get("sender_eep"),
-                }
-                raw["sender_id_source"] = "auto_series14"
-                device["raw"] = raw
     return _canonicalize_series14_metadata(device)
 
 
@@ -838,6 +937,7 @@ def _device_to_export_item(device: dict[str, Any]) -> dict[str, Any]:
         "area",
         "eltako",
         "teach_in_telegram",
+        "bus_system_id",
         "bus_address",
         "bus_base_id",
         "sender_id_source",
@@ -901,6 +1001,7 @@ async def websocket_manager_get(hass: HomeAssistant, connection, msg: dict[str, 
             "areas": sorted(areas, key=lambda item: item["name"].casefold()),
             "entries": entries,
             "series14_writers": _series14_writer_payloads(hass),
+            "series14_sender_gateways": _fam_usb_sender_payloads(hass),
             "series14_candidates": _series14_candidate_rows(hass),
             "beta": "0.2.0-beta.7",
         },
@@ -1007,6 +1108,16 @@ async def websocket_manager_save_device(hass: HomeAssistant, connection, msg: di
             payload=payload,
             selected_gateway=data.get(CONF_SELECTED_YAML_GATEWAY),
         )
+        if _series14_device(device) and bool(profile.get("needs_sender")) and not device.get("sender_id"):
+            fam_usb_entry_id = _preferred_fam_usb_entry_id(hass, entry.entry_id)
+            if fam_usb_entry_id:
+                sender_id = _next_free_fam_usb_sender_id(hass, fam_usb_entry_id, devices)
+                device["sender_id"] = sender_id
+                device["sender_id_source"] = "auto_fam_usb"
+                raw = dict(device.get("raw") or {})
+                raw["sender"] = {"id": sender_id, "eep": device.get("sender_eep")}
+                raw["sender_id_source"] = "auto_fam_usb"
+                device["raw"] = raw
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_device", str(err))
         return
@@ -1255,6 +1366,29 @@ async def websocket_manager_apply_import(hass: HomeAssistant, connection, msg: d
             errors.append(f"Zeile {row_index + 1}: Geräteprofil fehlt")
             continue
         payload = _pct14_payload_for_entry(dict(raw_row), data)
+        if str(payload.get("source") or "") == "PCT14" and bool(profile.get("needs_sender")):
+            fam_usb_entry_id = _preferred_fam_usb_entry_id(hass, entry.entry_id)
+            if fam_usb_entry_id is None:
+                skipped += 1
+                errors.append(
+                    f"{raw_row.get('name') or row_index + 1}: bei mehreren FAM-USB muss das Ziel-FAM-USB eindeutig sein"
+                )
+                continue
+            fam_usb = next(
+                item for item in _fam_usb_sender_payloads(hass)
+                if item["entry_id"] == fam_usb_entry_id
+            )
+            existing_sender = _existing_pct14_sender(
+                previous_devices,
+                payload,
+                fam_usb["base_id"],
+            )
+            payload["sender_id"] = existing_sender or _next_free_fam_usb_sender_id(
+                hass,
+                fam_usb_entry_id,
+                devices,
+            )
+            payload["sender_id_source"] = "pct14_fam_usb"
         if not payload.get("area"):
             payload["area"] = ""
         try:
@@ -1366,6 +1500,7 @@ async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str
     {
         vol.Required("type"): f"{DOMAIN}/manager/program_series14_bulk",
         vol.Required("writer_entry_id"): str,
+        vol.Required("sender_entry_id"): str,
         vol.Required("targets"): list,
     }
 )
@@ -1392,6 +1527,22 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
             msg["id"],
             "series14_gateway_invalid",
             "Das ausgewählte RS485-Gateway ist nicht bereit.",
+        )
+        return
+
+    sender_gateway = next(
+        (
+            item
+            for item in _fam_usb_sender_payloads(hass)
+            if item["entry_id"] == msg["sender_entry_id"]
+        ),
+        None,
+    )
+    if sender_gateway is None:
+        connection.send_error(
+            msg["id"],
+            "fam_usb_sender_missing",
+            "Das ausgewählte FAM-USB wurde nicht gefunden oder hat keine gültige Base-ID.",
         )
         return
 
@@ -1438,6 +1589,11 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
             continue
 
         expected_base = _optional_normalized_id(row.get("expected_bus_base_id"))
+        if not _sender_id_matches_fam_usb(row.get("sender_id"), sender_gateway["base_id"]):
+            validation_errors.append(
+                f"{device.get('name') or index}: Sender-ID {row.get('sender_id')} gehört nicht zum FAM-USB {sender_gateway['title']}"
+            )
+            continue
         if writer_base_id and expected_base and writer_base_id != expected_base:
             validation_errors.append(
                 f"{device.get('name') or index}: gehört zu FAM14 {expected_base}, ausgewählt ist {writer_base_id}"
@@ -1480,6 +1636,9 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
         writer_entry_id=writer_entry.entry_id,
         writer_title=writer_entry.title,
         writer_base_id=writer_base_id,
+        sender_entry_id=sender_gateway["entry_id"],
+        sender_title=sender_gateway["title"],
+        sender_base_id=sender_gateway["base_id"],
         target_count=len(writer_rows),
         targets=selected_devices,
     )
@@ -1564,6 +1723,9 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
             "ok": True,
             "writer_entry_id": writer_entry.entry_id,
             "writer_title": writer_entry.title,
+            "sender_entry_id": sender_gateway["entry_id"],
+            "sender_title": sender_gateway["title"],
+            "sender_base_id": sender_gateway["base_id"],
             "fam14_base_id": result.get("fam14_base_id"),
             "counts": _json_value(result.get("counts") or {}),
             "results": _json_value(device_results),
