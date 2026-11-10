@@ -714,18 +714,45 @@ def _format_fam14_base_id(value: Any) -> str:
     return norm_id(str(value))
 
 
+async def _best_effort_bus_unlock(bus: Any) -> None:
+    """Release the Series-14 bus without waiting for an acknowledgement.
+
+    EEDTOY's explicit "Gateway trennen" path sends the raw bus-unlock frame
+    and closes the port without requiring a reply. This is important after a
+    lock request whose acknowledgement was lost: the FAM14 may already have
+    taken control of the bus even though lock_bus() did not return LOCKED.
+    """
+    try:
+        from eltakobus.message import EltakoBusUnlock
+
+        base_exchange = getattr(bus, "base_exchange", None)
+        if callable(base_exchange):
+            await base_exchange(EltakoBusUnlock())
+            await asyncio.sleep(0.25)
+            return
+
+        sender = getattr(bus, "_send", None)
+        if callable(sender):
+            sender(EltakoBusUnlock())
+            await asyncio.sleep(0.25)
+    except Exception:
+        return
+
+
 async def read_fam14_bus_base_id(
     port: str,
     baud_rate: int | None = None,
 ) -> Dict[str, Any]:
     """Detect a directly connected FAM14 and read its real bus Base-ID.
 
-    Mirrors EEDTOY's hardware-confirmed write-gateway detector:
-    try 57600 first, then 9600; only a transport with suppress_echo=True is
-    treated as a real FAM14 and allowed to enter the bus-lock sequence.
+    Match EEDTOY's write path: 57600 first, then 9600, require FAM14 echo
+    behaviour, try to lock the bus, but do not treat a missing lock ACK as a
+    fatal error. A FAM14 can already have taken the bus even when the ACK is
+    lost. The authoritative check is whether memory row 1 at address 255 can
+    actually be read.
     """
     from eltakobus import locking
-    from eltakobus.device import create_busobject
+    from eltakobus.message import EltakoMemoryRequest, EltakoMemoryResponse
     from eltakobus.serial import RS485SerialInterfaceV2
 
     candidates = [int(baud_rate)] if baud_rate else [57600, 9600]
@@ -733,7 +760,7 @@ async def read_fam14_bus_base_id(
 
     for candidate_baud in candidates:
         bus = None
-        locked = False
+        lock_state = ""
         try:
             bus = RS485SerialInterfaceV2(
                 port,
@@ -771,85 +798,53 @@ async def read_fam14_bus_base_id(
             except Exception:
                 pass
 
+            # Recover from a previous interrupted/half-acknowledged lock first.
+            await _best_effort_bus_unlock(bus)
+
             try:
                 lock_result = await asyncio.wait_for(
                     locking.lock_bus(bus),
                     timeout=8.0,
                 )
+                lock_state = str(lock_result)
             except asyncio.TimeoutError:
-                attempts.append(
-                    {
-                        "baud_rate": candidate_baud,
-                        "stage": "lock_bus",
-                        "suppress_echo": True,
-                        "error": "Zeitüberschreitung beim Sperren des Series-14-Busses",
-                    }
-                )
-                continue
+                # Do not abort here. The FAM14 can visibly take over the bus
+                # while the lock acknowledgement is lost. EEDTOY's writer also
+                # continues when lock_bus() did not return LOCKED.
+                lock_state = "timeout_no_ack"
 
-            locked = lock_result == locking.LOCKED
-            if not locked:
-                attempts.append(
-                    {
-                        "baud_rate": candidate_baud,
-                        "stage": "lock_bus",
-                        "suppress_echo": True,
-                        "error": "Series-14-Bus konnte nicht gesperrt werden",
-                    }
-                )
-                continue
-
+            # Read the FAM14 Base-ID exactly from memory row 1 at address 255.
+            # This is the authoritative proof that the direct FAM14 bus access
+            # is actually working.
             try:
-                fam14 = await asyncio.wait_for(
-                    create_busobject(bus=bus, id=255),
-                    timeout=10.0,
+                response = await bus.exchange(
+                    EltakoMemoryRequest(255, 1),
+                    EltakoMemoryResponse,
+                    retries=3,
+                    timeout=1.5,
                 )
-            except asyncio.TimeoutError:
+            except Exception as err:
                 attempts.append(
                     {
                         "baud_rate": candidate_baud,
-                        "stage": "create_busobject_255",
+                        "stage": "memory_row_1",
                         "suppress_echo": True,
-                        "error": "Zeitüberschreitung beim Ansprechen von FAM14 Adresse 255",
+                        "lock_state": lock_state,
+                        "error": f"{type(err).__name__}: {err}",
                     }
                 )
                 continue
 
-            if fam14 is None:
-                attempts.append(
-                    {
-                        "baud_rate": candidate_baud,
-                        "stage": "create_busobject_255",
-                        "suppress_echo": True,
-                        "error": "FAM14 auf Busadresse 255 wurde nicht gefunden",
-                    }
-                )
-                continue
-
-            try:
-                base_value = await asyncio.wait_for(
-                    fam14.get_base_id(),
-                    timeout=10.0,
-                )
-            except asyncio.TimeoutError:
-                attempts.append(
-                    {
-                        "baud_rate": candidate_baud,
-                        "stage": "get_base_id",
-                        "suppress_echo": True,
-                        "error": "Zeitüberschreitung beim Lesen der FAM14-Base-ID",
-                    }
-                )
-                continue
-
-            base_id = _format_fam14_base_id(base_value)
+            value = bytes(getattr(response, "value", b"") or b"")
+            base_id = _format_fam14_base_id(value[:4])
             if not base_id or base_id == "00-00-00-00":
                 attempts.append(
                     {
                         "baud_rate": candidate_baud,
-                        "stage": "get_base_id",
+                        "stage": "memory_row_1",
                         "suppress_echo": True,
-                        "error": "FAM14 meldet keine gültige Base-ID",
+                        "lock_state": lock_state,
+                        "error": "FAM14 Speicherzeile 1 enthält keine gültige Base-ID",
                     }
                 )
                 continue
@@ -859,6 +854,7 @@ async def read_fam14_bus_base_id(
                 "fam14_base_id": base_id,
                 "baud_rate": candidate_baud,
                 "suppress_echo": True,
+                "lock_state": lock_state,
                 "attempts": attempts,
             }
         except Exception as err:
@@ -866,17 +862,16 @@ async def read_fam14_bus_base_id(
                 {
                     "baud_rate": candidate_baud,
                     "stage": "exception",
+                    "lock_state": lock_state,
                     "error": f"{type(err).__name__}: {err}",
                 }
             )
         finally:
             if bus is not None:
+                # Always release the bus, even when the lock acknowledgement
+                # was lost or the probe was cancelled halfway through.
                 try:
-                    if locked:
-                        await asyncio.wait_for(
-                            locking.unlock_bus(bus),
-                            timeout=2.0,
-                        )
+                    await _best_effort_bus_unlock(bus)
                 except Exception:
                     pass
                 try:
@@ -887,6 +882,7 @@ async def read_fam14_bus_base_id(
 
     details = "; ".join(
         f"{item.get('baud_rate')} Baud/{item.get('stage')}: {item.get('error')}"
+        + (f" [lock={item.get('lock_state')}]" if item.get("lock_state") else "")
         for item in attempts
     )
     return {
@@ -927,6 +923,7 @@ async def write_sender_entries(port: str, entries: list[dict[str, Any]], baud_ra
         except Exception:
             pass
 
+        await _best_effort_bus_unlock(bus)
         locked = (await locking.lock_bus(bus)) == locking.LOCKED
         log("bus locked", locked)
 
@@ -985,9 +982,8 @@ async def write_sender_entries(port: str, entries: list[dict[str, Any]], baud_ra
     finally:
         if bus is not None:
             try:
-                if locked:
-                    await locking.unlock_bus(bus)
-                    log("bus unlocked")
+                await _best_effort_bus_unlock(bus)
+                log("bus unlocked")
             except Exception as e:
                 log("unlock failed", repr(e))
             try:
