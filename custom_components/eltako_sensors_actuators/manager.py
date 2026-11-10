@@ -442,6 +442,18 @@ def _series14_bus_address(device: dict[str, Any]) -> str:
     if device_value is not None and (device_value & 0xFFFFFF00) == 0:
         return device_id
 
+    gateway = device.get("gateway")
+    gateway_base_id = (
+        _optional_normalized_id(gateway.get("base_id"))
+        if isinstance(gateway, dict)
+        else ""
+    )
+    gateway_base_value = _id_to_int(gateway_base_id)
+    if device_value is not None and gateway_base_value is not None:
+        offset = device_value - gateway_base_value
+        if 0 <= offset <= 0xFF:
+            return _add_id_offset("00-00-00-00", offset) or ""
+
     name = str(device.get("name") or "")
     match = re.search(r"\b00-00-00-([0-9A-Fa-f]{2})\b", name)
     if match:
@@ -772,6 +784,25 @@ def _build_device(
         "gateway": _json_value(selected_gateway) if selected_gateway else None,
         "raw": raw,
     }
+    device = _canonicalize_series14_metadata(device)
+    if (
+        _series14_device(device)
+        and bool(profile.get("needs_sender"))
+        and not device.get("sender_id")
+    ):
+        bus_offset = _series14_bus_offset(device)
+        if bus_offset is not None:
+            auto_sender = _add_id_offset("00-00-B0-00", bus_offset)
+            if auto_sender:
+                device["sender_id"] = auto_sender
+                device["sender_id_source"] = "auto_series14"
+                raw = dict(device.get("raw") or {})
+                raw["sender"] = {
+                    "id": auto_sender,
+                    "eep": device.get("sender_eep"),
+                }
+                raw["sender_id_source"] = "auto_series14"
+                device["raw"] = raw
     return _canonicalize_series14_metadata(device)
 
 
