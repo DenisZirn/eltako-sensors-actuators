@@ -234,17 +234,17 @@ class EltakoManagerPanel extends HTMLElement {
       writer_entry_id:writers.length===1?writers[0].entry_id:"",
       sender_entry_id:senders.length===1?senders[0].entry_id:"",
       selected:new Set(candidates.filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index)),
+      fam14_base_id:"",
       result:null,busy:false
     };
     this.render();
   }
   series14RowsForSelection(){
     var d=this.series14Dialog;if(!d)return [];
-    var writer=(this.data?.series14_writers||[]).find(x=>x.entry_id===d.writer_entry_id);
     var sender=(this.data?.series14_sender_gateways||[]).find(x=>x.entry_id===d.sender_entry_id);
-    var writerBase=String(writer?.base_id||"").toUpperCase();
+    var fam14Base=String(d.fam14_base_id||"").toUpperCase();
     return (this.data?.series14_candidates||[]).filter(row=>{
-      var busOk=!writerBase||!row.bus_base_id||String(row.bus_base_id).toUpperCase()===writerBase;
+      var busOk=!fam14Base||!row.bus_base_id||String(row.bus_base_id).toUpperCase()===fam14Base;
       var senderOk=!sender||!row.sender_gateway_entry_id||row.sender_gateway_entry_id===sender.entry_id;
       return busOk&&senderOk;
     });
@@ -252,19 +252,19 @@ class EltakoManagerPanel extends HTMLElement {
   renderSeries14Dialog(){
     var d=this.series14Dialog,writers=this.data?.series14_writers||[],senders=this.data?.series14_sender_gateways||[],rows=this.series14RowsForSelection();
     var h="<div class='modal-bg' id='series14-backdrop'><div class='modal' style='width:min(1050px,100%)'><h2>IDs in zentrale Aktoren schreiben</h2>";
-    h+="<p class='muted'>Das FAM-USB bestimmt die Home-Assistant-Sender-IDs. Das FAM14/FGW14-USB bestimmt nur, auf welchen Series-14-Bus geschrieben wird.</p>";
+    h+="<p class='muted'>Das FAM-USB liefert die Home-Assistant-Sender-IDs. FAM14/FGW14-USB ist der Schreibzugang zum Series-14-Bus. Die echte Bus-Base-ID wird separat direkt vom FAM14 auf Adresse 255 gelesen.</p>";
     h+="<div class='split'>";
     h+="<label>FAM-USB für HA-Sender<select id='series14-sender'><option value=''>FAM-USB auswählen …</option>";
     senders.forEach(g=>h+="<option value='"+this.esc(g.entry_id)+"'"+(g.entry_id===d.sender_entry_id?" selected":"")+">"+this.esc(g.title||"FAM-USB")+"</option>");
     h+="</select></label>";
-    h+="<label>FAM14 / FGW14-USB zum Schreiben<select id='series14-writer'><option value=''>Bus-Gateway auswählen …</option>";
+    h+="<label>Series-14-Schreibzugang<select id='series14-writer'><option value=''>FAM14 / FGW14-USB auswählen …</option>";
     writers.forEach(w=>h+="<option value='"+this.esc(w.entry_id)+"'"+(w.entry_id===d.writer_entry_id?" selected":"")+">"+this.esc(w.title||w.gateway_type)+"</option>");
     h+="</select></label></div>";
     if(!senders.length)h+="<div class='msg warn'>Kein FAM-USB mit gültiger Base-ID gefunden.</div>";
     if(!writers.length)h+="<div class='msg warn'>Kein aktives FAM14/FGW14-USB gefunden.</div>";
     if(d.writer_entry_id&&d.sender_entry_id){
       var writer=writers.find(w=>w.entry_id===d.writer_entry_id),sender=senders.find(g=>g.entry_id===d.sender_entry_id);
-      h+="<div class='bulk-summary'><span class='badge'>FAM-USB Base-ID: "+this.esc(sender?.base_id||"unbekannt")+"</span><span class='badge'>FAM14 Base-ID: "+this.esc(writer?.base_id||"unbekannt")+"</span><span class='badge'>"+rows.length+" passende Aktoren</span></div>";
+      h+="<div class='bulk-summary'><span class='badge'>FAM-USB Base-ID: "+this.esc(sender?.base_id||"unbekannt")+"</span><span class='badge'>FAM14 Bus-Base-ID: "+this.esc(d.fam14_base_id||"noch nicht geprüft")+"</span><span class='badge'>"+rows.length+" passende Aktoren</span></div>";
       h+="<div class='scroll'><table><thead><tr><th>✓</th><th>Aktor</th><th>Busadresse</th><th>HA-Sender-ID</th><th>Sender-EEP</th><th>Status</th></tr></thead><tbody>";
       rows.forEach(row=>{
         var key=row.source_entry_id+":"+row.index,checked=d.selected.has(key),senderMatches=!row.sender_gateway_entry_id||row.sender_gateway_entry_id===d.sender_entry_id,disabled=!row.valid||!senderMatches;
@@ -275,7 +275,7 @@ class EltakoManagerPanel extends HTMLElement {
       h+="</tbody></table></div>";
       if(d.result){var counts=d.result.counts||{};h+="<div class='msg'>Ergebnis: "+(counts.updated||0)+" geschrieben · "+(counts.exists||0)+" bereits vorhanden · "+(counts.unsupported||0)+" nicht unterstützt · "+(counts.error||0)+" Fehler</div>";}
     }
-    h+="<div class='footer'><button id='series14-cancel'>Schließen</button><button id='series14-assign' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">Sender-IDs automatisch zuweisen</button><button id='series14-write' class='primary' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">"+(d.busy?"Arbeite …":"Ausgewählte IDs schreiben")+"</button></div></div></div>";
+    h+="<div class='footer'><button id='series14-cancel'>Schließen</button><button id='series14-check-bus' "+(!d.writer_entry_id||d.busy?"disabled":"")+">FAM14-Bus prüfen</button><button id='series14-assign' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">Sender-IDs automatisch zuweisen</button><button id='series14-write' class='primary' "+(!d.writer_entry_id||!d.sender_entry_id||!d.fam14_base_id||d.busy?"disabled":"")+">"+(d.busy?"Arbeite …":"Ausgewählte IDs schreiben")+"</button></div></div></div>";
     return h;
   }
   syncSeries14Selection(){
@@ -284,6 +284,22 @@ class EltakoManagerPanel extends HTMLElement {
       if(cb.checked)this.series14Dialog.selected.add(cb.dataset.series14Target);
       else this.series14Dialog.selected.delete(cb.dataset.series14Target);
     });
+  }
+  async checkSeries14Bus(){
+    var d=this.series14Dialog;if(!d||!d.writer_entry_id)return;
+    d.busy=true;d.result=null;d.fam14_base_id="";this.render();
+    try{
+      var res=await this._hass.callWS({
+        type:DOMAIN+"/manager/read_series14_bus_base_id",
+        writer_entry_id:d.writer_entry_id
+      });
+      d.fam14_base_id=String(res.fam14_base_id||"").toUpperCase();
+      d.selected=new Set(this.series14RowsForSelection().filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index));
+      this.message="FAM14-Bus erkannt: "+d.fam14_base_id;
+    }catch(err){
+      this.message="FAM14-Bus konnte nicht geprüft werden: "+(err?.message||err);
+    }
+    d.busy=false;this.render();
   }
   async assignSeries14SenderIds(){
     var d=this.series14Dialog;if(!d||!d.writer_entry_id||!d.sender_entry_id)return;
@@ -301,9 +317,11 @@ class EltakoManagerPanel extends HTMLElement {
       this.series14Dialog={
         writer_entry_id:writers.some(x=>x.entry_id===d.writer_entry_id)?d.writer_entry_id:(writers.length===1?writers[0].entry_id:""),
         sender_entry_id:senders.some(x=>x.entry_id===d.sender_entry_id)?d.sender_entry_id:(senders.length===1?senders[0].entry_id:""),
-        selected:new Set((this.data?.series14_candidates||[]).filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index)),
+        fam14_base_id:String(res.writer_base_id||"").toUpperCase(),
+        selected:new Set(),
         result:null,busy:false
       };
+      this.series14Dialog.selected=new Set(this.series14RowsForSelection().filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index));
     }catch(err){
       d.busy=false;
       this.message="Sender-IDs konnten nicht automatisch zugewiesen werden: "+(err?.message||err);
@@ -318,6 +336,7 @@ class EltakoManagerPanel extends HTMLElement {
     d.busy=true;d.result=null;this.render();
     try{
       d.result=await this._hass.callWS({type:DOMAIN+"/manager/program_series14_bulk",writer_entry_id:d.writer_entry_id,sender_entry_id:d.sender_entry_id,targets});
+      if(d.result?.fam14_base_id)d.fam14_base_id=String(d.result.fam14_base_id).toUpperCase();
       this.message="Series-14-Programmierung abgeschlossen.";
     }catch(err){this.message="Series-14-Programmierung fehlgeschlagen: "+(err?.message||err)}
     d.busy=false;this.render();
@@ -347,7 +366,7 @@ class EltakoManagerPanel extends HTMLElement {
     x=r.getElementById("search");if(x)x.onchange=e=>{this.search=e.target.value;this.render()};x=r.getElementById("group");if(x)x.onchange=e=>{this.group=e.target.value;this.render()};
     r.getElementById("learn-start")?.addEventListener("click",()=>this.startLearning());r.getElementById("learn-stop")?.addEventListener("click",()=>this.stopLearning());r.getElementById("learn-clear")?.addEventListener("click",()=>{this.learnEvents=[];this.render()});r.querySelectorAll("[data-learn-add]").forEach(b=>b.onclick=()=>{var ev=this.learnEvents[Number(b.dataset.learnAdd)],best=b.dataset.best||"";this.openAdd(best,ev?.physical_sender_id||ev?.sender_id||"")});
     r.getElementById("import-file")?.addEventListener("change",async e=>{var f=e.target.files?.[0];if(f){this.importFilename=f.name;this.importText=await f.text();this.render()}});r.getElementById("import-preview")?.addEventListener("click",()=>this.previewImport());r.getElementById("import-cancel")?.addEventListener("click",()=>{this.preview=null;this.render()});r.getElementById("import-apply")?.addEventListener("click",()=>this.applyImport());
-    r.getElementById("series14-sender")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.sender_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.getElementById("series14-writer")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.writer_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.querySelectorAll("[data-series14-target]").forEach(cb=>cb.onchange=()=>this.syncSeries14Selection());r.getElementById("series14-assign")?.addEventListener("click",()=>this.assignSeries14SenderIds());r.getElementById("series14-write")?.addEventListener("click",()=>this.writeSeries14Bulk());r.getElementById("series14-cancel")?.addEventListener("click",()=>{this.series14Dialog=null;this.render()});r.getElementById("series14-backdrop")?.addEventListener("click",e=>{if(e.target.id==="series14-backdrop"&&!this.series14Dialog?.busy){this.series14Dialog=null;this.render()}});r.getElementById("profile-cancel")?.addEventListener("click",()=>{this.profileEditing=null;this.render()});r.getElementById("profile-backdrop")?.addEventListener("click",e=>{if(e.target.id==="profile-backdrop"){this.profileEditing=null;this.render()}});r.getElementById("profile-save")?.addEventListener("click",()=>this.saveProfile());r.getElementById("cancel")?.addEventListener("click",()=>{this.stopFts14emLearning();this.fts14emLearnProgress=null;this.editing=null;this.render()});r.getElementById("backdrop")?.addEventListener("click",e=>{if(e.target.id==="backdrop"){this.editing=null;this.render()}});r.getElementById("f-profile")?.addEventListener("change",e=>{var old=this.editing||{},p=this.profile(e.target.value);this.editing=Object.assign({},old,{profile_key:e.target.value,device_class:p?.default_dc||"",sender_eep:p?.sender_eep||"",name:old.name||p?.device_type||""});this.render()});r.getElementById("use-last")?.addEventListener("click",()=>{var f=r.getElementById("f-id");if(f)f.value=this.entry()?.last_telegram?.sender_id||""});r.getElementById("save")?.addEventListener("click",()=>this.save());r.getElementById("export")?.addEventListener("click",()=>this.exportYaml());r.getElementById("copy")?.addEventListener("click",async()=>{var y=r.getElementById("yaml");if(y?.value){await navigator.clipboard.writeText(y.value);this.message="YAML kopiert.";this.render()}});
+    r.getElementById("series14-sender")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.sender_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.getElementById("series14-writer")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.writer_entry_id=e.target.value;this.series14Dialog.fam14_base_id="";this.series14Dialog.result=null;this.render()});r.querySelectorAll("[data-series14-target]").forEach(cb=>cb.onchange=()=>this.syncSeries14Selection());r.getElementById("series14-check-bus")?.addEventListener("click",()=>this.checkSeries14Bus());r.getElementById("series14-assign")?.addEventListener("click",()=>this.assignSeries14SenderIds());r.getElementById("series14-write")?.addEventListener("click",()=>this.writeSeries14Bulk());r.getElementById("series14-cancel")?.addEventListener("click",()=>{this.series14Dialog=null;this.render()});r.getElementById("series14-backdrop")?.addEventListener("click",e=>{if(e.target.id==="series14-backdrop"&&!this.series14Dialog?.busy){this.series14Dialog=null;this.render()}});r.getElementById("profile-cancel")?.addEventListener("click",()=>{this.profileEditing=null;this.render()});r.getElementById("profile-backdrop")?.addEventListener("click",e=>{if(e.target.id==="profile-backdrop"){this.profileEditing=null;this.render()}});r.getElementById("profile-save")?.addEventListener("click",()=>this.saveProfile());r.getElementById("cancel")?.addEventListener("click",()=>{this.stopFts14emLearning();this.fts14emLearnProgress=null;this.editing=null;this.render()});r.getElementById("backdrop")?.addEventListener("click",e=>{if(e.target.id==="backdrop"){this.editing=null;this.render()}});r.getElementById("f-profile")?.addEventListener("change",e=>{var old=this.editing||{},p=this.profile(e.target.value);this.editing=Object.assign({},old,{profile_key:e.target.value,device_class:p?.default_dc||"",sender_eep:p?.sender_eep||"",name:old.name||p?.device_type||""});this.render()});r.getElementById("use-last")?.addEventListener("click",()=>{var f=r.getElementById("f-id");if(f)f.value=this.entry()?.last_telegram?.sender_id||""});r.getElementById("save")?.addEventListener("click",()=>this.save());r.getElementById("export")?.addEventListener("click",()=>this.exportYaml());r.getElementById("copy")?.addEventListener("click",async()=>{var y=r.getElementById("yaml");if(y?.value){await navigator.clipboard.writeText(y.value);this.message="YAML kopiert.";this.render()}});
   }
 }
 customElements.define("eltako-manager-panel",EltakoManagerPanel);
