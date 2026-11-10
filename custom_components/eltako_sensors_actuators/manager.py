@@ -23,6 +23,7 @@ from .series14_writer import write_sender_entries
 from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
 
 from .const import (
+    CONF_BASE_ID,
     CONF_CONNECTION_KIND,
     CONF_DEVICES,
     CONF_GATEWAY_TYPE,
@@ -593,6 +594,7 @@ def _gateway_type_and_base(hass: HomeAssistant, entry) -> tuple[str, str]:
 
     base_id = _optional_normalized_id(
         getattr(gateway, "base_id", None)
+        or data.get(CONF_BASE_ID)
         or (selected_gateway.get("base_id") if isinstance(selected_gateway, dict) else None)
     )
     if gateway_type == GATEWAY_TYPE_FAM_USB and not base_id:
