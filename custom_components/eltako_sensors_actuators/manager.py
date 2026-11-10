@@ -1671,6 +1671,10 @@ async def _async_read_writer_fam14_base_id(
         return {"ok": False, "error": "Das ausgewählte RS485-Gateway ist nicht bereit."}
 
     await writer_gateway.async_stop()
+    # serialx read_frame() runs in an executor and may outlive task cancellation
+    # for one bounded read interval. Give the FTDI device a short deterministic
+    # handover window before eltakobus opens the same port.
+    await __import__("asyncio").sleep(0.35)
     try:
         return await hass.async_add_executor_job(
             lambda: __import__("asyncio").run(
@@ -2125,6 +2129,7 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
     )
 
     await writer_gateway.async_stop()
+    await __import__("asyncio").sleep(0.35)
     try:
         result = await hass.async_add_executor_job(
             lambda: __import__("asyncio").run(
