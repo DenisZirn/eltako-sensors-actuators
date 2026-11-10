@@ -1,8 +1,21 @@
 # ELTAKO Sensors & Actuators
 
+<div align="center">
+
+[![HACS](https://img.shields.io/badge/HACS-Custom-007EC6)](https://github.com/DenisZirn/eltako-sensors-actuators#schnellstart)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-41BDF5)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
+[![Release](https://img.shields.io/github/v/release/DenisZirn/eltako-sensors-actuators?label=release&color=blue&cacheSeconds=300)](https://github.com/DenisZirn/eltako-sensors-actuators/releases/latest)
+[![License](https://img.shields.io/github/license/DenisZirn/eltako-sensors-actuators)](LICENSE)
+[![Documentation](https://img.shields.io/badge/Documentation-Guides-1F6FEB?logo=readthedocs&logoColor=white)](docs/README.md)
+
+[![Generic badge](https://img.shields.io/badge/SUPPORT_THIS_PROJECT-PayPal.me-27ae60.svg)]([https://paypal.me/grimmpp](https://www.paypal.me/DenisZirnb))
+
+
+</div>
+
 <!-- ha-marketplace:exclude-start -->
 [![Open in Home Assistant Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration)
-[![Open Documentation](https://img.shields.io/badge/Documentation-Read%20the%20Guides-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/README.md)
+
 <!-- ha-marketplace:exclude-end -->
 
 **Unabhängige Home-Assistant-Integration für kompatible ELTAKO-EnOcean-Sensoren und -Aktoren.** Lokale Kommunikation über **FAM-USB** (Funk) und **FGW14-USB / FAM14** (Serie-14-Bus), ohne Cloud-Zwang.
@@ -23,7 +36,7 @@ Die Konfiguration wird über den Integrationsdialog importiert und **nicht in `c
 
 ## Dokumentation
 
-**[📚 Zur vollständigen Dokumentation](docs/README.md)**
+[![Open Documentation](https://img.shields.io/badge/Documentation-Read%20the%20Guides-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/README.md)
 
 | Anleitung | Themen |
 | --- | --- |
