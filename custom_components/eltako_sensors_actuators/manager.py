@@ -1678,7 +1678,7 @@ async def _async_read_writer_fam14_base_id(
     try:
         return await hass.async_add_executor_job(
             lambda: __import__("asyncio").run(
-                read_fam14_bus_base_id(port, baud_rate=57600)
+                read_fam14_bus_base_id(port, baud_rate=None)
             )
         )
     except Exception as err:
@@ -1746,6 +1746,7 @@ async def websocket_manager_read_series14_bus_base_id(
             "writer_entry_id": writer_entry.entry_id,
             "writer_title": writer_entry.title,
             "fam14_base_id": base_id,
+            "baud_rate": result.get("baud_rate"),
         },
     )
 
@@ -1970,6 +1971,7 @@ async def websocket_manager_assign_series14_sender_ids(
             "sender_base_id": fam_base_id,
             "writer_entry_id": writer_entry.entry_id,
             "writer_base_id": writer_base_id,
+            "writer_baud_rate": bus_probe.get("baud_rate"),
             "assigned": len(assignments),
             "preserved": preserved,
             "skipped": _json_value(skipped),
@@ -2109,6 +2111,34 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
         )
         return
 
+    bus_probe = await _async_read_writer_fam14_base_id(
+        hass,
+        writer_entry,
+        writer_gateway,
+    )
+    if not bus_probe.get("ok"):
+        connection.send_error(
+            msg["id"],
+            "fam14_base_read_failed",
+            str(bus_probe.get("error") or "FAM14-Base-ID konnte nicht gelesen werden."),
+        )
+        return
+    detected_fam14_base = _optional_normalized_id(bus_probe.get("fam14_base_id"))
+    detected_baud_rate = int(bus_probe.get("baud_rate") or 57600)
+    expected_bases = {
+        _optional_normalized_id(row.get("expected_bus_base_id"))
+        for row in writer_rows
+        if row.get("expected_bus_base_id")
+    }
+    expected_bases.discard(None)
+    if expected_bases and detected_fam14_base not in expected_bases:
+        connection.send_error(
+            msg["id"],
+            "series14_wrong_bus",
+            f"Falsches Bussystem angeschlossen: FAM14 {detected_fam14_base}; erwartet: {', '.join(sorted(expected_bases))}. Es wurde nichts geschrieben.",
+        )
+        return
+
     diagnostic_event(
         hass,
         "series14_bulk_program_start",
@@ -2136,7 +2166,7 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
                 write_sender_entries(
                     port,
                     writer_rows,
-                    baud_rate=57600,
+                    baud_rate=detected_baud_rate,
                     gateway_type=gateway_type,
                 )
             )
@@ -2213,6 +2243,7 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
             "sender_title": sender_gateway["title"],
             "sender_base_id": sender_gateway["base_id"],
             "fam14_base_id": result.get("fam14_base_id"),
+            "baud_rate": detected_baud_rate,
             "counts": _json_value(result.get("counts") or {}),
             "results": _json_value(device_results),
         },
