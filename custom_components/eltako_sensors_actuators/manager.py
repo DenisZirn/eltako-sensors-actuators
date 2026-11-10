@@ -1762,12 +1762,15 @@ async def websocket_manager_assign_series14_sender_ids(
 ) -> None:
     """Assign globally unique FAM-USB sender IDs to legacy/missing Series-14 rows."""
 
-    writer_entry = hass.config_entries.async_get_entry(msg["writer_entry_id"])
-    if writer_entry is None or writer_entry.domain != DOMAIN:
+    writer_entry, writer_gateway = _series14_writer_entry(
+        hass,
+        msg["writer_entry_id"],
+    )
+    if writer_entry is None or writer_gateway is None:
         connection.send_error(
             msg["id"],
             "series14_gateway_missing",
-            "Das ausgewählte FAM14/FGW14-USB wurde nicht gefunden.",
+            "Das ausgewählte FAM14/FGW14-USB ist nicht aktiv.",
         )
         return
 
@@ -1792,7 +1795,7 @@ async def websocket_manager_assign_series14_sender_ids(
     bus_probe = await _async_read_writer_fam14_base_id(
         hass,
         writer_entry,
-        hass.data.get(DOMAIN, {}).get(writer_entry.entry_id),
+        writer_gateway,
     )
     if not bus_probe.get("ok"):
         connection.send_error(
