@@ -801,14 +801,30 @@ class EltakoGateway:
                     f"Base-ID {detected_base_id} per AB-58 gelesen."
                 )
 
+        if (
+            result.ok
+            and result.detected_gateway_type == GATEWAY_TYPE_FAM_USB
+            and not result.base_id
+            and not self.base_id
+        ):
+            recovered_base_id = _infer_fam_usb_base_id_from_devices(self._devices)
+            if recovered_base_id:
+                result.base_id = recovered_base_id
+                result.message = (
+                    "FAM-USB / EnOcean USB-Gateway erkannt. "
+                    f"Base-ID {recovered_base_id} aus bestehender Gateway-Konfiguration wiederhergestellt."
+                )
+
         self.probe_result = result
 
         if result.ok:
             self.gateway_type = result.detected_gateway_type
             if result.base_id:
                 self.base_id = result.base_id
+            elif self.base_id:
+                self.base_id = str(self.base_id).upper()
             elif self.selected_gateway.get("base_id"):
-                self.base_id = str(self.selected_gateway.get("base_id"))
+                self.base_id = str(self.selected_gateway.get("base_id")).upper()
             self.set_devices(self._devices)
             _LOGGER.info(
                 "Detected ELTAKO gateway: type=%s base_id=%s port=%s transport=%s",
@@ -2901,6 +2917,63 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _infer_fam_usb_base_id_from_devices(devices: list[dict[str, Any]]) -> str | None:
+    """Recover a FAM-USB Base-ID from existing official/EEDTOY device metadata."""
+    candidates: dict[str, int] = {}
+
+    for device in devices or []:
+        if not isinstance(device, dict):
+            continue
+
+        gateway = device.get("gateway") if isinstance(device.get("gateway"), dict) else {}
+        configured_base = _normalized_address_or_none(gateway.get("base_id"))
+        if configured_base:
+            candidates[configured_base] = candidates.get(configured_base, 0) + 100
+            continue
+
+        sender = _normalized_address_or_none(_get_sender_id(device))
+        if not sender:
+            continue
+
+        raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+        bus_address = (
+            device.get("bus_address")
+            or raw.get("bus_address")
+            or raw.get("pct14_address")
+            or raw.get("address")
+        )
+        bus_address = _normalized_address_or_none(bus_address)
+
+        if not bus_address:
+            name = str(device.get("name") or "")
+            match = re.search(r"\b00-00-00-([0-9A-Fa-f]{2})\b", name)
+            if match:
+                bus_address = f"00-00-00-{match.group(1).upper()}"
+
+        if not bus_address:
+            continue
+
+        try:
+            sender_value = int(sender.replace("-", ""), 16)
+            offset = int(bus_address.split("-")[-1], 16)
+        except (TypeError, ValueError):
+            continue
+
+        if not 1 <= offset <= 0x7F:
+            continue
+
+        base_value = (sender_value - offset) & 0xFFFFFFFF
+        base_id = "-".join(
+            f"{(base_value >> shift) & 0xFF:02X}"
+            for shift in (24, 16, 8, 0)
+        )
+        candidates[base_id] = candidates.get(base_id, 0) + 1
+
+    if not candidates:
+        return None
+    return max(candidates.items(), key=lambda item: (item[1], item[0]))[0]
 
 
 def _read_fam_usb_base_id_sync(port: str) -> str | None:
