@@ -19,7 +19,7 @@ from homeassistant.helpers.storage import Store
 
 from .entity_base import device_key, legacy_device_key
 from .manager_importers import detect_import_format, parse_minisafe2, parse_pct14_xml
-from .series14_writer import write_sender_entries
+from .series14_writer import read_fam14_bus_base_id, write_sender_entries
 from .yaml_config import EltakoYamlError, parse_eedtoy_yaml
 
 from .const import (
@@ -730,13 +730,18 @@ def _existing_pct14_sender(
 
 
 def _series14_writer_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Return active RS485 gateways that can program Series-14 actor memory."""
+    """Return active RS485 access points for Series-14 memory programming.
+
+    The gateway's own/stored Base-ID is deliberately not exposed as the FAM14
+    bus Base-ID. The real bus identity is read from FAM14 address 255 when the
+    user explicitly checks/uses this writer.
+    """
     result: list[dict[str, Any]] = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         gateway = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if gateway is None:
             continue
-        gateway_type, base_id = _gateway_type_and_base(hass, entry)
+        gateway_type, _gateway_base_id = _gateway_type_and_base(hass, entry)
         if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
             continue
         result.append(
@@ -744,7 +749,9 @@ def _series14_writer_payloads(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "entry_id": entry.entry_id,
                 "title": entry.title,
                 "gateway_type": gateway_type,
-                "base_id": base_id,
+                "base_id": "",
+                "fam14_base_id": "",
+                "base_id_source": "read_from_fam14_address_255_on_demand",
                 "active": True,
             }
         )
@@ -1650,6 +1657,95 @@ async def websocket_manager_learn(hass: HomeAssistant, connection, msg: dict[str
 
 
 
+async def _async_read_writer_fam14_base_id(
+    hass: HomeAssistant,
+    writer_entry,
+    writer_gateway,
+) -> dict[str, Any]:
+    """Read the real FAM14 bus identity without touching Home Assistant startup."""
+    port = str(getattr(writer_gateway, "port", "") or "")
+    gateway_type = _normalize_manager_gateway_type(getattr(writer_gateway, "gateway_type", ""))
+    if gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+        gateway_type, _ignored = _gateway_type_and_base(hass, writer_entry)
+    if not port or gateway_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
+        return {"ok": False, "error": "Das ausgewählte RS485-Gateway ist nicht bereit."}
+
+    await writer_gateway.async_stop()
+    try:
+        return await hass.async_add_executor_job(
+            lambda: __import__("asyncio").run(
+                read_fam14_bus_base_id(port, baud_rate=57600)
+            )
+        )
+    except Exception as err:
+        return {"ok": False, "error": f"{type(err).__name__}: {err}"}
+    finally:
+        try:
+            await writer_gateway.async_start()
+        except Exception:
+            _LOGGER.exception(
+                "Could not restart ELTAKO RS485 gateway after FAM14 Base-ID read"
+            )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/manager/read_series14_bus_base_id",
+        vol.Required("writer_entry_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_manager_read_series14_bus_base_id(
+    hass: HomeAssistant,
+    connection,
+    msg: dict[str, Any],
+) -> None:
+    """Explicitly read FAM14 Base-ID from bus address 255."""
+    writer_entry, writer_gateway = _series14_writer_entry(
+        hass,
+        msg["writer_entry_id"],
+    )
+    if writer_entry is None or writer_gateway is None:
+        connection.send_error(
+            msg["id"],
+            "series14_gateway_missing",
+            "Das ausgewählte FAM14/FGW14-USB ist nicht aktiv.",
+        )
+        return
+
+    result = await _async_read_writer_fam14_base_id(
+        hass,
+        writer_entry,
+        writer_gateway,
+    )
+    if not result.get("ok"):
+        connection.send_error(
+            msg["id"],
+            "fam14_base_read_failed",
+            str(result.get("error") or "FAM14-Base-ID konnte nicht gelesen werden."),
+        )
+        return
+
+    base_id = _optional_normalized_id(result.get("fam14_base_id"))
+    diagnostic_event(
+        hass,
+        "series14_fam14_base_id_read",
+        writer_entry_id=writer_entry.entry_id,
+        writer_title=writer_entry.title,
+        fam14_base_id=base_id,
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "writer_entry_id": writer_entry.entry_id,
+            "writer_title": writer_entry.title,
+            "fam14_base_id": base_id,
+        },
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/manager/assign_series14_sender_ids",
@@ -1675,7 +1771,7 @@ async def websocket_manager_assign_series14_sender_ids(
         )
         return
 
-    writer_type, writer_base_id = _gateway_type_and_base(hass, writer_entry)
+    writer_type, _gateway_base_id = _gateway_type_and_base(hass, writer_entry)
     if writer_type not in {GATEWAY_TYPE_FAM14, GATEWAY_TYPE_FGW14USB}:
         connection.send_error(
             msg["id"],
@@ -1692,6 +1788,27 @@ async def websocket_manager_assign_series14_sender_ids(
         ),
         None,
     )
+
+    bus_probe = await _async_read_writer_fam14_base_id(
+        hass,
+        writer_entry,
+        hass.data.get(DOMAIN, {}).get(writer_entry.entry_id),
+    )
+    if not bus_probe.get("ok"):
+        connection.send_error(
+            msg["id"],
+            "fam14_base_read_failed",
+            str(bus_probe.get("error") or "FAM14-Base-ID konnte nicht gelesen werden."),
+        )
+        return
+    writer_base_id = _optional_normalized_id(bus_probe.get("fam14_base_id"))
+    if not writer_base_id:
+        connection.send_error(
+            msg["id"],
+            "fam14_base_invalid",
+            "Der angeschlossene FAM14 meldet keine gültige Base-ID.",
+        )
+        return
     if sender_gateway is None:
         connection.send_error(
             msg["id"],
@@ -1752,19 +1869,6 @@ async def websocket_manager_assign_series14_sender_ids(
 
             device = _canonicalize_series14_metadata(original)
             bus_base_id = _series14_bus_base_id(device)
-
-            # Legacy rows edited through the manager gain their bus base from
-            # the currently selected Series-14 gateway. Apply the same safe
-            # canonicalization in bulk, but only to rows that live on this
-            # writer entry. Never guess another config entry's bus.
-            if not bus_base_id and source_entry.entry_id == writer_entry.entry_id and writer_base_id:
-                raw = dict(device.get("raw") or {})
-                device["bus_base_id"] = writer_base_id
-                raw["bus_base_id"] = writer_base_id
-                if selected_gateway and not device.get("gateway"):
-                    device["gateway"] = _json_value(selected_gateway)
-                device["raw"] = raw
-                bus_base_id = writer_base_id
 
             if writer_base_id and bus_base_id and bus_base_id != writer_base_id:
                 continue
@@ -1920,7 +2024,7 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
         )
         return
 
-    writer_base_id = _optional_normalized_id(getattr(writer_gateway, "base_id", None))
+    writer_base_id = ""
     writer_rows: list[dict[str, Any]] = []
     selected_devices: list[dict[str, Any]] = []
     validation_errors: list[str] = []
@@ -1968,12 +2072,6 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
                 f"{device.get('name') or index}: Sender-ID {row.get('sender_id')} gehört nicht zum FAM-USB {sender_gateway['title']}"
             )
             continue
-        if writer_base_id and expected_base and writer_base_id != expected_base:
-            validation_errors.append(
-                f"{device.get('name') or index}: gehört zu FAM14 {expected_base}, ausgewählt ist {writer_base_id}"
-            )
-            continue
-
         writer_rows.append(row)
         selected_devices.append(
             {
@@ -2009,7 +2107,13 @@ async def websocket_manager_program_series14_bulk(hass: HomeAssistant, connectio
         "series14_bulk_program_start",
         writer_entry_id=writer_entry.entry_id,
         writer_title=writer_entry.title,
-        writer_base_id=writer_base_id,
+        expected_bus_base_ids=sorted(
+            {
+                str(row.get("expected_bus_base_id") or "")
+                for row in writer_rows
+                if row.get("expected_bus_base_id")
+            }
+        ),
         sender_entry_id=sender_gateway["entry_id"],
         sender_title=sender_gateway["title"],
         sender_base_id=sender_gateway["base_id"],
@@ -2315,6 +2419,7 @@ async def async_setup_manager(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, websocket_manager_apply_import)
         websocket_api.async_register_command(hass, websocket_manager_learn)
         websocket_api.async_register_command(hass, websocket_manager_learn_fts14em)
+        websocket_api.async_register_command(hass, websocket_manager_read_series14_bus_base_id)
         websocket_api.async_register_command(hass, websocket_manager_assign_series14_sender_ids)
         websocket_api.async_register_command(hass, websocket_manager_program_series14_bulk)
         websocket_api.async_register_command(hass, websocket_manager_program_device)
