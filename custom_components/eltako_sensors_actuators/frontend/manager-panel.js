@@ -297,7 +297,13 @@ class EltakoManagerPanel extends HTMLElement {
       d.selected=new Set(this.series14RowsForSelection().filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index));
       this.message="FAM14-Bus erkannt: "+d.fam14_base_id;
     }catch(err){
-      this.message="FAM14-Bus konnte nicht geprüft werden: "+(err?.message||err);
+      const detail=err?.message;
+      this.message="FAM14-Bus konnte nicht geprüft werden: "+(
+        typeof detail==="string" ? detail :
+        detail ? JSON.stringify(detail) :
+        typeof err==="string" ? err :
+        JSON.stringify(err)
+      );
     }
     d.busy=false;this.render();
   }
