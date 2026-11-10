@@ -784,6 +784,23 @@ class EltakoGateway:
             self.port,
             effective_gateway_type,
         )
+
+        if (
+            result.ok
+            and result.detected_gateway_type == GATEWAY_TYPE_FAM_USB
+            and not result.base_id
+        ):
+            detected_base_id = await self.hass.async_add_executor_job(
+                _read_fam_usb_base_id_sync,
+                self.port,
+            )
+            if detected_base_id:
+                result.base_id = detected_base_id
+                result.message = (
+                    "FAM-USB / EnOcean USB-Gateway erkannt. "
+                    f"Base-ID {detected_base_id} per AB-58 gelesen."
+                )
+
         self.probe_result = result
 
         if result.ok:
@@ -2884,6 +2901,65 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _read_fam_usb_base_id_sync(port: str) -> str | None:
+    """Read the FAM-USB Base-ID with the verified ELTAKO AB-58 ESP2 request."""
+
+    async def _read() -> str | None:
+        from eltakobus.message import ESP2Message
+        from eltakobus.serial import RS485SerialInterfaceV2
+        from eltakobus.util import b2s
+
+        bus = RS485SerialInterfaceV2(
+            port,
+            baud_rate=9600,
+            delay_message=0.2,
+            auto_reconnect=False,
+        )
+        try:
+            bus.start()
+            bus.is_serial_connected.wait(timeout=2)
+            if not bus.is_active():
+                return None
+
+            old_callback = getattr(bus, "callback", None)
+            try:
+                try:
+                    bus.set_callback(None)
+                except Exception:
+                    pass
+
+                request = ESP2Message(
+                    b"\xAB\x58\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+                )
+                response = await bus.exchange(
+                    request,
+                    ESP2Message,
+                    retries=3,
+                    timeout=1,
+                )
+                base_id = str(b2s(response.body[2:6]) or "").strip().upper()
+                if base_id and base_id != "00-00-00-00":
+                    return base_id
+                return None
+            finally:
+                try:
+                    bus.set_callback(old_callback)
+                except Exception:
+                    pass
+        finally:
+            try:
+                bus.stop()
+                bus.join(0.8)
+            except Exception:
+                pass
+
+    try:
+        return asyncio.run(_read())
+    except Exception as err:
+        _LOGGER.warning("FAM-USB Base-ID AB-58 read failed on %s: %s", port, err)
+        return None
 
 
 def _probe_gateway_sync(port: str, configured_gateway_type: str) -> GatewayProbeResult:
