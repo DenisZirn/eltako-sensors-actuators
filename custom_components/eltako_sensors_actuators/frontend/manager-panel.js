@@ -275,7 +275,7 @@ class EltakoManagerPanel extends HTMLElement {
       h+="</tbody></table></div>";
       if(d.result){var counts=d.result.counts||{};h+="<div class='msg'>Ergebnis: "+(counts.updated||0)+" geschrieben · "+(counts.exists||0)+" bereits vorhanden · "+(counts.unsupported||0)+" nicht unterstützt · "+(counts.error||0)+" Fehler</div>";}
     }
-    h+="<div class='footer'><button id='series14-cancel'>Schließen</button><button id='series14-write' class='primary' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">"+(d.busy?"Schreibe …":"Ausgewählte IDs schreiben")+"</button></div></div></div>";
+    h+="<div class='footer'><button id='series14-cancel'>Schließen</button><button id='series14-assign' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">Sender-IDs automatisch zuweisen</button><button id='series14-write' class='primary' "+(!d.writer_entry_id||!d.sender_entry_id||d.busy?"disabled":"")+">"+(d.busy?"Arbeite …":"Ausgewählte IDs schreiben")+"</button></div></div></div>";
     return h;
   }
   syncSeries14Selection(){
@@ -284,6 +284,31 @@ class EltakoManagerPanel extends HTMLElement {
       if(cb.checked)this.series14Dialog.selected.add(cb.dataset.series14Target);
       else this.series14Dialog.selected.delete(cb.dataset.series14Target);
     });
+  }
+  async assignSeries14SenderIds(){
+    var d=this.series14Dialog;if(!d||!d.writer_entry_id||!d.sender_entry_id)return;
+    d.busy=true;d.result=null;this.render();
+    try{
+      var res=await this._hass.callWS({
+        type:DOMAIN+"/manager/assign_series14_sender_ids",
+        writer_entry_id:d.writer_entry_id,
+        sender_entry_id:d.sender_entry_id
+      });
+      this.message=(res.assigned||0)+" Sender-ID(s) automatisch vergeben, "+(res.preserved||0)+" gültige beibehalten."+(res.skipped?.length?" "+res.skipped.length+" Gerät(e) ohne eindeutige Buszuordnung übersprungen.":"");
+      await new Promise(r=>setTimeout(r,500));
+      await this.load(true);
+      var writers=this.data?.series14_writers||[],senders=this.data?.series14_sender_gateways||[];
+      this.series14Dialog={
+        writer_entry_id:writers.some(x=>x.entry_id===d.writer_entry_id)?d.writer_entry_id:(writers.length===1?writers[0].entry_id:""),
+        sender_entry_id:senders.some(x=>x.entry_id===d.sender_entry_id)?d.sender_entry_id:(senders.length===1?senders[0].entry_id:""),
+        selected:new Set((this.data?.series14_candidates||[]).filter(x=>x.valid).map(x=>x.source_entry_id+":"+x.index)),
+        result:null,busy:false
+      };
+    }catch(err){
+      d.busy=false;
+      this.message="Sender-IDs konnten nicht automatisch zugewiesen werden: "+(err?.message||err);
+    }
+    this.render();
   }
   async writeSeries14Bulk(){
     var d=this.series14Dialog;if(!d||!d.writer_entry_id||!d.sender_entry_id)return;
@@ -322,7 +347,7 @@ class EltakoManagerPanel extends HTMLElement {
     x=r.getElementById("search");if(x)x.onchange=e=>{this.search=e.target.value;this.render()};x=r.getElementById("group");if(x)x.onchange=e=>{this.group=e.target.value;this.render()};
     r.getElementById("learn-start")?.addEventListener("click",()=>this.startLearning());r.getElementById("learn-stop")?.addEventListener("click",()=>this.stopLearning());r.getElementById("learn-clear")?.addEventListener("click",()=>{this.learnEvents=[];this.render()});r.querySelectorAll("[data-learn-add]").forEach(b=>b.onclick=()=>{var ev=this.learnEvents[Number(b.dataset.learnAdd)],best=b.dataset.best||"";this.openAdd(best,ev?.physical_sender_id||ev?.sender_id||"")});
     r.getElementById("import-file")?.addEventListener("change",async e=>{var f=e.target.files?.[0];if(f){this.importFilename=f.name;this.importText=await f.text();this.render()}});r.getElementById("import-preview")?.addEventListener("click",()=>this.previewImport());r.getElementById("import-cancel")?.addEventListener("click",()=>{this.preview=null;this.render()});r.getElementById("import-apply")?.addEventListener("click",()=>this.applyImport());
-    r.getElementById("series14-sender")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.sender_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.getElementById("series14-writer")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.writer_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.querySelectorAll("[data-series14-target]").forEach(cb=>cb.onchange=()=>this.syncSeries14Selection());r.getElementById("series14-write")?.addEventListener("click",()=>this.writeSeries14Bulk());r.getElementById("series14-cancel")?.addEventListener("click",()=>{this.series14Dialog=null;this.render()});r.getElementById("series14-backdrop")?.addEventListener("click",e=>{if(e.target.id==="series14-backdrop"&&!this.series14Dialog?.busy){this.series14Dialog=null;this.render()}});r.getElementById("profile-cancel")?.addEventListener("click",()=>{this.profileEditing=null;this.render()});r.getElementById("profile-backdrop")?.addEventListener("click",e=>{if(e.target.id==="profile-backdrop"){this.profileEditing=null;this.render()}});r.getElementById("profile-save")?.addEventListener("click",()=>this.saveProfile());r.getElementById("cancel")?.addEventListener("click",()=>{this.stopFts14emLearning();this.fts14emLearnProgress=null;this.editing=null;this.render()});r.getElementById("backdrop")?.addEventListener("click",e=>{if(e.target.id==="backdrop"){this.editing=null;this.render()}});r.getElementById("f-profile")?.addEventListener("change",e=>{var old=this.editing||{},p=this.profile(e.target.value);this.editing=Object.assign({},old,{profile_key:e.target.value,device_class:p?.default_dc||"",sender_eep:p?.sender_eep||"",name:old.name||p?.device_type||""});this.render()});r.getElementById("use-last")?.addEventListener("click",()=>{var f=r.getElementById("f-id");if(f)f.value=this.entry()?.last_telegram?.sender_id||""});r.getElementById("save")?.addEventListener("click",()=>this.save());r.getElementById("export")?.addEventListener("click",()=>this.exportYaml());r.getElementById("copy")?.addEventListener("click",async()=>{var y=r.getElementById("yaml");if(y?.value){await navigator.clipboard.writeText(y.value);this.message="YAML kopiert.";this.render()}});
+    r.getElementById("series14-sender")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.sender_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.getElementById("series14-writer")?.addEventListener("change",e=>{this.syncSeries14Selection();this.series14Dialog.writer_entry_id=e.target.value;this.series14Dialog.result=null;this.render()});r.querySelectorAll("[data-series14-target]").forEach(cb=>cb.onchange=()=>this.syncSeries14Selection());r.getElementById("series14-assign")?.addEventListener("click",()=>this.assignSeries14SenderIds());r.getElementById("series14-write")?.addEventListener("click",()=>this.writeSeries14Bulk());r.getElementById("series14-cancel")?.addEventListener("click",()=>{this.series14Dialog=null;this.render()});r.getElementById("series14-backdrop")?.addEventListener("click",e=>{if(e.target.id==="series14-backdrop"&&!this.series14Dialog?.busy){this.series14Dialog=null;this.render()}});r.getElementById("profile-cancel")?.addEventListener("click",()=>{this.profileEditing=null;this.render()});r.getElementById("profile-backdrop")?.addEventListener("click",e=>{if(e.target.id==="profile-backdrop"){this.profileEditing=null;this.render()}});r.getElementById("profile-save")?.addEventListener("click",()=>this.saveProfile());r.getElementById("cancel")?.addEventListener("click",()=>{this.stopFts14emLearning();this.fts14emLearnProgress=null;this.editing=null;this.render()});r.getElementById("backdrop")?.addEventListener("click",e=>{if(e.target.id==="backdrop"){this.editing=null;this.render()}});r.getElementById("f-profile")?.addEventListener("change",e=>{var old=this.editing||{},p=this.profile(e.target.value);this.editing=Object.assign({},old,{profile_key:e.target.value,device_class:p?.default_dc||"",sender_eep:p?.sender_eep||"",name:old.name||p?.device_type||""});this.render()});r.getElementById("use-last")?.addEventListener("click",()=>{var f=r.getElementById("f-id");if(f)f.value=this.entry()?.last_telegram?.sender_id||""});r.getElementById("save")?.addEventListener("click",()=>this.save());r.getElementById("export")?.addEventListener("click",()=>this.exportYaml());r.getElementById("copy")?.addEventListener("click",async()=>{var y=r.getElementById("yaml");if(y?.value){await navigator.clipboard.writeText(y.value);this.message="YAML kopiert.";this.render()}});
   }
 }
 customElements.define("eltako-manager-panel",EltakoManagerPanel);
