@@ -1414,6 +1414,60 @@ class EltakoGateway:
                     error=self._last_send_error,
                 )
 
+    async def async_read_base_id(self, timeout: float = 3.0) -> str | None:
+        """Read FAM-USB Base-ID after startup without opening a second serial connection."""
+        if self.gateway_type != GATEWAY_TYPE_FAM_USB:
+            return None
+
+        await self._async_ensure_transport()
+        if self._transport is None:
+            return None
+
+        try:
+            # The synchronous transport method is bounded by its own timeout.
+            base_id = await self.hass.async_add_executor_job(
+                self._transport.read_base_id,
+                timeout,
+            )
+        except Exception as err:
+            _LOGGER.warning(
+                "ELTAKO FAM-USB Base-ID read failed after startup: entry=%s port=%s error=%s",
+                self.entry_id,
+                self.port,
+                err,
+            )
+            return None
+
+        if not base_id:
+            _LOGGER.warning(
+                "ELTAKO FAM-USB did not answer Base-ID request within %.1fs: entry=%s port=%s",
+                timeout,
+                self.entry_id,
+                self.port,
+            )
+            return None
+
+        self.base_id = str(base_id).upper()
+        if self.probe_result is not None:
+            self.probe_result.base_id = self.base_id
+        self.set_devices(self._devices)
+        self._notify_gateway_status("base_id_updated")
+        diagnostic_event(
+            self.hass,
+            "gateway_base_id_read",
+            entry_id=self.entry_id,
+            gateway=self.gateway_type,
+            port=self.port,
+            base_id=self.base_id,
+        )
+        _LOGGER.info(
+            "ELTAKO FAM-USB Base-ID read successfully after startup: entry=%s base_id=%s",
+            self.entry_id,
+            self.base_id,
+        )
+        return self.base_id
+
+
     @property
     def last_telegram(self) -> EltakoTelegram | None:
         return self._last_telegram
@@ -2958,65 +3012,6 @@ def _infer_fam_usb_base_id_from_devices(devices: list[dict[str, Any]]) -> str | 
     if not candidates:
         return None
     return max(candidates.items(), key=lambda item: (item[1], item[0]))[0]
-
-
-def _read_fam_usb_base_id_sync(port: str) -> str | None:
-    """Read the FAM-USB Base-ID with the verified ELTAKO AB-58 ESP2 request."""
-
-    async def _read() -> str | None:
-        from eltakobus.message import ESP2Message
-        from eltakobus.serial import RS485SerialInterfaceV2
-        from eltakobus.util import b2s
-
-        bus = RS485SerialInterfaceV2(
-            port,
-            baud_rate=9600,
-            delay_message=0.2,
-            auto_reconnect=False,
-        )
-        try:
-            bus.start()
-            bus.is_serial_connected.wait(timeout=2)
-            if not bus.is_active():
-                return None
-
-            old_callback = getattr(bus, "callback", None)
-            try:
-                try:
-                    bus.set_callback(None)
-                except Exception:
-                    pass
-
-                request = ESP2Message(
-                    b"\xAB\x58\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-                )
-                response = await bus.exchange(
-                    request,
-                    ESP2Message,
-                    retries=3,
-                    timeout=1,
-                )
-                base_id = str(b2s(response.body[2:6]) or "").strip().upper()
-                if base_id and base_id != "00-00-00-00":
-                    return base_id
-                return None
-            finally:
-                try:
-                    bus.set_callback(old_callback)
-                except Exception:
-                    pass
-        finally:
-            try:
-                bus.stop()
-                bus.join(0.8)
-            except Exception:
-                pass
-
-    try:
-        return asyncio.run(_read())
-    except Exception as err:
-        _LOGGER.warning("FAM-USB Base-ID AB-58 read failed on %s: %s", port, err)
-        return None
 
 
 def _probe_gateway_sync(port: str, configured_gateway_type: str) -> GatewayProbeResult:
