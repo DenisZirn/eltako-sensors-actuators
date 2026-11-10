@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from collections.abc import Iterable
 from typing import Protocol
@@ -40,6 +41,11 @@ class SerialTransport:
         # than n bytes. Keep an RX byte stream between gateway polls so no
         # radio telegram is lost when USB splits it across reads.
         self._rx_buffer = bytearray()
+        # Complete frames temporarily held by synchronous gateway commands.
+        # read_frame() drains them before touching the serial port again so
+        # ordinary radio telegrams received while RD_IDBASE is in flight are
+        # never lost.
+        self._pending_frames: deque[bytes] = deque()
 
     def open(self) -> None:
         if self._serial is not None and self._serial.is_open:
@@ -62,6 +68,7 @@ class SerialTransport:
         # A reopened port starts a fresh byte stream. Never splice a frame
         # from an old USB session together with frames from a new session.
         self._rx_buffer.clear()
+        self._pending_frames.clear()
         # serialx has no equivalent of pyserial's rs485.RS485Settings.
         # This implementation relies on USB-RS485 adapters handling direction
         # automatically. Verify FGW14-USB/FAM14 send and receive on real
@@ -82,6 +89,7 @@ class SerialTransport:
             finally:
                 self._serial = None
                 self._rx_buffer.clear()
+                self._pending_frames.clear()
                 _LOGGER.info("ELTAKO serial transport closed: port=%s", self.port)
 
     def is_active(self) -> bool:
@@ -178,6 +186,76 @@ class SerialTransport:
         )
         return frames
 
+    def read_base_id(self, timeout: float = 3.0) -> str | None:
+        """Read the ESP2 gateway Base-ID on the already-open serial transport.
+
+        This mirrors the robust command pattern used by HA-Enocean-Eltako:
+        one shared serial connection, one transport lock, a bounded command
+        timeout and exact matching of the RMT/INF_IDBASE response. Any unrelated
+        radio frames received while waiting are queued and delivered normally
+        by read_frame() afterwards.
+        """
+        if self.protocol != "esp2":
+            return None
+        self.open()
+        if self._serial is None or not self.is_active():
+            raise RuntimeError(f"Serial port is not active: {self.port}")
+
+        timeout = max(0.1, float(timeout))
+        # TCT + RD_IDBASE (0x58), no parameters.
+        body = bytes([0xAB, 0x58, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        command = PREAMBLE + body + bytes([sum(body) & 0xFF])
+        deferred: list[bytes] = []
+
+        with self._lock:
+            self._serial.reset_write_buffer()
+            written = self._serial.write(command)
+            self._serial.flush()
+            if written != len(command):
+                raise RuntimeError(
+                    f"Serial write incomplete: wrote {written}/{len(command)} bytes"
+                )
+
+            deadline = time.monotonic() + timeout
+            scratch = bytearray(128)
+            try:
+                while True:
+                    frame = self._take_esp2_frame()
+                    if frame is None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return None
+                        received = self._serial.readinto(
+                            scratch,
+                            timeout=min(0.2, remaining),
+                        )
+                        if received:
+                            self._rx_buffer.extend(scratch[:received])
+                            continue
+                        if time.monotonic() >= deadline:
+                            return None
+                        continue
+
+                    msg = ESP2Message.parse(frame)
+                    hseq = msg.body[0] >> 5
+                    org = msg.body[1]
+
+                    # RMT / INF_IDBASE
+                    if hseq == 0b100 and org == 0x98:
+                        value = bytes(msg.body[2:6])
+                        if value == b"\x00\x00\x00\x00":
+                            return None
+                        return "-".join(f"{byte:02X}" for byte in value)
+
+                    # RMT / ERR
+                    if hseq == 0b100 and org == 0x19:
+                        return None
+
+                    deferred.append(frame)
+            finally:
+                # Keep exact FIFO order for the normal gateway reader.
+                self._pending_frames.extend(deferred)
+
     def _take_esp2_frame(self) -> bytes | None:
         """Extract one checksum-valid ESP2 frame from the persistent RX stream.
 
@@ -249,9 +327,14 @@ class SerialTransport:
             raise RuntimeError(f"Serial port is not active: {self.port}")
 
         with self._lock:
-            # Drain complete buffered frames first. In a USB burst this keeps
+            # Drain complete frames captured by a synchronous gateway command
+            # before touching the serial stream again.
+            frame = self._pending_frames.popleft() if self._pending_frames else None
+
+            # Drain complete buffered frames next. In a USB burst this keeps
             # individual press/release and battery telegrams in FIFO order.
-            frame = self._take_esp2_frame()
+            if frame is None:
+                frame = self._take_esp2_frame()
             if frame is None:
                 chunk = self._serial.read(128)
                 if chunk:
