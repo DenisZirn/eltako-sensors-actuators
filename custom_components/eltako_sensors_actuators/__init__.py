@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 
 import voluptuous as vol
 
@@ -56,6 +57,38 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+async def _async_refresh_fam_usb_base_id(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    gateway: EltakoGateway,
+) -> None:
+    """Read and persist FAM-USB Base-ID without blocking Home Assistant startup."""
+    try:
+        base_id = await gateway.async_read_base_id(timeout=3.0)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _LOGGER.exception(
+            "Unexpected ELTAKO FAM-USB Base-ID background read failure: entry=%s",
+            entry.entry_id,
+        )
+        return
+
+    if not base_id:
+        return
+
+    current = {**entry.data, **entry.options}
+    if str(current.get(CONF_BASE_ID) or "").upper() != str(base_id).upper():
+        options = dict(entry.options)
+        options[CONF_BASE_ID] = str(base_id).upper()
+        hass.config_entries.async_update_entry(entry, options=options)
+        _LOGGER.info(
+            "Persisted ELTAKO FAM-USB Base-ID after startup: entry=%s base_id=%s",
+            entry.entry_id,
+            base_id,
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = {**entry.data, **entry.options}
 
@@ -81,16 +114,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     diagnostic_event(hass, "config_entry_setup", entry_id=entry.entry_id, gateway_type=data.get(CONF_GATEWAY_TYPE), port=data.get(CONF_PORT))
     await gateway.async_start()
 
-    if gateway.base_id and str(data.get(CONF_BASE_ID) or "").upper() != str(gateway.base_id).upper():
-        persisted_options = dict(entry.options)
-        persisted_options[CONF_BASE_ID] = str(gateway.base_id).upper()
-        hass.config_entries.async_update_entry(entry, options=persisted_options)
-        _LOGGER.info(
-            "Stored ELTAKO gateway Base-ID entry_id=%s base_id=%s",
-            entry.entry_id,
-            gateway.base_id,
-        )
-
     _async_ensure_gateway_device(hass, entry, gateway)
 
     # YAML imports set a one-shot reload flag. The listener clears it before
@@ -110,6 +133,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _async_register_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if gateway.gateway_type == "fam-usb":
+        entry.async_create_background_task(
+            hass,
+            _async_refresh_fam_usb_base_id(hass, entry, gateway),
+            f"{DOMAIN} {entry.title} FAM-USB Base-ID",
+        )
 
     return True
 
