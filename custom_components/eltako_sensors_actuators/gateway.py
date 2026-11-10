@@ -743,11 +743,10 @@ class EltakoGateway:
         diagnostic_event(self.hass, "gateway_stop", entry_id=self.entry_id, gateway_type=self.gateway_type, gateway=self.gateway_type, port=self.port)
         self._stopped.set()
 
-        if self._transport is not None:
-            await self.hass.async_add_executor_job(self._transport.close)
-            self._transport = None
-
-
+        # Stop the reader task before releasing the serial transport. read_frame()
+        # runs in an executor; closing the FTDI handle while the reader is still
+        # being scheduled can leave a short ownership race for the Series-14
+        # writer that takes over the same port.
         if self._task is not None:
             self._task.cancel()
             try:
@@ -755,6 +754,10 @@ class EltakoGateway:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+        if self._transport is not None:
+            await self.hass.async_add_executor_job(self._transport.close)
+            self._transport = None
 
     async def async_probe(self) -> GatewayProbeResult:
         """Detect gateway class from path/descriptor without external bus dependencies."""
