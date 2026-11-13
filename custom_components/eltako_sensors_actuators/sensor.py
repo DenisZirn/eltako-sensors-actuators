@@ -64,6 +64,7 @@ except Exception:  # pragma: no cover
         return re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
 
 from .const import CONF_DEVICES, DOMAIN
+from .room_temperature import is_fks_sv_device
 from .bus.eep_a5_09_04 import decode_a5_09_04
 from .device_profiles import is_eltako_illuminance_device, is_legacy_frw_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
@@ -1856,7 +1857,14 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._last_energy_sample_ts = None
         self._temperature_ema_alpha = 0.25
         self._temperature_ema_value = None
-        self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
+        # FKS-SV's native sensor and climate.current_temperature must show
+        # the same physical measurement. Generic EMA smoothing created an
+        # artificial divergence between these two entities.
+        self._smooth_temperature = (
+            device_class == SensorDeviceClass.TEMPERATURE
+            and key == "temperature"
+            and not is_fks_sv_device(device)
+        )
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
 
