@@ -282,3 +282,32 @@ fks_sv_overrides = room_temperature_overrides
 set_fks_sv_override = set_room_temperature_override
 resolve_fks_sv_temperature_config = resolve_room_temperature_config
 select_fks_sv_room_temperature = select_numeric_room_temperature
+
+
+def fks_sv_native_temperature_signal(gateway: Any, device_id: Any) -> str:
+    """Unique dispatcher signal for the valve's raw native measurement."""
+    return f"eltako_fks_sv_native_{gateway.entry_id}_{normalize_enocean_id(device_id)}"
+
+
+def fks_sv_native_temperature(gateway: Any, device_id: Any) -> float | None:
+    """Return the gateway-scoped native temperature for this valve."""
+    key = normalize_enocean_id(device_id)
+    if key is None:
+        return None
+    readings = getattr(gateway, "_fks_sv_native_temperatures", None)
+    return readings.get(key) if isinstance(readings, dict) else None
+
+
+def store_fks_sv_native_temperature(gateway: Any, device_id: Any, value: Any) -> bool:
+    """Update the common raw reading; return True only when it changed."""
+    key = normalize_enocean_id(device_id)
+    reading = temperature_to_celsius(value, "°C")
+    if key is None or reading is None:
+        return False
+    readings = getattr(gateway, "_fks_sv_native_temperatures", None)
+    if readings is None:
+        readings = {}
+        gateway._fks_sv_native_temperatures = readings
+    changed = readings.get(key) != reading
+    readings[key] = reading
+    return changed
