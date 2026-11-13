@@ -22,7 +22,7 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 
 try:
@@ -47,7 +47,10 @@ from .const import (
 )
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
 from .room_temperature import (
+    fks_sv_native_temperature,
+    fks_sv_native_temperature_signal,
     is_room_temperature_assignable_device,
+    store_fks_sv_native_temperature,
     resolve_room_temperature_config,
     room_temperature_device_kind,
     select_numeric_room_temperature,
@@ -311,6 +314,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     self._internal_temperature = temperature_to_celsius(
                         restored_native, "°C"
                     )
+                    if self._room_temperature_device_kind == "fks_sv" and self._internal_temperature is not None:
+                        store_fks_sv_native_temperature(
+                            self.gateway, self.device_config.get("id"), self._internal_temperature
+                        )
                     if self._room_temperature_device_kind == "a5_10_06":
                         self._has_genuine_current_temperature = bool(
                             restored_genuine and self._internal_temperature is not None
@@ -403,6 +410,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
         external = self._read_external_temperature(entity_id)
         internal = temperature_to_celsius(self._internal_temperature, "°C")
+        if self._room_temperature_device_kind == "fks_sv":
+            # One gateway-scoped raw measurement is the authoritative native
+            # value for both the climate and its companion sensor entity.
+            shared_native = fks_sv_native_temperature(self.gateway, self.device_config.get("id"))
+            if shared_native is not None:
+                internal = shared_native
 
         if self._room_temperature_device_kind == "fks_sv":
             used, status, actual_source = select_numeric_room_temperature(
@@ -798,12 +811,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            if self._has_room_temperature_assignment:
-                self._internal_temperature = temperature_to_celsius(
-                    decoded.get("temperature"), "°C"
-                )
-            else:
-                self._current_temperature = decoded.get("temperature")
+            native = temperature_to_celsius(decoded.get("temperature"), "°C")
+            if native is not None:
+                if store_fks_sv_native_temperature(self.gateway, self.device_config.get("id"), native):
+                    async_dispatcher_send(
+                        self.hass,
+                        fks_sv_native_temperature_signal(self.gateway, self.device_config.get("id")),
+                    )
+                if self._has_room_temperature_assignment:
+                    self._internal_temperature = native
+                else:
+                    self._current_temperature = native
         if "valve_position" in decoded:
             try:
                 self._valve_position = int(decoded.get("valve_position"))
