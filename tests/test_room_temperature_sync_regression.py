@@ -45,6 +45,16 @@ class TestRoomTemperatureSync(unittest.TestCase):
         self.assertIn("self._room_temperature_push_pending = False", drain)
         self.assertIn("await self._async_push_a5_10_06_room_temperature()", drain)
 
+    def test_shared_fks_native_value_between_climate_and_sensor(self):
+        climate = (COMPONENTS / "climate.py").read_text(encoding="utf-8")
+        sensor = (COMPONENTS / "sensor.py").read_text(encoding="utf-8")
+        shared = (COMPONENTS / "room_temperature.py").read_text(encoding="utf-8")
+        self.assertIn("store_fks_sv_native_temperature(", climate)
+        self.assertIn("fks_sv_native_temperature(", climate)
+        self.assertIn("fks_sv_native_temperature(", sensor)
+        self.assertIn("fks_sv_native_temperature_signal(", sensor)
+        self.assertIn("def store_fks_sv_native_temperature(", shared)
+
     def test_native_fks_sensor_does_not_use_ema(self):
         source = method("__init__", "sensor.py")
         # Find the value sensor's constructor, not another sensor subclass.
