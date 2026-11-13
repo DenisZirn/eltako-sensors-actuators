@@ -22,7 +22,7 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 
 try:
@@ -47,7 +47,10 @@ from .const import (
 )
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
 from .room_temperature import (
+    fks_sv_native_temperature,
+    fks_sv_native_temperature_signal,
     is_room_temperature_assignable_device,
+    store_fks_sv_native_temperature,
     resolve_room_temperature_config,
     room_temperature_device_kind,
     select_numeric_room_temperature,
@@ -275,6 +278,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._control_reply_task = None
         self._teach_in_reply_task = None
         self._room_temperature_push_task = None
+        self._room_temperature_push_pending = False
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
@@ -310,6 +314,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     self._internal_temperature = temperature_to_celsius(
                         restored_native, "°C"
                     )
+                    if self._room_temperature_device_kind == "fks_sv" and self._internal_temperature is not None:
+                        store_fks_sv_native_temperature(
+                            self.gateway, self.device_config.get("id"), self._internal_temperature
+                        )
                     if self._room_temperature_device_kind == "a5_10_06":
                         self._has_genuine_current_temperature = bool(
                             restored_genuine and self._internal_temperature is not None
@@ -357,6 +365,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             )
             self._rebind_external_temperature_listener()
             self._refresh_room_temperature_state()
+            if (
+                self._room_temperature_device_kind == "a5_10_06"
+                and self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+            ):
+                self._schedule_a5_10_06_room_temperature_push()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -395,6 +408,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
         external = self._read_external_temperature(entity_id)
         internal = temperature_to_celsius(self._internal_temperature, "°C")
+        if self._room_temperature_device_kind == "fks_sv":
+            shared = fks_sv_native_temperature(self.gateway, self.device_config.get("id"))
+            if shared is not None:
+                internal = shared
 
         if self._room_temperature_device_kind == "fks_sv":
             used, status, actual_source = select_numeric_room_temperature(
@@ -452,10 +469,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
         if self._room_temperature_device_kind != "a5_10_06":
             return
+        # A second change while a send is running must not be dropped.
+        self._room_temperature_push_pending = True
         if self._room_temperature_push_task is None or self._room_temperature_push_task.done():
             self._room_temperature_push_task = self.gateway.hass.async_create_task(
-                self._async_push_a5_10_06_room_temperature()
+                self._async_drain_a5_10_06_room_temperature_pushes()
             )
+
+    async def _async_drain_a5_10_06_room_temperature_pushes(self) -> None:
+        while self._room_temperature_push_pending:
+            self._room_temperature_push_pending = False
+            await self._async_push_a5_10_06_room_temperature()
 
     async def _async_push_a5_10_06_room_temperature(self) -> None:
         """Push source changes immediately to mains-powered A5-10-06 actuators."""
@@ -779,12 +803,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         if "temperature" in decoded:
-            if self._has_room_temperature_assignment:
-                self._internal_temperature = temperature_to_celsius(
-                    decoded.get("temperature"), "°C"
-                )
-            else:
-                self._current_temperature = decoded.get("temperature")
+            native = temperature_to_celsius(decoded.get("temperature"), "°C")
+            if native is not None:
+                if store_fks_sv_native_temperature(self.gateway, self.device_config.get("id"), native):
+                    async_dispatcher_send(
+                        self.hass,
+                        fks_sv_native_temperature_signal(self.gateway, self.device_config.get("id")),
+                    )
+                if self._has_room_temperature_assignment:
+                    self._internal_temperature = native
+                else:
+                    self._current_temperature = native
         if "valve_position" in decoded:
             try:
                 self._valve_position = int(decoded.get("valve_position"))

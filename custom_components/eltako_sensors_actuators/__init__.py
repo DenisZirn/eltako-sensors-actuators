@@ -158,20 +158,21 @@ async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry
     """Apply global diagnostics changes and honor only explicit reload requests."""
     from .const import CONF_DIAGNOSTICS_ENABLED
 
-    enabled = any(
-        bool(current.options.get(CONF_DIAGNOSTICS_ENABLED, True))
-        for current in hass.config_entries.async_entries(DOMAIN)
-    )
-    await async_set_diagnostics_enabled(hass, enabled)
-
-    # Room-temperature assignments are live options. FKS-SV waits for the
-    # valve's next receive window; mains-powered A5-10-06 actuators may push
-    # the newly selected source immediately.
+    # Dispatch first: temperature-source changes must reach their climate
+    # entities immediately, without waiting for asynchronous diagnostics setup.
+    # In particular A5-10-06 actuators need a command independently of a
+    # subsequent set_temperature service call.
     async_dispatcher_send(
         hass,
         SIGNAL_ROOM_TEMPERATURE_UPDATED,
         entry.entry_id,
     )
+
+    enabled = any(
+        bool(current.options.get(CONF_DIAGNOSTICS_ENABLED, True))
+        for current in hass.config_entries.async_entries(DOMAIN)
+    )
+    await async_set_diagnostics_enabled(hass, enabled)
 
     if not entry.options.get(CONF_RELOAD_AFTER_SAVE):
         _LOGGER.debug("ELTAKO options updated without reload request for entry %s", entry.entry_id)

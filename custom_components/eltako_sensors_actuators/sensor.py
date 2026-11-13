@@ -64,6 +64,12 @@ except Exception:  # pragma: no cover
         return re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
 
 from .const import CONF_DEVICES, DOMAIN
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from .room_temperature import (
+    fks_sv_native_temperature,
+    fks_sv_native_temperature_signal,
+    is_fks_sv_device,
+)
 from .bus.eep_a5_09_04 import decode_a5_09_04
 from .device_profiles import is_eltako_illuminance_device, is_legacy_frw_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
@@ -1856,7 +1862,13 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         self._last_energy_sample_ts = None
         self._temperature_ema_alpha = 0.25
         self._temperature_ema_value = None
-        self._smooth_temperature = (device_class == SensorDeviceClass.TEMPERATURE and key == "temperature")
+        self._is_fks_sv_native_sensor = key == "temperature" and is_fks_sv_device(device)
+        # FKS-SV readings must be identical in both HA entities, with no EMA.
+        self._smooth_temperature = (
+            device_class == SensorDeviceClass.TEMPERATURE
+            and key == "temperature" and not self._is_fks_sv_native_sensor
+        )
+        self._remove_fks_sv_temperature_listener = None
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
 
@@ -1902,8 +1914,23 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
             self._attr_state_class = state_class
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
+    def _update_from_fks_sv_native(self) -> None:
+        value = fks_sv_native_temperature(self.gateway, self.device_config.get("id"))
+        if value is not None:
+            self._value = value
+            self.schedule_update_ha_state()
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if self._is_fks_sv_native_sensor:
+            self._remove_fks_sv_temperature_listener = async_dispatcher_connect(
+                self.hass,
+                fks_sv_native_temperature_signal(self.gateway, self.device_config.get("id")),
+                self._update_from_fks_sv_native,
+            )
+            if fks_sv_native_temperature(self.gateway, self.device_config.get("id")) is not None:
+                self._update_from_fks_sv_native()
+                return
         last_state = await self.async_get_last_state()
         if last_state is None or last_state.state in {"unknown", "unavailable", ""}:
             return
@@ -1936,6 +1963,14 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
 
     def _handle_telegram(self, telegram) -> None:
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
+            return
+        if self._is_fks_sv_native_sensor:
+            # The climate entity validates and dispatches the shared reading.
+            # A TX echo must never update the physical valve measurement.
+            decoded = telegram.decoded or {}
+            if decoded.get("direction") == "to_actuator" or decoded.get("tx_echo"):
+                return
+            self._update_from_fks_sv_native()
             return
 
         if self.key == "last_seen":
@@ -2179,6 +2214,9 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         return round(watts, 1)
 
     async def async_will_remove_from_hass(self) -> None:
+        if self._remove_fks_sv_temperature_listener is not None:
+            self._remove_fks_sv_temperature_listener()
+            self._remove_fks_sv_temperature_listener = None
         if self._remove_listener:
             self._remove_listener()
 
