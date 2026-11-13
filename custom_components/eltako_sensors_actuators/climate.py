@@ -275,6 +275,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._control_reply_task = None
         self._teach_in_reply_task = None
         self._room_temperature_push_task = None
+        self._room_temperature_push_pending = False
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
@@ -357,6 +358,13 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             )
             self._rebind_external_temperature_listener()
             self._refresh_room_temperature_state()
+            # On startup restore the external reading to the real Series-14
+            # actuator, not just to the Home Assistant climate display.
+            if (
+                self._room_temperature_device_kind == "a5_10_06"
+                and self._actual_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+            ):
+                self._schedule_a5_10_06_room_temperature_push()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -452,10 +460,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
         if self._room_temperature_device_kind != "a5_10_06":
             return
+        # Remember every change while a previous telegram is in flight.
+        # Otherwise the latest external reading is silently dropped.
+        self._room_temperature_push_pending = True
         if self._room_temperature_push_task is None or self._room_temperature_push_task.done():
             self._room_temperature_push_task = self.gateway.hass.async_create_task(
-                self._async_push_a5_10_06_room_temperature()
+                self._async_drain_a5_10_06_room_temperature_pushes()
             )
+
+    async def _async_drain_a5_10_06_room_temperature_pushes(self) -> None:
+        """Coalesce concurrent updates, always transmitting the newest reading."""
+        while self._room_temperature_push_pending:
+            self._room_temperature_push_pending = False
+            await self._async_push_a5_10_06_room_temperature()
 
     async def _async_push_a5_10_06_room_temperature(self) -> None:
         """Push source changes immediately to mains-powered A5-10-06 actuators."""
@@ -512,12 +529,14 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._external_temperature,
             self._temperature_source_status,
             self._configured_temperature_source,
+            self._actual_temperature_source,
         )
         self._refresh_room_temperature_state()
         current = (
             self._external_temperature,
             self._temperature_source_status,
             self._configured_temperature_source,
+            self._actual_temperature_source,
         )
         if current != previous:
             self._schedule_a5_10_06_room_temperature_push()
