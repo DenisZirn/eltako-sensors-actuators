@@ -2219,6 +2219,9 @@ class EltakoYamlValueSensor(EltakoYamlEntity, SensorEntity):
         return round(watts, 1)
 
     async def async_will_remove_from_hass(self) -> None:
+        if self._remove_fks_native_listener is not None:
+            self._remove_fks_native_listener()
+            self._remove_fks_native_listener = None
         if self._remove_listener:
             self._remove_listener()
 
