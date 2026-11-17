@@ -395,21 +395,18 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             self._rgbw_color = (r, g, b, w)
             if _is_rgbw_device(self.device_config):
                 max_channel = max(r, g, b, w)
-                self._is_on = max_channel > 0
                 if _is_frgbw14_device(self.device_config):
-                    # A 07-3F-7F component telegram reports the absolute value
-                    # of ONE RGBW channel, not the HA light's global brightness.
-                    # The component with the highest value can change as colors
-                    # arrive one after another (R, G, B), so feeding its current
-                    # maximum back into brightness makes every color-picker
-                    # selection progressively darker. Preserve the requested HA
-                    # brightness; only an explicit dimmer status updates it.
-                    # A channel update may temporarily report zero while the
-                    # remaining channel telegrams are still in flight. Never
-                    # change global brightness based on partial channel data.
-                    pass
+                    # A single RGBW component is not global HA brightness.
+                    # During a color switch some components can temporarily be
+                    # zero while the remainder of the telegram burst arrives.
+                    # Do not dim (or turn off) the light on those partial
+                    # updates. Only an explicit dimmer status may change the
+                    # requested brightness.
+                    if max_channel > 0:
+                        self._is_on = True
                 else:
-                    # Keep the existing, hardware-proven FRGBW71L behavior.
+                    # Preserve established FRGBW71L feedback semantics.
+                    self._is_on = max_channel > 0
                     self._brightness = max_channel if self._is_on else 0
                 self.schedule_update_ha_state()
                 return
