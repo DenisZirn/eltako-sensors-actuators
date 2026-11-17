@@ -92,6 +92,21 @@ def _device_name(device: dict[str, Any]) -> str:
     return str(device.get("name") or "")
 
 
+def _is_frgbw14_device(device: dict[str, Any]) -> bool:
+    """Distinguish the Series-14 RGBW actuator from the RF FRGBW71L."""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return any(
+        "FRGBW14" in str(value or "").upper()
+        for value in (
+            device.get("device_type"),
+            device.get("model"),
+            device.get("name"),
+            raw.get("device_type"),
+            raw.get("name"),
+        )
+    )
+
+
 def _is_rgbw_device(device: dict[str, Any]) -> bool:
     eep = normalize_eep(device.get("eep"))
     sender_eep = normalize_eep(device.get("sender_eep"))
@@ -381,7 +396,19 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             if _is_rgbw_device(self.device_config):
                 max_channel = max(r, g, b, w)
                 self._is_on = max_channel > 0
-                self._brightness = max_channel if self._is_on else 0
+                if _is_frgbw14_device(self.device_config):
+                    # A 07-3F-7F component telegram reports the absolute value
+                    # of ONE RGBW channel, not the HA light's global brightness.
+                    # The component with the highest value can change as colors
+                    # arrive one after another (R, G, B), so feeding its current
+                    # maximum back into brightness makes every color-picker
+                    # selection progressively darker. Preserve the requested HA
+                    # brightness; only an explicit dimmer status updates it.
+                    if not self._is_on:
+                        self._brightness = 0
+                else:
+                    # Keep the existing, hardware-proven FRGBW71L behavior.
+                    self._brightness = max_channel if self._is_on else 0
                 self.schedule_update_ha_state()
                 return
         if "brightness" in feedback:
