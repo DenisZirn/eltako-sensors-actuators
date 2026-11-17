@@ -756,6 +756,45 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
+    def _validated_room_temperature_options(
+        self,
+        device: dict[str, Any],
+        source: str,
+        external_entity_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare and verify an override in this gateway's own options.
+
+        FAM-USB devices can have IDs such as FF-F2-6C-82; a bus-only
+        FGW14-USB configuration can use 00-00-00-02. Never infer the
+        physical key from an actuator's display name or sender ID.
+        """
+        device_id = normalize_enocean_id(device.get("id"))
+        if not device_id or device_id != self._pending_room_temperature_device_id:
+            raise ValueError("Selected room-temperature device changed during options flow")
+        options = set_room_temperature_override(
+            self.config_entry.options,
+            device_id,
+            source,
+            external_entity_id,
+        )
+        effective_source, effective_entity, origin = resolve_room_temperature_config(
+            device, options
+        )
+        expected_entity = external_entity_id if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else None
+        if (effective_source, effective_entity, origin) != (
+            source, expected_entity, "ui"
+        ):
+            raise ValueError("Room-temperature assignment failed validation")
+        _LOGGER.info(
+            "ELTAKO temperature assignment prepared: entry_id=%s device_id=%s "
+            "source=%s external_entity=%s",
+            self.config_entry.entry_id,
+            device_id,
+            source,
+            expected_entity,
+        )
+        return options
+
     async def async_step_room_temperature_source_native(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -764,10 +803,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         if device is None:
             return await self.async_step_room_temperature_assignment()
 
-        options = set_room_temperature_override(
-            self.config_entry.options,
-            self._pending_room_temperature_device_id,
-            ROOM_TEMPERATURE_SOURCE_NATIVE,
+        options = self._validated_room_temperature_options(
+            device, ROOM_TEMPERATURE_SOURCE_NATIVE
         )
         return self.async_create_entry(title="", data=options)
 
@@ -808,13 +845,15 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             if not _is_temperature_entity_compatible(self.hass, selected):
                 errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
             else:
-                options = set_room_temperature_override(
-                    self.config_entry.options,
-                    self._pending_room_temperature_device_id,
-                    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
-                    selected,
-                )
-                return self.async_create_entry(title="", data=options)
+                try:
+                    options = self._validated_room_temperature_options(
+                        device, ROOM_TEMPERATURE_SOURCE_EXTERNAL, selected
+                    )
+                except ValueError:
+                    _LOGGER.exception("ELTAKO external temperature assignment could not be saved")
+                    errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
+                else:
+                    return self.async_create_entry(title="", data=options)
 
         default_choice = default_entity if default_entity in entity_choices else next(
             (choice for choice in entity_choices if choice != _BACK),
