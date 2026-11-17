@@ -13,6 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.translation import async_invalidate_translations
 
 from .const import (
+    CONF_DIAGNOSTICS_ENABLED,
     CONF_GATEWAY_TYPE,
     CONF_PORT,
     CONF_RELOAD_AFTER_SAVE,
@@ -156,7 +157,6 @@ def _async_migrate_stable_entity_unique_ids(
 
 async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Apply global diagnostics changes and honor only explicit reload requests."""
-    from .const import CONF_DIAGNOSTICS_ENABLED
 
     # Update climate entities immediately after the new options are saved.
     # Diagnostics setup can await filesystem/panel operations or fail; neither
