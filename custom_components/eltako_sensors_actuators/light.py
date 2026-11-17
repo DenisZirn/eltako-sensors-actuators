@@ -404,8 +404,10 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                     # maximum back into brightness makes every color-picker
                     # selection progressively darker. Preserve the requested HA
                     # brightness; only an explicit dimmer status updates it.
-                    if not self._is_on:
-                        self._brightness = 0
+                    # A channel update may temporarily report zero while the
+                    # remaining channel telegrams are still in flight. Never
+                    # change global brightness based on partial channel data.
+                    pass
                 else:
                     # Keep the existing, hardware-proven FRGBW71L behavior.
                     self._brightness = max_channel if self._is_on else 0
