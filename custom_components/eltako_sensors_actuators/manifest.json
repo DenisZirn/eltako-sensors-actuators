@@ -1,10 +1,10 @@
 {
   "domain": "eltako_sensors_actuators",
   "name": "ELTAKO Sensors & Actuators",
-  "categories": ["hubs_protocols.building_automation"],
   "after_dependencies": [
     "http"
   ],
+  "categories": ["hubs_protocols.building_automation"],
   "codeowners": [
     "@DenisZirn"
   ],
