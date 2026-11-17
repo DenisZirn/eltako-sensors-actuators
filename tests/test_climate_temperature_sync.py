@@ -347,6 +347,67 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(e._native_a5_10_06_display_temperature(), 19.0)
 
 
+class OptionsFlowTemperaturePropagationTests(unittest.IsolatedAsyncioTestCase):
+    """The actual options-update listener must not await diagnostics first."""
+
+    async def test_switch_to_external_sends_without_setpoint_change_even_if_diagnostics_fails(self):
+        source = (INTEGRATION / "__init__.py").read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(INTEGRATION / "__init__.py"))
+        method = next(
+            node for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_async_options_update_listener"
+        )
+        module = ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[]))
+        propagated = []
+        diagnostics_started = []
+        async def failing_diagnostics(hass, enabled):
+            diagnostics_started.append(enabled)
+            raise RuntimeError("diagnostics service unavailable")
+        context = {
+            "DOMAIN": "eltako_sensors_actuators",
+            "CONF_DIAGNOSTICS_ENABLED": "diagnostics_enabled",
+            "CONF_RELOAD_AFTER_SAVE": "reload_after_save",
+            "SIGNAL_ROOM_TEMPERATURE_UPDATED": "eltako_room_temperature_updated",
+            "async_dispatcher_send": lambda hass, signal, entry: propagated.append((signal, entry)),
+            "async_set_diagnostics_enabled": failing_diagnostics,
+            "_LOGGER": logging.getLogger("eltako-options-test"),
+        }
+        exec(compile(module, str(INTEGRATION / "__init__.py"), "exec"), context)
+        entry = SimpleNamespace(entry_id="test-entry", options={})
+        hass = SimpleNamespace(config_entries=SimpleNamespace(
+            async_entries=lambda domain: [entry],
+        ))
+        await context["_async_options_update_listener"](hass, entry)
+        self.assertEqual(propagated, [("eltako_room_temperature_updated", "test-entry")])
+        self.assertEqual(diagnostics_started, [True])
+
+    async def test_switch_internal_to_external_pushes_new_sensor_immediately(self):
+        for kind in ("FHK14", "FAE14LPR"):
+            with self.subTest(kind=kind):
+                e, gateway, hass = make_climate(
+                    kind,
+                    external=19.25,
+                    source=const.ROOM_TEMPERATURE_SOURCE_NATIVE,
+                )
+                await e.async_added_to_hass()
+                self.assertIsNone(e._current_temperature)
+                self.assertEqual(len(gateway.calls), 0)
+
+                hass.options = room.set_room_temperature_override(
+                    hass.options, e.device_config["id"],
+                    const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.room"
+                )
+                e._handle_temperature_options_updated(gateway.entry_id)
+                self.assertEqual(e._current_temperature, 19.25)
+                await _wait_for_push(e)
+                self.assertEqual(len(gateway.calls), 1)
+                self.assertEqual(gateway.calls[0][1], "set_temperature")
+                self.assertEqual(gateway.calls[0][2]["temperature"], 21.0)
+                self.assertEqual(gateway.calls[0][2]["current_temperature"], 19.25)
+                self.assertEqual(e._last_sent_room_temperature, 19.25)
+
+
 class FksSvSingleTemperatureEntityTests(unittest.TestCase):
     def test_real_fks_sv_creates_no_duplicate_temperature_sensor(self):
         source = (INTEGRATION / "sensor.py").read_text(encoding="utf-8")
