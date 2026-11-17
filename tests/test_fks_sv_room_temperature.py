@@ -151,6 +151,41 @@ class TestPersistenceAndPriority(unittest.TestCase):
             (const.ROOM_TEMPERATURE_SOURCE_NATIVE, None, "ui"),
         )
 
+    def test_fam_usb_only_external_assignment_uses_physical_device_id(self):
+        """FAM-USB may send as FF-A6-07-02, but its FHK reports FF-F2-6C-82."""
+        device = {
+            **self.other,
+            "id": "FF-F2-6C-82",
+            "sender_id": "FF-A6-07-02",
+        }
+        options = room.set_room_temperature_override(
+            {"diagnostics_enabled": True},
+            device["id"],
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.schlafzimmer",
+        )
+        self.assertEqual(
+            room.resolve_room_temperature_config(device, options),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.schlafzimmer", "ui"),
+        )
+        self.assertNotIn("FF-A6-07-02", options[const.CONF_ROOM_TEMPERATURE_OVERRIDES])
+        self.assertIn("FF-F2-6C-82", options[const.CONF_ROOM_TEMPERATURE_OVERRIDES])
+
+    def test_fgw14_usb_only_external_assignment_uses_bus_id(self):
+        """The same code must accept the logical bus ID without a FAM-USB."""
+        device = {**self.other, "id": "00-00-00-02", "sender_id": "00-00-B0-02"}
+        options = room.set_room_temperature_override(
+            {},
+            device["id"],
+            const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
+            "sensor.schlafzimmer",
+        )
+        self.assertEqual(
+            room.resolve_room_temperature_config(device, options),
+            (const.ROOM_TEMPERATURE_SOURCE_EXTERNAL, "sensor.schlafzimmer", "ui"),
+        )
+        self.assertIn("00-00-00-02", options[const.CONF_ROOM_TEMPERATURE_OVERRIDES])
+
     def test_multiple_device_mappings_are_independent(self):
         options = room.set_room_temperature_override(
             {},
@@ -412,8 +447,11 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         self.assertNotIn("self.async_show_form(", source_method)
 
         save_native = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source_native")
-        self.assertIn("set_room_temperature_override(", save_native)
+        self.assertIn("_validated_room_temperature_options(", save_native)
         self.assertIn("ROOM_TEMPERATURE_SOURCE_NATIVE", save_native)
+        save_helper = self._function_source(INTEGRATION / "config_flow.py", "_validated_room_temperature_options")
+        self.assertIn("set_room_temperature_override(", save_helper)
+        self.assertIn("resolve_room_temperature_config(", save_helper)
         open_external = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_source_external")
         self.assertIn("async_step_room_temperature_entity()", open_external)
         back = self._function_source(INTEGRATION / "config_flow.py", "async_step_room_temperature_back_actuators")
