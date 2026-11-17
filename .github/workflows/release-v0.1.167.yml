@@ -14,6 +14,7 @@ on:
       - "tests/test_f2l14_sender_id.py"
       - "tests/test_frw_fah.py"
       - "tests/test_yaml_generic_sensor.py"
+      - "tests/test_climate_temperature_sync.py"
       - "RELEASE_NOTES_v0.1.167.md"
   workflow_dispatch:
 
@@ -60,6 +61,8 @@ jobs:
         run: python tests/test_frw_fah.py
       - name: Generic YAML sensor state and zero-value regression
         run: python tests/test_yaml_generic_sensor.py
+      - name: FKS-SV, FHK14 and FAE14 room-temperature runtime regression
+        run: python tests/test_climate_temperature_sync.py
 
   hacs:
     name: HACS compliance
