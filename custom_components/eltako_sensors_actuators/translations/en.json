@@ -89,6 +89,20 @@
           "room_temperature_device_id": "Heating actuator"
         },
         "menu_options": {
+          "room_temperature_device_0": "{device_0}",
+          "room_temperature_device_1": "{device_1}",
+          "room_temperature_device_2": "{device_2}",
+          "room_temperature_device_3": "{device_3}",
+          "room_temperature_device_4": "{device_4}",
+          "room_temperature_device_5": "{device_5}",
+          "room_temperature_device_6": "{device_6}",
+          "room_temperature_device_7": "{device_7}",
+          "room_temperature_device_8": "{device_8}",
+          "room_temperature_device_9": "{device_9}",
+          "room_temperature_device_10": "{device_10}",
+          "room_temperature_device_11": "{device_11}",
+          "room_temperature_page_previous": "← Previous actuators",
+          "room_temperature_page_next": "More actuators →",
           "room_temperature_back_main": "← Back to main menu"
         }
       },
