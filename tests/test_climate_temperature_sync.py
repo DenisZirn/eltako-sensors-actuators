@@ -338,7 +338,7 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_a5_10_06_unmeasured_value_is_not_40_or_0(self):
         for kind in ("FHK14", "FAE14LPR"):
             with self.subTest(kind=kind):
-                e, _, _ = make_climate(kind, source="native")
+                e, _, _ = make_climate(kind, source=const.ROOM_TEMPERATURE_SOURCE_NATIVE)
                 await e.async_added_to_hass()
                 self.assertIsNone(e._native_a5_10_06_display_temperature())
                 self.assertIsNone(e._current_temperature)
