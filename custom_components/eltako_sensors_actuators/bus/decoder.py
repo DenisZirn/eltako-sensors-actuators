@@ -631,7 +631,11 @@ def _decode_4bs(data: bytes, eep: str) -> dict[str, Any]:
         #   DB3 = 0x02, DB2 = dim value 0..100 %, DB1 = speed,
         #   DB0 bit3 = 1 data telegram, DB0 bit0 = on/off.
         # Decode those first, otherwise HA never sees the actuator state.
-        if db3 == 0x02 and (db0 & 0x08):
+        if db3 == 0x02 and (db0 & 0x08) and db0 not in {0x0E, 0x0F}:
+            # 07-3F-7F uses DB0=0x0F for per-channel controller data and
+            # DB0=0x0E for confirmation. Those packets can also have DB3=2
+            # (roughly 50% channel intensity) and must NOT be interpreted
+            # as FUNC38 global dimming feedback.
             percent = max(0, min(100, int(db2)))
             return {
                 "brightness": round(percent / 100.0 * 255),
