@@ -55,6 +55,9 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_NAME = "ELTAKO Sensors & Actuators"
 MANUAL_PORT = "manual"
 _BACK = "__back__"
+# Fixed translated slots keep menu labels visible in modern Home Assistant.
+# A page can show 12 actuators; further devices remain directly selectable.
+_ROOM_TEMPERATURE_MENU_PAGE_SIZE = 12
 
 _TTYS_RE = re.compile(r"^/dev/ttyS\d+$")
 
@@ -531,6 +534,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_gateway_choices: dict[str, str] = {}
         self._pending_room_temperature_device_id: str | None = None
         self._room_temperature_menu_targets: dict[str, str] = {}
+        self._room_temperature_menu_page = 0
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         # Repair the transient "__back__" marker that an earlier v0.1.164 test
@@ -640,42 +644,58 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_room_temperature_assignment(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show compatible climate actuators as directly clickable menu rows."""
-        choices = self._room_temperature_choices()
-        device_choices = [(device_id, label) for device_id, label in choices.items() if device_id != _BACK]
-        if not device_choices:
-            # The only menu item is a known, translated static step ID.
-            return self.async_show_menu(
-                step_id="room_temperature_assignment",
-                menu_options=["room_temperature_back_main"],
-            )
+        """Open one-click, translated menu rows for every compatible actuator.
 
-        # Dynamically generated menu step IDs do not have translation keys in
-        # strings.json. Use a labelled select form for variable device names;
-        # this works in all HA frontend versions and avoids blank menu items.
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            selection = str(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID) or "")
-            if selection == _BACK:
-                return await self.async_step_init()
-            selected = normalize_enocean_id(selection)
-            if selected and selected in self._room_temperature_devices():
-                self._pending_room_temperature_device_id = selected
-                return await self.async_step_room_temperature_source()
-            errors[CONF_ROOM_TEMPERATURE_DEVICE_ID] = "missing_room_temperature_device"
-
-        selection_default = (
-            self._pending_room_temperature_device_id
-            if self._pending_room_temperature_device_id in choices
-            else device_choices[0][0]
+        HA's current frontend resolves a list of menu step IDs through
+        translations. Fixed step slots plus runtime placeholders provide
+        dynamic device labels without untranslated/blank menu items.
+        """
+        device_choices = [
+            (device_id, label)
+            for device_id, label in self._room_temperature_choices().items()
+            if device_id != _BACK
+        ]
+        page_size = _ROOM_TEMPERATURE_MENU_PAGE_SIZE
+        page_count = max(1, (len(device_choices) + page_size - 1) // page_size)
+        self._room_temperature_menu_page = min(
+            max(0, self._room_temperature_menu_page), page_count - 1
         )
-        return self.async_show_form(
+        start = self._room_temperature_menu_page * page_size
+        visible = device_choices[start : start + page_size]
+
+        self._room_temperature_menu_targets = {}
+        menu_options: list[str] = []
+        placeholders: dict[str, str] = {}
+        for slot, (device_id, label) in enumerate(visible):
+            step_key = f"room_temperature_device_{slot}"
+            self._room_temperature_menu_targets[step_key] = device_id
+            menu_options.append(step_key)
+            placeholders[f"device_{slot}"] = label
+
+        if self._room_temperature_menu_page > 0:
+            menu_options.append("room_temperature_page_previous")
+        if self._room_temperature_menu_page < page_count - 1:
+            menu_options.append("room_temperature_page_next")
+        menu_options.append("room_temperature_back_main")
+        return self.async_show_menu(
             step_id="room_temperature_assignment",
-            data_schema=vol.Schema({
-                vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID, default=selection_default): vol.In(choices)
-            }),
-            errors=errors,
+            menu_options=menu_options,
+            description_placeholders=placeholders,
         )
+
+    async def async_step_room_temperature_page_next(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the next page of compatible actuators."""
+        self._room_temperature_menu_page += 1
+        return await self.async_step_room_temperature_assignment()
+
+    async def async_step_room_temperature_page_previous(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the previous page of compatible actuators."""
+        self._room_temperature_menu_page = max(0, self._room_temperature_menu_page - 1)
+        return await self.async_step_room_temperature_assignment()
 
     async def async_step_room_temperature_back_main(
         self, user_input: dict[str, Any] | None = None
