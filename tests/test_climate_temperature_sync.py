@@ -151,6 +151,9 @@ def _extract_method_class():
         "_LOGGER": logging.getLogger("eltako-room-temp-test"),
         "async_track_state_change_event": _register_event_listener,
         "async_dispatcher_connect": lambda *args: lambda: None,
+        # Match homeassistant.core.callback: dispatcher and state event handlers
+        # must be explicitly marked as safe to execute on HA's event loop.
+        "callback": lambda func: setattr(func, "_hass_callback", True) or func,
     }
     exec(compile(module, str(INTEGRATION / "climate.py"), "exec"), ns)
     return ns["ClimateUnderTest"]
@@ -406,6 +409,42 @@ class OptionsFlowTemperaturePropagationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(gateway.calls[0][2]["temperature"], 21.0)
                 self.assertEqual(gateway.calls[0][2]["current_temperature"], 19.25)
                 self.assertEqual(e._last_sent_room_temperature, 19.25)
+
+
+class ClimateEventLoopCallbackTests(unittest.TestCase):
+    """Regression: Home Assistant must not route temperature callbacks to an executor."""
+
+    def test_temperature_handlers_are_marked_as_ha_callbacks(self):
+        self.assertTrue(
+            getattr(CLIMATE._handle_temperature_options_updated, "_hass_callback", False),
+            "Dispatcher callback must run on the Home Assistant event loop",
+        )
+        self.assertTrue(
+            getattr(CLIMATE._handle_external_temperature_state_event, "_hass_callback", False),
+            "State change callback must run on the Home Assistant event loop",
+        )
+
+    def test_live_entity_updates_do_not_require_setpoint_changes(self):
+        source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        climate_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "EltakoClimate"
+        )
+        handlers = {
+            node.name: node for node in climate_class.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in {
+                "_handle_temperature_options_updated",
+                "_handle_external_temperature_state_event",
+            }
+        }
+        self.assertEqual(len(handlers), 2)
+        for name, method in handlers.items():
+            self.assertTrue(
+                any(isinstance(d, ast.Name) and d.id == "callback" for d in method.decorator_list),
+                f"{name} must use @callback; otherwise HA dispatches it via executor",
+            )
 
 
 class RoomTemperatureMenuTests(unittest.TestCase):
