@@ -408,6 +408,45 @@ class OptionsFlowTemperaturePropagationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(e._last_sent_room_temperature, 19.25)
 
 
+class RoomTemperatureMenuTests(unittest.TestCase):
+    """Ensure all dynamic menu slots are translated and directly clickable."""
+
+    def test_actuator_selector_is_a_menu_not_a_radio_form(self):
+        source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        flow = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "EltakoSensorsActuatorsOptionsFlow"
+        )
+        method = next(
+            node for node in flow.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "async_step_room_temperature_assignment"
+        )
+        method_source = ast.get_source_segment(source, method)
+        self.assertIn("self.async_show_menu(", method_source)
+        self.assertNotIn("self.async_show_form(", method_source)
+        self.assertIn("room_temperature_device_", method_source)
+
+    def test_menu_device_selection_uses_direct_step_callback(self):
+        source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")
+        self.assertIn("async def _async_select_room_temperature_menu_device(", source)
+        self.assertIn('if name.startswith("async_step_room_temperature_device_"):', source)
+        self.assertIn("return await self.async_step_room_temperature_source()", source)
+
+    def test_all_slot_and_page_labels_have_translations(self):
+        import json
+        for filename in ("strings.json", "translations/de.json", "translations/en.json"):
+            with self.subTest(filename=filename):
+                data = json.loads((INTEGRATION / filename).read_text(encoding="utf-8"))
+                menu = data["options"]["step"]["room_temperature_assignment"]["menu_options"]
+                for slot in range(12):
+                    key = f"room_temperature_device_{slot}"
+                    self.assertEqual(menu[key], "{device_" + str(slot) + "}")
+                for key in ("room_temperature_page_previous", "room_temperature_page_next", "room_temperature_back_main"):
+                    self.assertTrue(menu[key])
+
+
 class FksSvSingleTemperatureEntityTests(unittest.TestCase):
     def test_real_fks_sv_creates_no_duplicate_temperature_sensor(self):
         source = (INTEGRATION / "sensor.py").read_text(encoding="utf-8")
