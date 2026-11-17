@@ -22,6 +22,7 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -545,6 +546,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._handle_external_temperature_state_event,
         )
 
+    @callback
     def _handle_external_temperature_state_event(self, _event) -> None:
         previous = (
             self._external_temperature,
@@ -561,6 +563,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
+    @callback
     def _handle_temperature_options_updated(self, entry_id: str) -> None:
         if entry_id != self.gateway.entry_id or not self._has_room_temperature_assignment:
             return
