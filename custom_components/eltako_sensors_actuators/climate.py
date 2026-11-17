@@ -566,6 +566,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
         self._rebind_external_temperature_listener()
         self._refresh_room_temperature_state()
+        _LOGGER.info(
+            "ELTAKO room-temperature options applied: entry_id=%s device_id=%s "
+            "source=%s external_entity=%s external_value=%s status=%s",
+            entry_id,
+            self.device_config.get("id"),
+            self._configured_temperature_source,
+            self._external_temperature_entity,
+            self._external_temperature,
+            self._temperature_source_status,
+        )
         # FKS-SV must wait for the valve's next receive window. A5-10-06
         # Series-14 actuators are mains powered and can receive the update now.
         self._schedule_a5_10_06_room_temperature_push()
