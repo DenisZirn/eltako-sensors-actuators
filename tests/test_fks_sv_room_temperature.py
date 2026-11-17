@@ -364,6 +364,33 @@ class TestStaticIntegrationGuards(unittest.TestCase):
                 return ast.get_source_segment(source, node) or ""
         self.fail(f"Function {function_name} not found in {path}")
 
+    def test_imported_device_area_is_only_suggested_not_forced(self):
+        source = (INTEGRATION / "entity_base.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        classes = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+        yaml_entity = classes["EltakoYamlEntity"]
+        self.assertFalse(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "async_added_to_hass"
+                for node in yaml_entity.body
+            ),
+            "Manual area assignments must survive Home Assistant restarts",
+        )
+        base = classes["EltakoBaseEntity"]
+        device_info = next(
+            node
+            for node in base.body
+            if isinstance(node, ast.FunctionDef) and node.name == "device_info"
+        )
+        device_info_source = ast.get_source_segment(source, device_info) or ""
+        self.assertIn('_device_option(self.device_config, "area", "")', device_info_source)
+        self.assertIn("suggested_area=suggested_area", device_info_source)
+
     def test_manifest_matches_release_version(self):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.1.167")
