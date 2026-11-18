@@ -346,7 +346,17 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             try:
                 self._rgbw_color = tuple(max(0, min(255, int(v))) for v in rgbw[:4])
                 if _is_rgbw_device(self.device_config):
-                    self._frgbw_base_rgbw = self._rgbw_color
+                    if _is_frgbw14_device(self.device_config):
+                        # Older state entries stored the visible/scaled channels
+                        # rather than the full-intensity color. Reconstruct the
+                        # base once, so the next color change does not dim again.
+                        saved_brightness = max(1, self._brightness or 255)
+                        self._frgbw_base_rgbw = tuple(
+                            _clamp_u8(channel * 255.0 / saved_brightness)
+                            for channel in self._rgbw_color
+                        )
+                    else:
+                        self._frgbw_base_rgbw = self._rgbw_color
             except (TypeError, ValueError):
                 pass
 
@@ -364,6 +374,11 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
 
     @property
     def rgb_color(self):
+        # HA's RGB color and its brightness are independent properties. The
+        # hardware receives brightness-scaled RGBW, but reporting the scaled
+        # values back as RGB causes HA to apply brightness again on color changes.
+        if _is_frgbw14_device(self.device_config) and self._frgbw_base_rgbw is not None:
+            return tuple(self._frgbw_base_rgbw[:3])
         if self._rgbw_color is None:
             return None
         return tuple(self._rgbw_color[:3])
@@ -404,6 +419,11 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                     # requested brightness.
                     if max_channel > 0:
                         self._is_on = True
+                    if self._brightness is not None and self._brightness > 0:
+                        self._frgbw_base_rgbw = tuple(
+                            _clamp_u8(channel * 255.0 / self._brightness)
+                            for channel in self._rgbw_color
+                        )
                 else:
                     # Preserve established FRGBW71L feedback semantics.
                     self._is_on = max_channel > 0
@@ -434,7 +454,10 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         if command == "turn_on" and _is_rgbw_device(self.device_config):
             self._effect = None
             explicit_color = _rgbw_from_kwargs(kwargs)
-            brightness = _clamp_u8(kwargs.get(ATTR_BRIGHTNESS), self._brightness if self._brightness is not None else 255)
+            brightness = _clamp_u8(
+                kwargs.get(ATTR_BRIGHTNESS),
+                self._brightness if (self._brightness is not None and self._brightness > 0) else 255,
+            )
 
             if explicit_color is not None:
                 frgbw_target_base = explicit_color
