@@ -26,3 +26,30 @@ jobs:
           python-version: "3.14"
       - name: Test FRGBW14 brightness, color and decoder
         run: python tests/test_frgbw14_brightness.py
+      - name: Build standalone Home Assistant offline test ZIP
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path("custom_components/eltako_sensors_actuators")
+          output = Path("ELTAKO_Sensors_Actuators_FRGBW14_TEST.zip")
+          with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
+              for path in sorted(root.rglob("*")):
+                  if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+                      archive.write(path, path.relative_to(root).as_posix())
+          with ZipFile(output) as archive:
+              assert archive.testzip() is None
+              assert "gateway.py" in archive.namelist()
+              assert "light.py" in archive.namelist()
+              assert "bus/decoder.py" in archive.namelist()
+              assert json.loads(archive.read("manifest.json"))["version"] == "0.1.168"
+          print(output, output.stat().st_size)
+          PY
+      - name: Upload FRGBW14 offline test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELTAKO_FRGBW14_TEST_HA2
+          path: ELTAKO_Sensors_Actuators_FRGBW14_TEST.zip
+          if-no-files-found: error
+          retention-days: 14
