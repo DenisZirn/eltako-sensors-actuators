@@ -66,6 +66,7 @@ except Exception:  # pragma: no cover
 from .const import CONF_DEVICES, DOMAIN
 from .bus.eep_a5_09_04 import decode_a5_09_04
 from .device_profiles import is_eltako_illuminance_device, is_legacy_frw_device
+from .room_temperature import is_fks_sv_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import (
     EltakoBaseEntity,
@@ -407,6 +408,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _remove_obsolete_wall_rocker_entities(hass, entry, devices)
     _migrate_eltako_illuminance_entities(hass, entry, devices)
     _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices)
+    _remove_obsolete_fks_sv_temperature_entities(hass, entry, devices)
     _migrate_a5_12_01_registry_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
@@ -522,6 +524,22 @@ def _migrate_eltako_illuminance_entities(hass, entry, devices: list[dict[str, An
                 registry.async_remove(old_entity)
         except Exception:
             _LOGGER.exception("Failed to migrate A5-06-01 illuminance sensor %s", old_entity)
+
+
+def _remove_obsolete_fks_sv_temperature_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove only the former duplicate FKS-SV temperature sensor.
+
+    The valve's actual room temperature is exposed by its climate entity.
+    Keep the valve position and last-seen diagnostic sensors, and never touch
+    other integrations, gateways or unrelated A5-20-01 controllers.
+    """
+    registry = er.async_get(hass)
+    unique_ids = {
+        _yaml_entity_unique_id(entry.entry_id, device, "Temperatur")
+        for device in devices or []
+        if isinstance(device, dict) and is_fks_sv_device(device)
+    }
+    _remove_owned_legacy_sensor_entities(registry, entry, unique_ids, "duplicate FKS-SV temperature")
 
 
 def _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
@@ -1217,11 +1235,22 @@ def _futh55ed_hygrostat_entities(gateway, device: dict[str, Any]) -> list[Sensor
 
 
 def _a5_20_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
-    return [
-        EltakoYamlValueSensor(gateway, device, "temperature", "Temperatur", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    # A real FKS-SV already exposes its chosen Isttemperatur on the climate
+    # entity. A second temperature sensor could display a different smoothed
+    # valve reading, even when an external source is selected.
+    entities: list[SensorEntity] = []
+    if not is_fks_sv_device(device):
+        entities.append(
+            EltakoYamlValueSensor(
+                gateway, device, "temperature", "Temperatur",
+                SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
+            )
+        )
+    entities.extend([
         EltakoYamlValueSensor(gateway, device, "valve_position", "Ventilstellung", None, PERCENTAGE, state_class="measurement"),
         EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
-    ]
+    ])
+    return entities
 
 def _ffg7b_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     """Create the three-state FFG7B window sensor and diagnostics."""
@@ -1455,6 +1484,7 @@ class EltakoYamlGenericSensor(EltakoYamlEntity, SensorEntity):
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
     async def async_added_to_hass(self) -> None:
+        """Restore the last generic value without temperature-only attributes."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
         if last_state is None or last_state.state in {"unknown", "unavailable", ""}:
@@ -1466,32 +1496,6 @@ class EltakoYamlGenericSensor(EltakoYamlEntity, SensorEntity):
         except (TypeError, ValueError):
             pass
         self._value = value
-        if self._smooth_temperature:
-            try:
-                self._temperature_ema_value = float(value)
-            except (TypeError, ValueError):
-                self._temperature_ema_value = None
-
-    def _apply_temperature_smoothing(self, value: Any) -> Any:
-        """Apply a light EMA only to real measured temperature sensors.
-
-        The raw telegram value remains exposed as ``raw_temperature``. Setpoint
-        and controller-command temperatures are deliberately not filtered.
-        """
-        if not self._smooth_temperature:
-            return value
-        try:
-            raw = float(value)
-        except (TypeError, ValueError):
-            return value
-        self._attr_extra_state_attributes["raw_temperature"] = raw
-        self._attr_extra_state_attributes["temperature_filter"] = "EMA alpha=0.25"
-        if self._temperature_ema_value is None:
-            filtered = raw
-        else:
-            filtered = (self._temperature_ema_alpha * raw) + ((1.0 - self._temperature_ema_alpha) * self._temperature_ema_value)
-        self._temperature_ema_value = filtered
-        return round(filtered, 2)
 
     @property
     def native_value(self):
@@ -1500,7 +1504,11 @@ class EltakoYamlGenericSensor(EltakoYamlEntity, SensorEntity):
     def _handle_telegram(self, telegram) -> None:
         if str(telegram.sender_id).upper() != str(self.device_config.get("id")).upper():
             return
-        self._value = telegram.decoded.get("value") or telegram.decoded.get("raw")
+        # Preserve valid falsy measurements (e.g. 0 or False).
+        value = telegram.decoded.get("value")
+        if value is None:
+            value = telegram.decoded.get("raw")
+        self._value = value
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:

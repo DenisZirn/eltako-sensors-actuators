@@ -2,6 +2,16 @@
 
 [← Dokumentationsübersicht](README.md)
 
+## Änderungen in v0.1.168
+
+- Manuelle Raumzuordnungen bleiben nach Home-Assistant-Neustarts erhalten; YAML-`area` wird nur als `suggested_area` berücksichtigt.
+- Externe Isttemperatur bei FHK14 und FAE14 wird unmittelbar beim Speichern und anschließend bei Sensoränderungen aktualisiert, ohne Veränderung der Solltemperatur.
+- FKS-SV: nur noch einheitliche Climate-Isttemperatur; Bereinigung älterer doppelter eigener Sensor-Entities.
+- Konfigurationsdialog: direkt anklickbare Aktorauswahl zur Raumtemperatur-Zuordnung.
+- Robustere YAML-Sensorinitialisierung und Verarbeitung von Null- und False-Werten.
+- HACS/hassfest-Qualitätsprüfung, Integrationskategorie und Node.js-24-Actions aktualisiert.
+- FRGBW14-Farbwechselkorrektur bleibt aus diesem Release ausgeschlossen.
+
 ## Wartungsstand von v0.1.165
 
 Das ursprüngliche Release wurde **ohne Versionssprung** um einen hardwaregetesteten **F2L14-FAM-USB-Sender-ID-Fix** ergänzt. Das vorhandene Release-ZIP wurde ersetzt; `manifest.json` bleibt auf `0.1.165`. Bereits installierte Systeme bekommen dafür normalerweise keinen neuen Marketplace-Updatehinweis. Außerdem bleibt der ursprüngliche Git-Tag auf seinem Erstveröffentlichungs-Commit.

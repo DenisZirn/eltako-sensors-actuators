@@ -22,6 +22,7 @@ try:
 except Exception:  # pragma: no cover - older HA compatibility
     PRECISION_TENTHS = 0.1
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -275,6 +276,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._control_reply_task = None
         self._teach_in_reply_task = None
         self._room_temperature_push_task = None
+        self._room_temperature_push_pending = False
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
@@ -335,6 +337,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             restored_preset = attrs.get("preset_mode")
             if restored_preset in (getattr(self, "_attr_preset_modes", None) or []):
                 self._attr_preset_mode = restored_preset
+            if self._room_temperature_device_kind == "a5_10_06":
+                # A temperature-only refresh must not silently change the
+                # heating mode that Home Assistant restored after a restart.
+                if self._attr_hvac_mode == HVACMode.OFF:
+                    self._fhk_heater_mode = "off"
+                elif self._attr_preset_mode == PRESET_SLEEP:
+                    self._fhk_heater_mode = "night_setback"
+                elif self._attr_preset_mode == PRESET_ECO:
+                    self._fhk_heater_mode = "setback"
+                else:
+                    self._fhk_heater_mode = "normal"
 
             if self._has_room_temperature_assignment:
                 self._last_sent_room_temperature = temperature_to_celsius(
@@ -357,6 +370,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             )
             self._rebind_external_temperature_listener()
             self._refresh_room_temperature_state()
+            # An already-available source produces no new state_changed event
+            # after restart. Only re-send if a valid previous HVAC state was
+            # restored; do not guess the mode of a newly created actuator.
+            if (
+                last_state is not None
+                and self._room_temperature_device_kind == "a5_10_06"
+                and self._configured_temperature_source == ROOM_TEMPERATURE_SOURCE_EXTERNAL
+                and self._external_temperature is not None
+            ):
+                self._schedule_a5_10_06_room_temperature_push()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -375,14 +398,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
 
     def _native_a5_10_06_display_temperature(self) -> float | None:
-        internal = temperature_to_celsius(self._internal_temperature, "°C")
-        if internal is not None and self._has_genuine_current_temperature:
-            return internal
-        if self._is_fhk14:
-            return 40.0
-        if self._is_fae14lpr:
-            return 0.0
-        return internal
+        # A5-10-06's 40 C native DB1 marker and FAE's 0 C placeholder
+        # are not physical measurements. Never present them as an Istwert.
+        if not self._has_genuine_current_temperature:
+            return None
+        return temperature_to_celsius(self._internal_temperature, "°C")
 
     def _refresh_room_temperature_state(self) -> float | None:
         """Resolve configured source, fallback and displayed/current temperature."""
@@ -452,16 +472,35 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
         if self._room_temperature_device_kind != "a5_10_06":
             return
+        # Coalesce rapid events but never lose the last update if a serial
+        # send is still running. A later source change triggers a final send.
+        self._room_temperature_push_pending = True
         if self._room_temperature_push_task is None or self._room_temperature_push_task.done():
             self._room_temperature_push_task = self.gateway.hass.async_create_task(
-                self._async_push_a5_10_06_room_temperature()
+                self._async_flush_a5_10_06_room_temperature_push()
             )
+
+    async def _async_flush_a5_10_06_room_temperature_push(self) -> None:
+        while self._room_temperature_push_pending:
+            self._room_temperature_push_pending = False
+            try:
+                await self._async_push_a5_10_06_room_temperature()
+            except Exception:
+                _LOGGER.exception(
+                    "ELTAKO A5-10-06 room-temperature send failed: device=%s",
+                    self.device_config.get("id"),
+                )
+                # Do not spin indefinitely on a disconnected gateway.
+                # The next sensor/options change can schedule another attempt.
 
     async def _async_push_a5_10_06_room_temperature(self) -> None:
         """Push source changes immediately to mains-powered A5-10-06 actuators."""
         current_temperature = self._a5_10_06_outgoing_room_temperature()
         target = float(self._target_temperature or 20.0)
-        heater_mode = self._fhk_heater_mode
+        heater_mode = (
+            "off" if self._attr_hvac_mode == HVACMode.OFF
+            else self._fhk_heater_mode
+        )
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
@@ -507,6 +546,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._handle_external_temperature_state_event,
         )
 
+    @callback
     def _handle_external_temperature_state_event(self, _event) -> None:
         previous = (
             self._external_temperature,
@@ -523,11 +563,22 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
+    @callback
     def _handle_temperature_options_updated(self, entry_id: str) -> None:
         if entry_id != self.gateway.entry_id or not self._has_room_temperature_assignment:
             return
         self._rebind_external_temperature_listener()
         self._refresh_room_temperature_state()
+        _LOGGER.info(
+            "ELTAKO room-temperature options applied: entry_id=%s device_id=%s "
+            "source=%s external_entity=%s external_value=%s status=%s",
+            entry_id,
+            self.device_config.get("id"),
+            self._configured_temperature_source,
+            self._external_temperature_entity,
+            self._external_temperature,
+            self._temperature_source_status,
+        )
         # FKS-SV must wait for the valve's next receive window. A5-10-06
         # Series-14 actuators are mains powered and can receive the update now.
         self._schedule_a5_10_06_room_temperature_push()
@@ -1141,6 +1192,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
+        self._room_temperature_push_pending = False
         for task in (
             self._control_reply_task,
             self._teach_in_reply_task,
