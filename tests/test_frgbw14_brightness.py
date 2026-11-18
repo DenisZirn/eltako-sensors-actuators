@@ -42,7 +42,6 @@ _feedback_handler = _load_method(
         "decode_actuator_feedback": lambda _device, decoded, _sender: decoded,
         "_is_rgbw_device": lambda d: d.get("eep") == "07-3F-7F",
         "_is_frgbw14_device": _is_frgbw14,
-        "time": SimpleNamespace(monotonic=lambda: 100.0),
         "_LOGGER": SimpleNamespace(debug=lambda *_args, **_kwargs: None),
     },
 )
@@ -60,7 +59,6 @@ class DummyLight:
         self._frgbw_base_rgbw = (255, 0, 0, 0)
         self._brightness = brightness
         self._is_on = True
-        self._frgbw14_color_feedback_guard_until = 0.0
         self.updates = 0
 
     def schedule_update_ha_state(self):
@@ -82,46 +80,73 @@ class FRGBW14BrightnessTests(unittest.TestCase):
         light._rgbw_color = (127, 172, 255, 0)
         light._frgbw_base_rgbw = (127, 172, 255, 0)
         for _ in range(20):
-            light._frgbw14_color_feedback_guard_until = 102.5
             for component, value in (
                 ("red", 127), ("green", 172), ("blue", 255),
             ):
                 light.receive(component, value)
+            decoded = _decode_4bs(bytes.fromhex("02 31 00 09"), "07-3F-7F")
+            self.assertEqual(decoded["dimmer_percent"], 49)
             light._handle_telegram(
-                SimpleNamespace(
-                    decoded={
-                        "brightness": 127,
-                        "state": True,
-                        "telegram_type": "frgbw_dimmer_status",
-                    },
-                    sender_id="FF-BF-5C-A3",
-                )
+                SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3")
             )
             self.assertEqual(light._brightness, 255)
             self.assertTrue(light._is_on)
 
-    def test_frgbw14_accepts_genuine_brightness_after_color_burst(self):
+    def test_logged_frgbw14_status_values_do_not_move_global_slider(self):
+        light = DummyLight("FRGBW14", 180)
+        # Actual captured packets from 18 Nov. Each reported dim level
+        # follows the RED channel, even seconds after a color change.
+        for raw, percent in (
+            ("02 31 00 09", 49),
+            ("02 2F 00 09", 47),
+            ("02 60 00 09", 96),
+            ("02 64 00 09", 100),
+            ("02 2B 00 09", 43),
+            ("02 1B 00 09", 27),
+            ("02 09 00 09", 9),
+            ("02 19 00 09", 25),
+        ):
+            decoded = _decode_4bs(bytes.fromhex(raw), "07-3F-7F")
+            self.assertEqual(decoded["telegram_type"], "frgbw_dimmer_status")
+            self.assertEqual(decoded["dimmer_percent"], percent)
+            light._handle_telegram(
+                SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3")
+            )
+            self.assertEqual(light._brightness, 180)
+            self.assertTrue(light._is_on)
+        self.assertEqual(light.updates, 0)
+
+    def test_frgbw14_red_channel_zero_does_not_turn_blue_light_off(self):
         light = DummyLight("FRGBW14", 255)
-        # Guard has expired at test-time 100.
-        light._frgbw14_color_feedback_guard_until = 99.0
+        light._rgbw_color = (0, 0, 255, 0)
+        light._frgbw_base_rgbw = (0, 0, 255, 0)
+        # A hypothetical red-channel status of zero is not global OFF.
+        decoded = _decode_4bs(bytes.fromhex("02 00 00 08"), "07-3F-7F")
+        self.assertFalse(decoded["state"])
+        light._handle_telegram(
+            SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3")
+        )
+        self.assertEqual(light._brightness, 255)
+        self.assertTrue(light._is_on)
+        self.assertEqual(light.rgb_color, (0, 0, 255))
+
+    def test_frgbw14_other_brightness_feedback_still_supported(self):
+        light = DummyLight("FRGBW14", 255)
         light._handle_telegram(
             SimpleNamespace(
-                decoded={"brightness": 128, "state": True},
+                decoded={"brightness": 128, "state": True, "telegram_type": "actual_brightness"},
                 sender_id="FF-BF-5C-A3",
             )
         )
         self.assertEqual(light._brightness, 128)
 
-    def test_frgbw71l_brightness_feedback_is_not_guarded(self):
+    def test_frgbw71l_dimmer_status_behavior_is_unchanged(self):
         light = DummyLight("FRGBW71L", 255)
-        light._frgbw14_color_feedback_guard_until = 102.5
+        decoded = _decode_4bs(bytes.fromhex("02 31 00 09"), "07-3F-7F")
         light._handle_telegram(
-            SimpleNamespace(
-                decoded={"brightness": 127, "state": True},
-                sender_id="FF-BF-5C-A3",
-            )
+            SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3")
         )
-        self.assertEqual(light._brightness, 127)
+        self.assertEqual(light._brightness, 125)
 
     def test_frgbw14_color_is_not_scaled_twice_in_ha(self):
         light = DummyLight("FRGBW14", 128)
@@ -160,7 +185,7 @@ class FRGBW14BrightnessTests(unittest.TestCase):
                 self.assertTrue(light._is_on)
         self.assertEqual(light.updates, 27)
 
-    def test_real_dimmer_brightness_feedback_remains_supported(self):
+    def test_generic_brightness_feedback_remains_supported(self):
         light = DummyLight("FRGBW14", 240)
         light._handle_telegram(
             SimpleNamespace(decoded={"brightness": 128, "state": True}, sender_id="FF-BF-5C-A3")

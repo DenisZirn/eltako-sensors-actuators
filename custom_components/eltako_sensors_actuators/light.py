@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import colorsys
-import time
 from typing import Any
 
 from homeassistant.components.light import ATTR_BRIGHTNESS, LightEntity
@@ -308,11 +307,6 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         # brightness so brightness-only calls do not create new colors and
         # color changes always replace all four channels.
         self._frgbw_base_rgbw: tuple[int, int, int, int] | None = None
-        # Series-14 may report a channel-specific intensity while it applies
-        # the RGB sequence. That is not a new global brightness setting.
-        # Ignore transient brightness feedback only during color commands;
-        # allow normal physical brightness feedback afterwards.
-        self._frgbw14_color_feedback_guard_until = 0.0
         self._effect = None
         eep = normalize_eep(device.get("eep"))
         if _is_rgbw_device(device):
@@ -399,6 +393,25 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         )
         if feedback is None:
             return
+        if (
+            _is_frgbw14_device(self.device_config)
+            and feedback.get("telegram_type") == "frgbw_dimmer_status"
+        ):
+            # FRGBW14 FUNC38 status (DB3=0x02, DB0=0x09) reports a color
+            # channel intensity, not the global Home Assistant brightness.
+            # Field data showed e.g. R=69/255 followed by 27%, and R=110
+            # followed by 43%, even more than 2.5 s after the color command.
+            # Ignore this misleading value unconditionally, including its
+            # ON/OFF flag (red=0 does not imply RGBW is off). HA retains the
+            # explicit brightness requested through the entity command path.
+            # FRGBW71L and other physical feedback are not affected.
+            _LOGGER.debug(
+                "FRGBW14 ignoring channel-derived FUNC38 status: "
+                "percent=%s requested_brightness=%s",
+                feedback.get("dimmer_percent"),
+                self._brightness,
+            )
+            return
         if "rgbw_color" in feedback:
             self._rgbw_color = tuple(feedback["rgbw_color"])
         if "component" in feedback and "component_value" in feedback:
@@ -421,8 +434,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                     # During a color switch some components can temporarily be
                     # zero while the remainder of the telegram burst arrives.
                     # Do not dim (or turn off) the light on those partial
-                    # updates. Only an explicit dimmer status may change the
-                    # requested brightness.
+                    # updates. Global brightness is set by HA turn_on commands.
                     if max_channel > 0:
                         self._is_on = True
                 else:
@@ -432,22 +444,6 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                 self.schedule_update_ha_state()
                 return
         if "brightness" in feedback:
-            if (
-                _is_frgbw14_device(self.device_config)
-                and time.monotonic() < self._frgbw14_color_feedback_guard_until
-            ):
-                # The first channel of the HA blue favorite is R=127. Its
-                # 49-50% intensity can otherwise leak into global brightness
-                # from a transient FRGBW14 status response. The requested
-                # global brightness is tracked independently by async_turn_on.
-                _LOGGER.debug(
-                    "FRGBW14 ignoring color-burst brightness feedback: "
-                    "value=%s type=%s retained_brightness=%s",
-                    feedback.get("brightness"),
-                    feedback.get("telegram_type"),
-                    self._brightness,
-                )
-                return
             self._brightness = int(feedback["brightness"])
             self._is_on = bool(self._brightness)
         elif "state" in feedback:
@@ -472,9 +468,6 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             self._effect = None
             explicit_color = _rgbw_from_kwargs(kwargs)
             if _is_frgbw14_device(self.device_config):
-                self._frgbw14_color_feedback_guard_until = (
-                    time.monotonic() + 2.5 if explicit_color is not None else 0.0
-                )
                 _LOGGER.debug(
                     "FRGBW14 turn_on request: color=%s brightness_arg=%s "
                     "previous_brightness=%s",
