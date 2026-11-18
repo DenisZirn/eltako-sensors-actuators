@@ -44,14 +44,17 @@ _feedback_handler = _load_method(
     },
 )
 _decode_4bs = _load_function("bus/decoder.py", "_decode_4bs", {"Any": Any})
+_rgb_color = _load_method("light.py", "EltakoLight", "rgb_color", {"_is_frgbw14_device": _is_frgbw14})
 
 
 class DummyLight:
     _handle_telegram = _feedback_handler
+    rgb_color = property(_rgb_color)
 
     def __init__(self, device_type: str, brightness: int = 240):
         self.device_config = {"device_type": device_type, "eep": "07-3F-7F"}
         self._rgbw_color = (255, 0, 0, 0)
+        self._frgbw_base_rgbw = (255, 0, 0, 0)
         self._brightness = brightness
         self._is_on = True
         self.updates = 0
@@ -66,6 +69,28 @@ class DummyLight:
 
 
 class FRGBW14BrightnessTests(unittest.TestCase):
+    def test_frgbw14_color_is_not_scaled_twice_in_ha(self):
+        light = DummyLight("FRGBW14", 128)
+        light._rgbw_color = (128, 0, 0, 0)  # actual visible channel value
+        light._frgbw_base_rgbw = (255, 0, 0, 0)  # unscaled HA color
+        self.assertEqual(light.rgb_color, (255, 0, 0))
+        self.assertEqual(light._brightness, 128)
+
+    def test_frgbw14_color_feedback_cannot_override_ha_base_color(self):
+        light = DummyLight("FRGBW14", 128)
+        light._rgbw_color = (128, 0, 0, 0)
+        light._frgbw_base_rgbw = (255, 0, 0, 0)
+        light.receive("red", 0)
+        light.receive("green", 128)
+        light.receive("blue", 0)
+        self.assertEqual(light.rgb_color, (255, 0, 0))
+        self.assertEqual(light._brightness, 128)
+
+    def test_frgbw71l_still_reports_visible_color(self):
+        light = DummyLight("FRGBW71L", 128)
+        light._rgbw_color = (128, 0, 0, 0)
+        self.assertEqual(light.rgb_color, (128, 0, 0))
+
     def test_component_feedback_does_not_dim_global_brightness(self):
         light = DummyLight("FRGBW14", 240)
         for _ in range(3):
