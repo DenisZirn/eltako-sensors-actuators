@@ -1,0 +1,28 @@
+name: FRGBW14 RGBW brightness regression
+
+on:
+  pull_request:
+    paths:
+      - "custom_components/eltako_sensors_actuators/light.py"
+      - "custom_components/eltako_sensors_actuators/bus/decoder.py"
+      - "tests/test_frgbw14_brightness.py"
+      - ".github/workflows/test-frgbw14.yml"
+  push:
+    branches:
+      - "fix/frgbw14-brightness-20261117"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frgbw14:
+    name: Verify FRGBW14 brightness and FRGBW71L compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Test FRGBW14 brightness, color and decoder
+        run: python tests/test_frgbw14_brightness.py
