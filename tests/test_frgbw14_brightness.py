@@ -21,7 +21,8 @@ def _load_method(module_name: str, class_name: str, method_name: str, globals_: 
     node = next(n for n in parent.body if isinstance(n, ast.FunctionDef) and n.name == method_name)
     namespace = dict(globals_)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), module_name, "exec"), namespace)
-    return namespace[method_name]
+    method = namespace[method_name]
+    return method.fget if isinstance(method, property) else method
 
 
 def _load_function(module_name: str, function_name: str, globals_: dict):
