@@ -42,6 +42,8 @@ _feedback_handler = _load_method(
         "decode_actuator_feedback": lambda _device, decoded, _sender: decoded,
         "_is_rgbw_device": lambda d: d.get("eep") == "07-3F-7F",
         "_is_frgbw14_device": _is_frgbw14,
+        "time": SimpleNamespace(monotonic=lambda: 100.0),
+        "_LOGGER": SimpleNamespace(debug=lambda *_args, **_kwargs: None),
     },
 )
 _decode_4bs = _load_function("bus/decoder.py", "_decode_4bs", {"Any": Any})
@@ -58,6 +60,7 @@ class DummyLight:
         self._frgbw_base_rgbw = (255, 0, 0, 0)
         self._brightness = brightness
         self._is_on = True
+        self._frgbw14_color_feedback_guard_until = 0.0
         self.updates = 0
 
     def schedule_update_ha_state(self):
@@ -70,6 +73,56 @@ class DummyLight:
 
 
 class FRGBW14BrightnessTests(unittest.TestCase):
+    def test_blue_favorite_does_not_set_brightness_to_red_channel(self):
+        light = DummyLight("FRGBW14", 255)
+        # Home Assistant's default blue favorite is not pure blue:
+        # rgb_color=(127, 172, 255), without an explicit brightness value.
+        # The red channel is about 49.8%; a misleading partial feedback
+        # must not replace the independent global brightness.
+        light._rgbw_color = (127, 172, 255, 0)
+        light._frgbw_base_rgbw = (127, 172, 255, 0)
+        for _ in range(20):
+            light._frgbw14_color_feedback_guard_until = 102.5
+            for component, value in (
+                ("red", 127), ("green", 172), ("blue", 255),
+            ):
+                light.receive(component, value)
+            light._handle_telegram(
+                SimpleNamespace(
+                    decoded={
+                        "brightness": 127,
+                        "state": True,
+                        "telegram_type": "frgbw_dimmer_status",
+                    },
+                    sender_id="FF-BF-5C-A3",
+                )
+            )
+            self.assertEqual(light._brightness, 255)
+            self.assertTrue(light._is_on)
+
+    def test_frgbw14_accepts_genuine_brightness_after_color_burst(self):
+        light = DummyLight("FRGBW14", 255)
+        # Guard has expired at test-time 100.
+        light._frgbw14_color_feedback_guard_until = 99.0
+        light._handle_telegram(
+            SimpleNamespace(
+                decoded={"brightness": 128, "state": True},
+                sender_id="FF-BF-5C-A3",
+            )
+        )
+        self.assertEqual(light._brightness, 128)
+
+    def test_frgbw71l_brightness_feedback_is_not_guarded(self):
+        light = DummyLight("FRGBW71L", 255)
+        light._frgbw14_color_feedback_guard_until = 102.5
+        light._handle_telegram(
+            SimpleNamespace(
+                decoded={"brightness": 127, "state": True},
+                sender_id="FF-BF-5C-A3",
+            )
+        )
+        self.assertEqual(light._brightness, 127)
+
     def test_frgbw14_color_is_not_scaled_twice_in_ha(self):
         light = DummyLight("FRGBW14", 128)
         light._rgbw_color = (128, 0, 0, 0)  # actual visible channel value
