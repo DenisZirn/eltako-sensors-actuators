@@ -419,11 +419,6 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                     # requested brightness.
                     if max_channel > 0:
                         self._is_on = True
-                    if self._brightness is not None and self._brightness > 0:
-                        self._frgbw_base_rgbw = tuple(
-                            _clamp_u8(channel * 255.0 / self._brightness)
-                            for channel in self._rgbw_color
-                        )
                 else:
                     # Preserve established FRGBW71L feedback semantics.
                     self._is_on = max_channel > 0
