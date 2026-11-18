@@ -26,7 +26,7 @@ jobs:
           python-version: "3.14"
       - name: Test FRGBW14 brightness, color and decoder
         run: python tests/test_frgbw14_brightness.py
-      - name: Stage official release layout at archive root
+      - name: Stage single eltako_sensors_actuators directory in test ZIP
         run: |
           python - <<'PY'
           import json
@@ -34,8 +34,10 @@ jobs:
           from pathlib import Path
 
           root = Path("custom_components/eltako_sensors_actuators")
-          output = Path("frgbw14_package")
-          output.mkdir()
+          # The artifact ZIP must have ONE top-level folder named
+          # eltako_sensors_actuators, identical to the manual install layout.
+          output = Path("frgbw14_package") / "eltako_sensors_actuators"
+          output.mkdir(parents=True)
           expected = set()
           for source in sorted(root.rglob("*")):
               if not source.is_file() or "__pycache__" in source.parts or source.suffix == ".pyc":
@@ -55,9 +57,9 @@ jobs:
           assert required <= actual, required - actual
           assert not any(name.endswith(".zip") or name.startswith("custom_components/") for name in actual)
           assert json.loads((output / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
-          print(f"Integration files at the archive root: {len(actual)}")
+          print(f"Integration files in eltako_sensors_actuators/: {len(actual)}")
           PY
-      - name: Upload single-layer ZIP (same layout as release)
+      - name: Upload single ZIP with eltako_sensors_actuators root folder
         uses: actions/upload-artifact@v4
         with:
           name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
@@ -68,7 +70,7 @@ jobs:
           compression-level: 9
 
   verify_package:
-    name: Verify downloaded ZIP matches official integration layout
+    name: Verify ZIP has exactly one eltako_sensors_actuators root folder
     needs: frgbw14
     runs-on: ubuntu-latest
     steps:
@@ -78,22 +80,31 @@ jobs:
         with:
           name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
           path: verified_package
-      - name: Compare extracted ZIP contents to release layout
+      - name: Compare ZIP contents to required integration folder layout
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           source = Path("custom_components/eltako_sensors_actuators")
           root = Path("verified_package")
+          integration = root / "eltako_sensors_actuators"
+          # The extracted artifact must have ONE root directory and no other
+          # files or folders. Do not use a flat archive or a nested archive.
+          assert sorted(path.name for path in root.iterdir()) == ["eltako_sensors_actuators"]
+          assert integration.is_dir()
           actual = {file.relative_to(root).as_posix() for file in root.rglob("*") if file.is_file()}
           expected = {
-              file.relative_to(source).as_posix()
+              "eltako_sensors_actuators/" + file.relative_to(source).as_posix()
               for file in source.rglob("*")
               if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc"
           }
           assert actual == expected, {"missing": sorted(expected - actual), "extra": sorted(actual - expected)}
-          assert "__init__.py" in actual and "manifest.json" in actual and "bus/decoder.py" in actual
+          assert {
+              "eltako_sensors_actuators/__init__.py",
+              "eltako_sensors_actuators/manifest.json",
+              "eltako_sensors_actuators/bus/decoder.py",
+          } <= actual
           assert not any(name.endswith(".zip") for name in actual)
-          assert json.loads((root / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
-          print("PASS: one ZIP with release-identical integration root; no extra folders or nested ZIP")
+          assert json.loads((integration / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
+          print("PASS: one ZIP -> eltako_sensors_actuators/ -> all integration files; no extra layers")
           PY
