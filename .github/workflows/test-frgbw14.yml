@@ -26,30 +26,74 @@ jobs:
           python-version: "3.14"
       - name: Test FRGBW14 brightness, color and decoder
         run: python tests/test_frgbw14_brightness.py
-      - name: Build standalone Home Assistant offline test ZIP
+      - name: Stage official release layout at archive root
         run: |
           python - <<'PY'
-          from pathlib import Path
           import json
-          from zipfile import ZipFile, ZIP_DEFLATED
+          import shutil
+          from pathlib import Path
+
           root = Path("custom_components/eltako_sensors_actuators")
-          output = Path("ELTAKO_Sensors_Actuators_FRGBW14_TEST.zip")
-          with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
-              for path in sorted(root.rglob("*")):
-                  if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
-                      archive.write(path, path.relative_to(root).as_posix())
-          with ZipFile(output) as archive:
-              assert archive.testzip() is None
-              assert "gateway.py" in archive.namelist()
-              assert "light.py" in archive.namelist()
-              assert "bus/decoder.py" in archive.namelist()
-              assert json.loads(archive.read("manifest.json"))["version"] == "0.1.168"
-          print(output, output.stat().st_size)
+          output = Path("frgbw14_package")
+          output.mkdir()
+          expected = set()
+          for source in sorted(root.rglob("*")):
+              if not source.is_file() or "__pycache__" in source.parts or source.suffix == ".pyc":
+                  continue
+              relative = source.relative_to(root)
+              expected.add(relative.as_posix())
+              target = output / relative
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+
+          actual = {file.relative_to(output).as_posix() for file in output.rglob("*") if file.is_file()}
+          assert actual == expected
+          required = {
+              "__init__.py", "manifest.json", "light.py", "gateway.py",
+              "bus/decoder.py", "bus/transport.py", "frontend/diagnostics-panel.js",
+          }
+          assert required <= actual, required - actual
+          assert not any(name.endswith(".zip") or name.startswith("custom_components/") for name in actual)
+          assert json.loads((output / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
+          print(f"Integration files at the archive root: {len(actual)}")
           PY
-      - name: Upload FRGBW14 offline test package
+      - name: Upload single-layer ZIP (same layout as release)
         uses: actions/upload-artifact@v4
         with:
-          name: ELTAKO_FRGBW14_TEST_HA2
-          path: ELTAKO_Sensors_Actuators_FRGBW14_TEST.zip
+          name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
+          path: frgbw14_package/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+          compression-level: 9
+
+  verify_package:
+    name: Verify downloaded ZIP matches official integration layout
+    needs: frgbw14
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download test ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
+          path: verified_package
+      - name: Compare extracted ZIP contents to release layout
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          source = Path("custom_components/eltako_sensors_actuators")
+          root = Path("verified_package")
+          actual = {file.relative_to(root).as_posix() for file in root.rglob("*") if file.is_file()}
+          expected = {
+              file.relative_to(source).as_posix()
+              for file in source.rglob("*")
+              if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc"
+          }
+          assert actual == expected, {"missing": sorted(expected - actual), "extra": sorted(actual - expected)}
+          assert "__init__.py" in actual and "manifest.json" in actual and "bus/decoder.py" in actual
+          assert not any(name.endswith(".zip") for name in actual)
+          assert json.loads((root / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
+          print("PASS: one ZIP with release-identical integration root; no extra folders or nested ZIP")
+          PY
