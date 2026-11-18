@@ -4,7 +4,7 @@
 
 ## Voraussetzungen
 
-- Home Assistant **2026.11.0 oder neuer** für v0.1.165.
+- Home Assistant **2026.11.0 oder neuer** für v0.1.168.
 - Ein kompatibles Gateway, z. B. **FAM-USB** oder **FGW14-USB**; siehe [Gateways](gateways.md).
 - Schreibzugriff auf die Home-Assistant-Konfiguration für die manuelle Installation.
 - Für die komfortable Geräteeinrichtung empfiehlt sich [EEDTOY](eedtoy.md).
@@ -24,7 +24,7 @@ Die [öffentliche Katalogaufnahme](https://github.com/hacs/default/pull/13465) i
 
 ## Manuelle Installation
 
-1. Die Datei [`ELTAKO_Sensors_Actuators.zip` aus dem Release](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.165) herunterladen.
+1. Die Datei [`ELTAKO_Sensors_Actuators.zip` aus dem Release](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.168) herunterladen.
 2. Archiv entpacken und die enthaltenen Dateien nach
    `/config/custom_components/eltako_sensors_actuators/` kopieren.
 3. Kontrollieren, dass die Dateien direkt an dieser Stelle liegen:

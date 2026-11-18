@@ -20,14 +20,14 @@
 
 **Unabhängige Home-Assistant-Integration für kompatible ELTAKO-EnOcean-Sensoren und -Aktoren.** Lokale Kommunikation über **FAM-USB** (Funk) und **FGW14-USB / FAM14** (Serie-14-Bus), ohne Cloud-Zwang.
 
-**Version:** v0.1.167 · **Home Assistant:** 2026.11.0+ · **Lizenz:** [MIT](LICENSE) · **Sprachen:** Deutsch und Englisch
+**Version:** v0.1.168 · **Home Assistant:** 2026.11.0+ · **Lizenz:** [MIT](LICENSE) · **Sprachen:** Deutsch und Englisch
 
 > Dieses Community-Projekt ist keine offizielle ELTAKO-Integration und wird nicht von ELTAKO herausgegeben oder unterstützt.
 
 ## Schnellstart
 
 1. **Gateway anschließen:** FAM-USB oder FGW14-USB verbinden und möglichst den stabilen `/dev/serial/by-id/`-Port auswählen.
-2. **Integration installieren:** Über den [Marketplace-Link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration) bzw. **Add from link**, solange die öffentliche Katalogaufnahme aussteht. Alternativ die [Release-ZIP](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.167) manuell installieren.
+2. **Integration installieren:** Über den [Marketplace-Link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration) bzw. **Add from link**, solange die öffentliche Katalogaufnahme aussteht. Alternativ die [Release-ZIP](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.168) manuell installieren.
 3. **Home Assistant neu starten** und unter **Einstellungen → Geräte & Dienste** die Integration hinzufügen.
 4. **YAML mit [EEDTOY](https://github.com/DenisZirn/eedtoy)** erstellen und unter **Konfigurieren → EEDTOY YAML importieren oder ersetzen** einlesen. Für aktuelle Geräteprofile wird **EEDTOY 1.1.01 oder neuer** empfohlen.
 5. Entitäten und bei Bedarf die **Funk-/Bus-Diagnose** prüfen.
@@ -66,14 +66,14 @@ Die Konfiguration wird über den Integrationsdialog importiert und **nicht in `c
 - Integrierte **Funk-/Bus-Diagnose** zur Analyse empfangener und gesendeter Telegramme.
 - Deutsche und englische Oberflächentexte.
 
-## Hinweise zu v0.1.167
+## Hinweise zu v0.1.168
 
-- **EEDTOY-Räume:** Das Feld `area` aus dem EEDTOY-Export wird beim Import übernommen. Geräte werden dadurch automatisch dem entsprechenden Home-Assistant-Raum zugeordnet.
-- **FRW-ws:** Die doppelte Statusanzeige wurde entfernt. Für den Rauchwarnmelder bleiben die relevanten Entitäten **Rauchalarm** und **Batterie niedrig** erhalten.
-- **FWS81:** Der Wassermelder mit EEP `F6-05-01` wird jetzt unterstützt und als Wasseralarm in Home Assistant dargestellt.
-- **FAH und FHD60SB:** Helligkeitswerte werden weiterhin korrekt in **Lux** dargestellt.
+- **Raumzuordnung:** EEDTOY-Räume werden beim ersten Anlegen vorgeschlagen. Manuelle Änderungen oder das Entfernen der Raumzuordnung bleiben nach einem Neustart erhalten.
+- **Externe Raumtemperatur:** FHK14/FAE14 übernehmen den gewählten externen Sensor und spätere Messwertänderungen sofort, ohne Sollwertänderung.
+- **FKS-SV:** Doppelte Temperatur-Entity aus älteren Versionen wird auf die Climate-Isttemperatur vereinheitlicht.
+- **Gerätezuordnung:** Heizungsaktoren sind beim Zuweisen einer Raumtemperaturquelle direkt anklickbar.
 - Bestehende Entitäten und Konfigurationen werden nach Möglichkeit beibehalten.
-- Normale `F6-02-01`-Taster wie FT55 bleiben durch die FRW-Unterstützung unverändert.
+- **Sensorwerte:** YAML-Sensoren behandeln auch `0` und `false` korrekt; FRGBW14-Helligkeitsverbesserungen folgen separat.
 
 **Bekannte Einschränkungen:** Die Unterstützung einzelner Geräte und Funktionen hängt von der verwendeten Hardware, dem EEP und der Gerätekonfiguration ab. Siehe [Gerätekatalog](docs/devices.md).
 

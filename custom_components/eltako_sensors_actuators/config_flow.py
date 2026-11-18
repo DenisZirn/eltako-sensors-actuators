@@ -55,6 +55,9 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_NAME = "ELTAKO Sensors & Actuators"
 MANUAL_PORT = "manual"
 _BACK = "__back__"
+# Fixed translated slots keep menu labels visible in modern Home Assistant.
+# A page can show 12 actuators; further devices remain directly selectable.
+_ROOM_TEMPERATURE_MENU_PAGE_SIZE = 12
 
 _TTYS_RE = re.compile(r"^/dev/ttyS\d+$")
 
@@ -531,6 +534,7 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         self._pending_gateway_choices: dict[str, str] = {}
         self._pending_room_temperature_device_id: str | None = None
         self._room_temperature_menu_targets: dict[str, str] = {}
+        self._room_temperature_menu_page = 0
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         # Repair the transient "__back__" marker that an earlier v0.1.164 test
@@ -640,42 +644,58 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_room_temperature_assignment(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show compatible climate actuators as directly clickable menu rows."""
-        choices = self._room_temperature_choices()
-        device_choices = [(device_id, label) for device_id, label in choices.items() if device_id != _BACK]
-        if not device_choices:
-            # The only menu item is a known, translated static step ID.
-            return self.async_show_menu(
-                step_id="room_temperature_assignment",
-                menu_options=["room_temperature_back_main"],
-            )
+        """Open one-click, translated menu rows for every compatible actuator.
 
-        # Dynamically generated menu step IDs do not have translation keys in
-        # strings.json. Use a labelled select form for variable device names;
-        # this works in all HA frontend versions and avoids blank menu items.
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            selection = str(user_input.get(CONF_ROOM_TEMPERATURE_DEVICE_ID) or "")
-            if selection == _BACK:
-                return await self.async_step_init()
-            selected = normalize_enocean_id(selection)
-            if selected and selected in self._room_temperature_devices():
-                self._pending_room_temperature_device_id = selected
-                return await self.async_step_room_temperature_source()
-            errors[CONF_ROOM_TEMPERATURE_DEVICE_ID] = "missing_room_temperature_device"
-
-        selection_default = (
-            self._pending_room_temperature_device_id
-            if self._pending_room_temperature_device_id in choices
-            else device_choices[0][0]
+        HA's current frontend resolves a list of menu step IDs through
+        translations. Fixed step slots plus runtime placeholders provide
+        dynamic device labels without untranslated/blank menu items.
+        """
+        device_choices = [
+            (device_id, label)
+            for device_id, label in self._room_temperature_choices().items()
+            if device_id != _BACK
+        ]
+        page_size = _ROOM_TEMPERATURE_MENU_PAGE_SIZE
+        page_count = max(1, (len(device_choices) + page_size - 1) // page_size)
+        self._room_temperature_menu_page = min(
+            max(0, self._room_temperature_menu_page), page_count - 1
         )
-        return self.async_show_form(
+        start = self._room_temperature_menu_page * page_size
+        visible = device_choices[start : start + page_size]
+
+        self._room_temperature_menu_targets = {}
+        menu_options: list[str] = []
+        placeholders: dict[str, str] = {}
+        for slot, (device_id, label) in enumerate(visible):
+            step_key = f"room_temperature_device_{slot}"
+            self._room_temperature_menu_targets[step_key] = device_id
+            menu_options.append(step_key)
+            placeholders[f"device_{slot}"] = label
+
+        if self._room_temperature_menu_page > 0:
+            menu_options.append("room_temperature_page_previous")
+        if self._room_temperature_menu_page < page_count - 1:
+            menu_options.append("room_temperature_page_next")
+        menu_options.append("room_temperature_back_main")
+        return self.async_show_menu(
             step_id="room_temperature_assignment",
-            data_schema=vol.Schema({
-                vol.Required(CONF_ROOM_TEMPERATURE_DEVICE_ID, default=selection_default): vol.In(choices)
-            }),
-            errors=errors,
+            menu_options=menu_options,
+            description_placeholders=placeholders,
         )
+
+    async def async_step_room_temperature_page_next(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the next page of compatible actuators."""
+        self._room_temperature_menu_page += 1
+        return await self.async_step_room_temperature_assignment()
+
+    async def async_step_room_temperature_page_previous(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show the previous page of compatible actuators."""
+        self._room_temperature_menu_page = max(0, self._room_temperature_menu_page - 1)
+        return await self.async_step_room_temperature_assignment()
 
     async def async_step_room_temperature_back_main(
         self, user_input: dict[str, Any] | None = None
@@ -736,6 +756,45 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
+    def _validated_room_temperature_options(
+        self,
+        device: dict[str, Any],
+        source: str,
+        external_entity_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare and verify an override in this gateway's own options.
+
+        FAM-USB devices can have IDs such as FF-F2-6C-82; a bus-only
+        FGW14-USB configuration can use 00-00-00-02. Never infer the
+        physical key from an actuator's display name or sender ID.
+        """
+        device_id = normalize_enocean_id(device.get("id"))
+        if not device_id or device_id != self._pending_room_temperature_device_id:
+            raise ValueError("Selected room-temperature device changed during options flow")
+        options = set_room_temperature_override(
+            self.config_entry.options,
+            device_id,
+            source,
+            external_entity_id,
+        )
+        effective_source, effective_entity, origin = resolve_room_temperature_config(
+            device, options
+        )
+        expected_entity = external_entity_id if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else None
+        if (effective_source, effective_entity, origin) != (
+            source, expected_entity, "ui"
+        ):
+            raise ValueError("Room-temperature assignment failed validation")
+        _LOGGER.info(
+            "ELTAKO temperature assignment prepared: entry_id=%s device_id=%s "
+            "source=%s external_entity=%s",
+            self.config_entry.entry_id,
+            device_id,
+            source,
+            expected_entity,
+        )
+        return options
+
     async def async_step_room_temperature_source_native(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -744,10 +803,8 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
         if device is None:
             return await self.async_step_room_temperature_assignment()
 
-        options = set_room_temperature_override(
-            self.config_entry.options,
-            self._pending_room_temperature_device_id,
-            ROOM_TEMPERATURE_SOURCE_NATIVE,
+        options = self._validated_room_temperature_options(
+            device, ROOM_TEMPERATURE_SOURCE_NATIVE
         )
         return self.async_create_entry(title="", data=options)
 
@@ -788,13 +845,15 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
             if not _is_temperature_entity_compatible(self.hass, selected):
                 errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
             else:
-                options = set_room_temperature_override(
-                    self.config_entry.options,
-                    self._pending_room_temperature_device_id,
-                    ROOM_TEMPERATURE_SOURCE_EXTERNAL,
-                    selected,
-                )
-                return self.async_create_entry(title="", data=options)
+                try:
+                    options = self._validated_room_temperature_options(
+                        device, ROOM_TEMPERATURE_SOURCE_EXTERNAL, selected
+                    )
+                except ValueError:
+                    _LOGGER.exception("ELTAKO external temperature assignment could not be saved")
+                    errors[CONF_EXTERNAL_TEMPERATURE_ENTITY] = "invalid_temperature_entity"
+                else:
+                    return self.async_create_entry(title="", data=options)
 
         default_choice = default_entity if default_entity in entity_choices else next(
             (choice for choice in entity_choices if choice != _BACK),
