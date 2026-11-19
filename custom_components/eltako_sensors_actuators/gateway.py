@@ -2049,7 +2049,8 @@ TEACH_IN_A5_20_01_FKS_SV = bytes([0x80, 0x08, 0x0D, 0x80])
 # set-temperature telegram and is required for FHK/F4HK/FUTH style learning.
 TEACH_IN_A5_10_06_HEATING_COOLING = bytes([0x40, 0x30, 0x0D, 0x87])
 TEACH_IN_FD2G14_COLOR_TEMP = bytes([0xE0, 0x40, 0x0D, 0x80])
-TEACH_IN_FHK61SSR_PWM = bytes([0xE0, 0x40, 0x0D, 0x80])
+# ELTAKO telegram table, direct FHK61SSR PWM LRN: E0-40-00-80.
+TEACH_IN_FHK61SSR_PWM = bytes([0xE0, 0x40, 0x00, 0x80])
 
 
 # F6-02-01 rocker teach-in pattern used by many decentral 61/62 devices
@@ -2179,7 +2180,11 @@ def _is_fsud_230v(device: dict[str, Any]) -> bool:
 
 def _is_fhk_pwm_device(device: dict[str, Any], sender_eep: str, device_eep: str) -> bool:
     name = _device_name_upper(device)
-    return "FHK61SSR" in name
+    return "FHK61SSR" in name and (
+        str(device.get("platform") or "").lower() == "number"
+        or str(device.get("pwm_mode") or "").lower() == "direct"
+        or device_eep == "A5-38-08"
+    )
 
 
 def _prefers_rocker_teach_in(device: dict[str, Any], sender_eep: str, device_eep: str, platform: str) -> bool:
@@ -2487,6 +2492,10 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
         _LOGGER.info("ELTAKO teach-in matrix selected: FSUD-230V special dimmer learn, payload=02-00-00-00 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FSUD_230V_DIMMER, status=status, outgoing=True)]
 
+    if _is_fhk_pwm_device(device, sender_eep, device_eep):
+        _LOGGER.info("ELTAKO teach-in matrix selected: FHK61SSR direct PWM, payload=E0-40-00-80 device=%s", device.get("name"))
+        return [build_regular_4bs(address, TEACH_IN_FHK61SSR_PWM, status=status, outgoing=True)]
+
     if _is_func38_dimmer_device(device, sender_eep, device_eep):
         _LOGGER.info("ELTAKO teach-in matrix selected: FUNC=38 Command 2 dimmer, payload=E0-40-0D-80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FUNC38_DIMMER_CMD2, status=status, outgoing=True)]
@@ -2494,10 +2503,6 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
     if _is_func38_switch_device(device, sender_eep, device_eep):
         _LOGGER.info("ELTAKO teach-in matrix selected: FUNC=38 Command 1 switch, payload=E0-40-0D-80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FUNC38_SWITCH_CMD1, status=status, outgoing=True)]
-
-    if _is_fhk_pwm_device(device, sender_eep, device_eep):
-        _LOGGER.info("ELTAKO teach-in matrix selected: FHK61SSR PWM, payload=E0-40-0D-80 device=%s", device.get("name"))
-        return [build_regular_4bs(address, TEACH_IN_FHK61SSR_PWM, status=status, outgoing=True)]
 
     if _is_futh55ed_device(device) and not (sender_eep == "A5-10-06" or device_eep == "A5-10-06"):
         raise UnsupportedEltakoCommand(
@@ -2528,6 +2533,21 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
 
     if command == "teach_in":
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
+
+    if command == "fhk61ssr_pwm":
+        if not _is_fhk_pwm_device(device, sender_eep, device_eep):
+            raise UnsupportedEltakoCommand("PWM-Steuerung nur für FHK61SSR im direkten PWM-Profil")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        try:
+            pwm = int(round(float(kwargs.get("percentage", 0))))
+            period = int(round(float(kwargs.get("period_seconds", device.get("pwm_period_seconds", 120)))))
+        except (TypeError, ValueError) as exc:
+            raise UnsupportedEltakoCommand("PWM-Wert oder Periodendauer ist ungültig") from exc
+        if not 0 <= pwm <= 100 or not 10 <= period <= 1000 or period % 10 != 0:
+            raise UnsupportedEltakoCommand("PWM 0–100 %, Basiszeit 10–1000 s in 10-s-Schritten")
+        repeater = bool(kwargs.get("repeater", device.get("pwm_repeater", False)))
+        data = bytes((0x02, pwm, period // 10, 0x08 | (0x02 if repeater else 0) | (0x01 if pwm else 0)))
+        return build_regular_4bs(parse_address(effective), data, status=0x80, outgoing=True)
 
     if command == "frgbw_free_profile_teach_in":
         if not (_is_rgbw_device_config(device) or sender_eep in {"07-3F-7F"} or device_eep in {"07-3F-7F"}):
