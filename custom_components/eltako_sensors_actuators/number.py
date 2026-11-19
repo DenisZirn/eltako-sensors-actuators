@@ -57,7 +57,11 @@ class EltakoFhk61SsrPwm(EltakoYamlEntity, NumberEntity):
         except (ValueError, TypeError):
             period = 120
         self._period_seconds = period
-        self._attr_extra_state_attributes = {"pwm_period_seconds": period}
+        self._attr_extra_state_attributes = {
+            **(self._attr_extra_state_attributes or {}),
+            "pwm_period_seconds": period,
+            "pwm_mode": "direct",
+        }
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
