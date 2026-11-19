@@ -51,11 +51,11 @@ class PriorityTests(unittest.TestCase):
             self.assertEqual(data[2], 0)
 
     def test_manual_suppresses_temperature_push(self):
-        e = make_climate("F4HK14", source="internal")
+        e, gateway, hass = make_climate("F4HK14", source="internal")
         e.hass.options["heating_priority_overrides"] = {"01-02-03-04": "manual"}
         e._schedule_a5_10_06_room_temperature_push()
         self.assertFalse(e._room_temperature_push_pending)
-        self.assertFalse(e.gateway.calls)
+        self.assertFalse(gateway.calls)
 
     def test_per_channel_priority_is_independent(self):
         d1 = self.device()
@@ -79,6 +79,7 @@ def _gateway_builder():
         "_effective_sender_id_for_gateway": lambda sender, *args, **kw: sender,
         "_is_fhk_pwm_device": lambda d, s, e: "FHK61SSR" in d.get("device_type", ""),
         "parse_address": lambda sender: sender,
+        "format_address": lambda sender: sender,
         "build_regular_4bs": lambda sender, data, **kw: (sender, bytes(data), kw.get("status")),
     }
     exec(code, ns)
