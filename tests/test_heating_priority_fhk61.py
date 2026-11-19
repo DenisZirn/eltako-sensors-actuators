@@ -11,6 +11,35 @@ from test_fks_sv_room_temperature import INTEGRATION, eep10, _load, PKG
 from test_climate_temperature_sync import make_climate, priority
 
 
+class ControllerEchoRoutingTests(unittest.TestCase):
+    def test_own_sender_echo_is_not_actuator_feedback(self):
+        source = (INTEGRATION / "gateway.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        node = next(x for x in tree.body if isinstance(x, ast.FunctionDef)
+                    and x.name == "_is_a5_10_06_controller_echo")
+        ns = {
+            "Any": object,
+            "normalize_eep": lambda val: str(val).upper(),
+            "ORG_4BS": 0x07,
+            "_normalized_address_or_none": lambda val: str(val).upper() if val else None,
+            "_get_sender_id": lambda d: d.get("sender_id"),
+            "_effective_sender_id_for_gateway": lambda sender, *args, **kwargs: sender,
+        }
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+                     str(INTEGRATION / "gateway.py"), "exec"), ns)
+        classify = ns["_is_a5_10_06_controller_echo"]
+        device = {"platform": "climate", "eep": "A5-10-06",
+                  "id": "05-85-CB-83", "sender_id": "FF-A6-04-81"}
+        self.assertTrue(classify(device, "FF-A6-04-81", "fam-usb",
+                                 "FF-A6-04-80", org=0x07))
+        self.assertFalse(classify(device, "05-85-CB-83", "fam-usb",
+                                  "FF-A6-04-80", org=0x07))
+        self.assertFalse(classify(device, "FF-A6-04-81", "fam-usb",
+                                  "FF-A6-04-80", org=0x05))
+        self.assertFalse(classify({**device, "eep": "A5-38-08"},
+                                  "FF-A6-04-81", "fam-usb", "FF-A6-04-80", org=0x07))
+
+
 class PriorityTests(unittest.TestCase):
     def device(self, device_type="F4HK14", **extra):
         return {
