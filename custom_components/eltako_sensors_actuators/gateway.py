@@ -20,6 +20,7 @@ from .device_profiles import (
 )
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
 from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
+from .bus.fhk61_feedback import decode_fhk61_rps_feedback
 from .bus.eep_series14 import build_series14_switch_command
 from .bus.eep_a5_20_01 import (
     build_a5_20_01_teach_in_response,
@@ -1103,6 +1104,15 @@ class EltakoGateway:
         if device is not None:
             decoded.setdefault("device_name", device.get("name"))
             _normalize_device_specific_decoded(device, decoded)
+            if msg.org == ORG_RPS and physical_sender_id.upper() == str(device.get("id") or "").upper():
+                model = str(_device_raw_option(device, "device_type") or "")
+                if model.upper().startswith("FHK61"):
+                    feedback = decode_fhk61_rps_feedback(
+                        bytes(msg.body[2:6]), model,
+                    )
+                    if feedback:
+                        decoded.update(feedback)
+                        decoded["actuator_response"] = True
 
         self._last_message_received = decoded.get("last_seen") or datetime.now(timezone.utc).isoformat()
         telegram = EltakoTelegram(
