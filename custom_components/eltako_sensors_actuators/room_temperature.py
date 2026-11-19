@@ -31,6 +31,9 @@ ASSIGNABLE_A5_10_06_TYPES = (
     "F4HK14",
     "FAE14LPR",
     "FAE14SSR",
+    "FHK61",
+    "FHK61U",
+    "FHK61SSR",
 )
 
 
@@ -101,7 +104,7 @@ def is_fks_sv_device(device: Any) -> bool:
 
 
 def is_a5_10_06_heating_actuator(device: Any) -> bool:
-    """Return True for FHK14/F4HK14/FAE14 climate actuators, never room controllers."""
+    """Return True for FHK/FAE temperature actuators, never room controllers or PWM numbers."""
     if not isinstance(device, dict):
         return False
     if str(device.get("platform") or "").strip().lower() != "climate":
