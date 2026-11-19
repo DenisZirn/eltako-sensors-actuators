@@ -13,7 +13,9 @@ from types import SimpleNamespace
 from typing import Any
 import unittest
 
-from test_fks_sv_room_temperature import INTEGRATION, room, eep10, eep20, const
+from test_fks_sv_room_temperature import INTEGRATION, room, eep10, eep20, const, _load, PKG
+
+priority = _load(f"{PKG}.heating_priority", INTEGRATION / "heating_priority.py")
 
 
 class _Base:
@@ -102,6 +104,10 @@ def _extract_method_class():
     needed = {
         "async_added_to_hass",
         "_entry_options",
+        "_heating_priority",
+        "_heating_controller_priority",
+        "_manual_priority_active",
+        "_handle_heating_priority_changed",
         "_read_external_temperature",
         "_native_a5_10_06_display_temperature",
         "_refresh_room_temperature_state",
@@ -140,6 +146,11 @@ def _extract_method_class():
         "ROOM_TEMPERATURE_SOURCE_EXTERNAL": const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
         "ROOM_TEMPERATURE_SOURCE_NATIVE": const.ROOM_TEMPERATURE_SOURCE_NATIVE,
         "SIGNAL_ROOM_TEMPERATURE_UPDATED": const.SIGNAL_ROOM_TEMPERATURE_UPDATED,
+        "SIGNAL_HEATING_PRIORITY_TX": priority.SIGNAL_HEATING_PRIORITY_TX,
+        "supports_heating_priority": priority.supports_heating_priority,
+        "priority_mode": priority.priority_mode,
+        "heating_control_mode": priority.heating_control_mode,
+        "set_priority_mode": priority.set_priority_mode,
         "resolve_room_temperature_config": room.resolve_room_temperature_config,
         "select_numeric_room_temperature": room.select_numeric_room_temperature,
         "temperature_to_celsius": room.temperature_to_celsius,
