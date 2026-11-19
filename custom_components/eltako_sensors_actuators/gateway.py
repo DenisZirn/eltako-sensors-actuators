@@ -2534,6 +2534,17 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
     if command == "teach_in":
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
 
+    if platform == "climate" and command == "release_heating_priority":
+        if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
+            raise UnsupportedEltakoCommand("Manual release requires A5-10-06")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        return build_regular_4bs(
+            parse_address(effective),
+            bytes((0x00, 0x00, 0x00, 0x0E)),
+            status=0x80,
+            outgoing=True,
+        )
+
     if command == "fhk61ssr_pwm":
         if not _is_fhk_pwm_device(device, sender_eep, device_eep):
             raise UnsupportedEltakoCommand("PWM-Steuerung nur für FHK61SSR im direkten PWM-Profil")
@@ -2797,17 +2808,6 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             # should normally use sender.eep A5-38-08 for light commands.
             action = 1 if command == "turn_on" else 0
             return build_f6_02_01_rocker(sender_id, action=action, pressed=True)
-
-    if platform == "climate" and command == "release_heating_priority":
-        if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
-            raise UnsupportedEltakoCommand("Manual release requires A5-10-06")
-        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
-        return build_regular_4bs(
-            parse_address(effective),
-            bytes((0x00, 0x00, 0x00, 0x0E)),
-            status=0x80,
-            outgoing=True,
-        )
 
     if platform == "climate":
         if sender_eep == "A5-20-01" or device_eep == "A5-20-01":
