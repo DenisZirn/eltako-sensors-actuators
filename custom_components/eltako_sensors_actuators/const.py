@@ -44,6 +44,7 @@ PLATFORMS = [
     "button",
     "fan",
     "number",
+    "select",
 ]
 
 SIGNAL_TELEGRAM = "eltako_sensors_actuators_telegram"
