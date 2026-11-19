@@ -145,6 +145,14 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         platform = normalize_platform(device.get("platform"))
         eep = normalize_eep(device.get("eep"))
 
+        # FHK61U confirms the physical switching relay with ORG=0x05.
+        # This is not equivalent to the generic FHK61 operation-mode RPS.
+        if (
+            platform == "climate" and eep == "A5-10-06"
+            and "FHK61U" in str(device.get("device_type") or "").upper()
+        ):
+            entities.append(EltakoFhk61URelayFeedback(gateway, device))
+
         if is_legacy_frw_device(device):
             entities.append(
                 EltakoYamlBinarySensor(
@@ -992,3 +1000,36 @@ class EltakoRockerAnyPressedBinarySensor(EltakoYamlEntity, BinarySensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener:
             self._remove_listener()
+
+
+class EltakoFhk61URelayFeedback(EltakoYamlEntity, BinarySensorEntity):
+    """Physical relay feedback; never guessed from the HVAC operating mode."""
+
+    _attr_device_class = BinarySensorDeviceClass.POWER
+    _attr_icon = "mdi:electric-switch"
+    _attr_should_poll = False
+
+    def __init__(self, gateway, device: dict[str, Any]) -> None:
+        super().__init__(gateway, device, suffix="Relais")
+        self._attr_is_on = None
+        self._remove_listener = gateway.register_listener(self._handle_telegram)
+
+    def _handle_telegram(self, telegram) -> None:
+        if str(telegram.sender_id).upper() != str(self.device_config.get("id") or "").upper():
+            return
+        decoded = telegram.decoded or {}
+        if decoded.get("direction") == "to_actuator" or decoded.get("tx_echo"):
+            return
+        if decoded.get("org") != "0x05":
+            return
+        action = decoded.get("button_action")
+        if action not in (0x70, 0x50):
+            return
+        self._attr_is_on = action == 0x70
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener is not None:
+            self._remove_listener()
+            self._remove_listener = None
+        await super().async_will_remove_from_hass()
