@@ -1,0 +1,35 @@
+name: Test heating priority + FHK61 family (no release)
+on:
+  push:
+    branches:
+      - test/a5-10-06-priority-fhk61
+  workflow_dispatch:
+
+jobs:
+  test-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python modules
+        run: python -m compileall -q custom_components/eltako_sensors_actuators tests
+      - name: Run all isolated regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build Home Assistant test integration ZIP
+        run: |
+          mkdir -p package
+          cp -R custom_components/eltako_sensors_actuators package/eltako_sensors_actuators
+          find package -type d -name __pycache__ -prune -exec rm -rf '{}' +
+          cd package
+          zip -q -r ../eltako_sensors_actuators_heating_fhk61_test.zip eltako_sensors_actuators
+      - name: Upload installable test integration
+        uses: actions/upload-artifact@v4
+        with:
+          name: eltako-sensors-actuators-heating-fhk61-test
+          path: eltako_sensors_actuators_heating_fhk61_test.zip
+          if-no-files-found: error
+          retention-days: 14
