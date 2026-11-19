@@ -2798,6 +2798,17 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             action = 1 if command == "turn_on" else 0
             return build_f6_02_01_rocker(sender_id, action=action, pressed=True)
 
+    if platform == "climate" and command == "release_heating_priority":
+        if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
+            raise UnsupportedEltakoCommand("Manual release requires A5-10-06")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        return build_regular_4bs(
+            parse_address(effective),
+            bytes((0x00, 0x00, 0x00, 0x0E)),
+            status=0x80,
+            outgoing=True,
+        )
+
     if platform == "climate":
         if sender_eep == "A5-20-01" or device_eep == "A5-20-01":
             if command == "set_temperature":
@@ -2840,7 +2851,7 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                 # Home Assistant room-temperature assignment.
                 current_temperature=kwargs.get("current_temperature"),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
-                priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
+                priority=(kwargs.get("controller_priority") if kwargs.get("controller_priority") is not None else (device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority"))),
             )
         if command == "set_hvac_mode":
             hvac_mode = str(kwargs.get("hvac_mode") or "heat")
