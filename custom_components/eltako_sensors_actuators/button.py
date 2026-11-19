@@ -59,7 +59,7 @@ def _supports_teach_in_button(device: Any) -> bool:
     if not isinstance(device, dict):
         return False
     platform = normalize_platform(device.get("platform"))
-    if platform not in {"light", "cover", "climate", "switch"}:
+    if platform not in {"light", "cover", "climate", "switch", "number"}:
         return False
     # FKS-SV A5-20-01 teach-in remains fully valve initiated. FKS-H/FKS-B
     # A5-20-04 expose a button that arms a short teach-in wait window; the
