@@ -426,7 +426,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._schedule_a5_10_06_room_temperature_push()
         self.schedule_update_ha_state()
 
-    def _entry_options(self) -> dict[str, Any>:
+    def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
         return dict(entry.options) if entry is not None else {}
 
