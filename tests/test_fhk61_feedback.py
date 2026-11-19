@@ -55,8 +55,8 @@ class Fhk61FeedbackRegression(unittest.TestCase):
         handler = next(item for item in cls.body if isinstance(item, ast.FunctionDef)
                        and item.name == "_handle_telegram")
         source = ast.unparse(handler)
-        self.assertIn('decoded.get("fhk61_feedback_type")', source)
-        self.assertIn('decoded.get("org") == "0x07"', source)
+        self.assertIn("decoded.get('fhk61_feedback_type')", source)
+        self.assertIn("decoded.get('org') == '0x07'", source)
         self.assertIn("self._fhk61_reported_mode = mode", source)
 
 
