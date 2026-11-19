@@ -230,6 +230,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             and "FAE14LPR" not in model_text
         )
         self._is_fae14lpr = self._eep == "A5-10-06" and "FAE14LPR" in model_text
+        self._is_fhk61u = self._eep == "A5-10-06" and "FHK61U" in model_text
+        self._fhk61u_relay_on: bool | None = None
         # FHK14/F4HK14 report the A5-10-06 protocol value 40 °C when no
         # room-temperature sensor is learned. Keep this value visible until a
         # genuine actuator response provides a different room temperature.
@@ -637,6 +639,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         base["ha_temperatureinheit"] = str(self.hass.config.units.temperature_unit)
         if self._is_fhk14 or self._is_fae14lpr:
             base["genuine_current_temperature"] = self._has_genuine_current_temperature
+        if self._is_fhk61u:
+            base["relais_ein"] = self._fhk61u_relay_on
         if self._is_fks_sv:
             base.update(
                 {
@@ -748,6 +752,15 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             str(self.device_config.get("sender_id")).upper(),
         }:
             return
+        # FHK61U sends relay feedback as RPS 0x70=ON / 0x50=OFF,
+        # NOT the FHK61 operating-mode code 0x50=night setback.
+        decoded = telegram.decoded or {}
+        if self._is_fhk61u and decoded.get("org") == "0x05":
+            action = decoded.get("button_action")
+            if action in (0x70, 0x50):
+                self._fhk61u_relay_on = action == 0x70
+                self.schedule_update_ha_state()
+                return
         if "temperature" in telegram.decoded:
             if self._is_fhk14 or self._is_fae14lpr:
                 # A5-10-06 controller telegrams contain a synthetic DB1 value
