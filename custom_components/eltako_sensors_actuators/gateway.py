@@ -965,6 +965,7 @@ class EltakoGateway:
         logical_sender_id = physical_sender_id
         eep: str | None = None
         device: dict[str, Any] | None = None
+        a5_controller_echo = False
 
         # A5-20-01 uses different DB2 meanings in each direction. Detect a
         # mirrored controller telegram before the generic lookup maps it back
@@ -986,7 +987,16 @@ class EltakoGateway:
                 # only the common physical module ID for device grouping and
                 # the separate battery telegram; it must never collapse both
                 # channels onto one logical sender.
-                if _is_f4usm61b_device(device):
+                if _is_a5_10_06_controller_echo(
+                    device, physical_sender_id, self.gateway_type,
+                    self.base_id or self.selected_gateway.get("base_id"),
+                    org=msg.org,
+                ):
+                    # A local FAM-USB echo is not a physical FHK/FAE response.
+                    # Keep its actual controller sender ID in diagnostics.
+                    logical_sender_id = physical_sender_id
+                    a5_controller_echo = True
+                elif _is_f4usm61b_device(device):
                     logical_sender_id = physical_sender_id
                 else:
                     logical_sender_id = str(device.get("id") or physical_sender_id).upper()
@@ -1012,6 +1022,10 @@ class EltakoGateway:
                 elif msg.org == ORG_4BS:
                     decoder_eep = "A5-14-09"
             _, decoded = decode_esp2_message(msg, decoder_eep, direction=direction)
+            if a5_controller_echo:
+                decoded["direction"] = "to_actuator"
+                decoded["tx_echo"] = True
+                decoded["actuator_response"] = False
             if _is_ffg7b_device(device):
                 decoded.setdefault("configured_eep", eep)
                 decoded.setdefault("detected_eep", decoder_eep)
@@ -2884,6 +2898,45 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
     raise UnsupportedEltakoCommand(
         f"command={command}, platform={platform}, device_eep={device_eep}, sender_eep={sender_eep}"
     )
+
+
+def _is_a5_10_06_controller_echo(
+    device: dict[str, Any] | None,
+    physical_sender_id: str,
+    gateway_type: str | None,
+    gateway_base_id: str | None,
+    *,
+    org: int | None = None,
+) -> bool:
+    """Distinguish a controller TX echo from physical FHK/FAE feedback.
+
+    Only an A5-10-06 climate controller 4BS using its configured/translated
+    sender ID may match. Real feedback from the actuator's own physical ID
+    must still reach the Climate and relay feedback entities.
+    """
+    if not isinstance(device, dict):
+        return False
+    if str(device.get("platform") or "").lower() != "climate":
+        return False
+    if normalize_eep(device.get("eep")) != "A5-10-06":
+        return False
+    if org is not None and org != ORG_4BS:
+        return False
+    configured = _normalized_address_or_none(_get_sender_id(device))
+    physical = _normalized_address_or_none(physical_sender_id)
+    if configured is None or physical is None:
+        return False
+    addresses = {configured}
+    try:
+        effective = _effective_sender_id_for_gateway(
+            configured, gateway_type, gateway_base_id, device=device,
+        )
+        normalized = _normalized_address_or_none(effective)
+        if normalized:
+            addresses.add(normalized)
+    except (TypeError, ValueError):
+        pass
+    return physical in addresses
 
 
 def _candidate_addresses_for_device(device: dict[str, Any]) -> set[str]:
