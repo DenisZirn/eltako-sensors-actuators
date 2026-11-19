@@ -235,7 +235,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         )
         self._is_fae14lpr = self._eep == "A5-10-06" and "FAE14LPR" in model_text
         self._is_fhk61u = self._eep == "A5-10-06" and "FHK61U" in model_text
+        self._is_fhk61 = self._eep == "A5-10-06" and "FHK61" in model_text and not self._is_fhk61u
         self._fhk61u_relay_on: bool | None = None
+        self._fhk61_reported_mode: str | None = None
+        self._fhk61_reported_mode_time: str | None = None
         # FHK14/F4HK14 report the A5-10-06 protocol value 40 °C when no
         # room-temperature sensor is learned. Keep this value visible until a
         # genuine actuator response provides a different room temperature.
@@ -692,6 +695,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             base["genuine_current_temperature"] = self._has_genuine_current_temperature
         if self._is_fhk61u:
             base["relais_ein"] = self._fhk61u_relay_on
+        if self._is_fhk61:
+            base["fhk61_betriebsart_rueckmeldung"] = self._fhk61_reported_mode
+            base["fhk61_betriebsart_rueckmeldung_zeit"] = self._fhk61_reported_mode_time
+            base["fhk61_relaiszustand_bestaetigt"] = False
         priority = self._heating_priority()
         if priority is not None:
             base["heizungsprioritaet_ausgewaehlt"] = priority
@@ -811,15 +818,33 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             str(self.device_config.get("sender_id")).upper(),
         }:
             return
-        # FHK61U sends relay feedback as RPS 0x70=ON / 0x50=OFF,
-        # NOT the FHK61 operating-mode code 0x50=night setback.
         decoded = telegram.decoded or {}
-        if self._is_fhk61u and decoded.get("org") == "0x05":
-            action = decoded.get("button_action")
-            if action in (0x70, 0x50):
-                self._fhk61u_relay_on = action == 0x70
-                self.schedule_update_ha_state()
-                return
+        # Genuine RPS replies have a different meaning for FHK61 and FHK61U.
+        # Only model-aware physical feedback is authoritative.
+        if self._is_fhk61u and decoded.get("fhk61_feedback_type") == "relay":
+            self._fhk61u_relay_on = bool(decoded["fhk61_relay_on"])
+            self.schedule_update_ha_state()
+            return
+        if self._is_fhk61 and decoded.get("fhk61_feedback_type") == "operating_mode":
+            mode = str(decoded["fhk61_mode"])
+            self._fhk61_reported_mode = mode
+            self._fhk61_reported_mode_time = _now_iso()
+            self._fhk_heater_mode = mode
+            self._attr_hvac_mode = HVACMode.OFF if mode == "off" else HVACMode.HEAT
+            self._attr_preset_mode = {
+                "normal": PRESET_HOME, "night_setback": PRESET_SLEEP,
+                "setback": PRESET_ECO,
+            }.get(mode, self._attr_preset_mode)
+            self.schedule_update_ha_state()
+            return
+        if decoded.get("tx_echo") or decoded.get("direction") == "to_actuator":
+            return
+        if self._is_fhk61 and decoded.get("org") == "0x07":
+            # A repeated 4BS temperature telegram confirms reception only;
+            # it does not change the previously acknowledged RPS mode.
+            self._last_rx = _now_iso()
+            self.schedule_update_ha_state()
+            return
         if "temperature" in telegram.decoded:
             if self._is_fhk14 or self._is_fae14lpr:
                 # A5-10-06 controller telegrams contain a synthetic DB1 value
