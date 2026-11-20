@@ -1,0 +1,110 @@
+name: FRGBW14 RGBW brightness regression
+
+on:
+  pull_request:
+    paths:
+      - "custom_components/eltako_sensors_actuators/light.py"
+      - "custom_components/eltako_sensors_actuators/bus/decoder.py"
+      - "tests/test_frgbw14_brightness.py"
+      - ".github/workflows/test-frgbw14.yml"
+  push:
+    branches:
+      - "fix/frgbw14-brightness-20261117"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frgbw14:
+    name: Verify FRGBW14 brightness and FRGBW71L compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Test FRGBW14 brightness, color and decoder
+        run: python tests/test_frgbw14_brightness.py
+      - name: Stage single eltako_sensors_actuators directory in test ZIP
+        run: |
+          python - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          root = Path("custom_components/eltako_sensors_actuators")
+          # The artifact ZIP must have ONE top-level folder named
+          # eltako_sensors_actuators, identical to the manual install layout.
+          output = Path("frgbw14_package") / "eltako_sensors_actuators"
+          output.mkdir(parents=True)
+          expected = set()
+          for source in sorted(root.rglob("*")):
+              if not source.is_file() or "__pycache__" in source.parts or source.suffix == ".pyc":
+                  continue
+              relative = source.relative_to(root)
+              expected.add(relative.as_posix())
+              target = output / relative
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+
+          actual = {file.relative_to(output).as_posix() for file in output.rglob("*") if file.is_file()}
+          assert actual == expected
+          required = {
+              "__init__.py", "manifest.json", "light.py", "gateway.py",
+              "bus/decoder.py", "bus/transport.py", "frontend/diagnostics-panel.js",
+          }
+          assert required <= actual, required - actual
+          assert not any(name.endswith(".zip") or name.startswith("custom_components/") for name in actual)
+          assert json.loads((output / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
+          print(f"Integration files in eltako_sensors_actuators/: {len(actual)}")
+          PY
+      - name: Upload single ZIP with eltako_sensors_actuators root folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
+          path: frgbw14_package/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
+  verify_package:
+    name: Verify ZIP has exactly one eltako_sensors_actuators root folder
+    needs: frgbw14
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download test ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: ELTAKO_Sensors_Actuators_FRGBW14_TEST
+          path: verified_package
+      - name: Compare ZIP contents to required integration folder layout
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          source = Path("custom_components/eltako_sensors_actuators")
+          root = Path("verified_package")
+          integration = root / "eltako_sensors_actuators"
+          # The extracted artifact must have ONE root directory and no other
+          # files or folders. Do not use a flat archive or a nested archive.
+          assert sorted(path.name for path in root.iterdir()) == ["eltako_sensors_actuators"]
+          assert integration.is_dir()
+          actual = {file.relative_to(root).as_posix() for file in root.rglob("*") if file.is_file()}
+          expected = {
+              "eltako_sensors_actuators/" + file.relative_to(source).as_posix()
+              for file in source.rglob("*")
+              if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc"
+          }
+          assert actual == expected, {"missing": sorted(expected - actual), "extra": sorted(actual - expected)}
+          assert {
+              "eltako_sensors_actuators/__init__.py",
+              "eltako_sensors_actuators/manifest.json",
+              "eltako_sensors_actuators/bus/decoder.py",
+          } <= actual
+          assert not any(name.endswith(".zip") for name in actual)
+          assert json.loads((integration / "manifest.json").read_text(encoding="utf-8"))["version"] == "0.1.168"
+          print("PASS: one ZIP -> eltako_sensors_actuators/ -> all integration files; no extra layers")
+          PY
