@@ -27,7 +27,7 @@
 ## Schnellstart
 
 1. **Gateway anschließen:** FAM-USB oder FGW14-USB verbinden und möglichst den stabilen `/dev/serial/by-id/`-Port auswählen.
-2. **Integration installieren:** Über den [Marketplace-Link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration) bzw. **Add from link**, solange die öffentliche Katalogaufnahme aussteht. Alternativ die [Release-ZIP](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.168) manuell installieren.
+2. Integration installieren: Im Home Assistant Marketplace (HACS) nach ELTAKO Sensors & Actuators suchen und installieren oder direkt über den Marketplace-Link öffnen. Alternativ die Release-ZIP manuell installieren.
 3. **Home Assistant neu starten** und unter **Einstellungen → Geräte & Dienste** die Integration hinzufügen.
 4. **YAML mit [EEDTOY](https://github.com/DenisZirn/eedtoy)** erstellen und unter **Konfigurieren → EEDTOY YAML importieren oder ersetzen** einlesen. Für aktuelle Geräteprofile wird **EEDTOY 1.1.01 oder neuer** empfohlen.
 5. Entitäten und bei Bedarf die **Funk-/Bus-Diagnose** prüfen.
