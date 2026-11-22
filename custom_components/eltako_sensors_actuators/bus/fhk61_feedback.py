@@ -1,6 +1,6 @@
 """Model-specific FHK61 family RPS confirmation decoding.
 
-FHK61-230V and FHK61SSR-230V report operating-mode changes, not relay
+FHK61-230V and temperature-mode FHK61SSR-230V report operating modes, not relay
 contacts. FHK61U-230V uses the same RPS codes for physical relay feedback.
 Do not infer relay state from an FHK61 mode acknowledgement.
 """
@@ -18,12 +18,27 @@ _FHK61_MODE_CODES = {
 def decode_fhk61_rps_feedback(
     data: bytes,
     device_type: str | None,
+    *,
+    control_mode: str = "temperature",
 ) -> dict[str, object]:
-    """Decode 4-byte RPS payload (DB3..DB0) from the *physical* actor ID."""
+    """Decode physical RPS feedback, keeping PWM and temperature modes apart.
+
+    FHK61SSR direct PWM uses 0x70/0x50 for the 230V dewpoint input, whereas
+    temperature mode uses these values for normal/night-setback.  The same
+    RPS code has different meaning depending on the *learned* control mode.
+    """
     if len(data) != 4 or data[1:] != b"\x00\x00\x00":
         return {}
     model = str(device_type or "").strip().upper().replace("-", "").replace("_", "").replace(" ", "")
     code = data[0]
+    if model.startswith("FHK61SSR") and control_mode == "direct_pwm":
+        if code not in (0x70, 0x50):
+            return {}
+        return {
+            "fhk61_feedback_type": "dewpoint_input",
+            "fhk61_dewpoint_input_active": code == 0x70,
+            "fhk61_dewpoint_code": f"0x{code:02X}",
+        }
     if model.startswith("FHK61U"):
         if code in (0x70, 0x50):
             return {
