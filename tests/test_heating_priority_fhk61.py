@@ -107,6 +107,7 @@ def _gateway_builder():
         "_get_sender_eep": lambda d: d.get("sender_eep") or "A5-10-06",
         "_effective_sender_id_for_gateway": lambda sender, *args, **kw: sender,
         "_is_fhk_pwm_device": lambda d, s, e: "FHK61SSR" in d.get("device_type", ""),
+        "_device_raw_option": lambda d, k, default=False: d.get(k, default),
         "parse_address": lambda sender: sender,
         "format_address": lambda sender: sender,
         "build_regular_4bs": lambda sender, data, **kw: (sender, bytes(data), kw.get("status")),
@@ -134,6 +135,22 @@ class GatewayTelegramTests(unittest.TestCase):
             builder(d, "fhk61ssr_pwm", percentage=101, period_seconds=120)
         with self.assertRaises(ValueError):
             builder(d, "fhk61ssr_pwm", percentage=50, period_seconds=125)
+        self.assertEqual(
+            builder(d, "fhk61ssr_pwm", percentage=0, period_seconds=120),
+            ("FF-A6-04-C2", bytes.fromhex("02 00 0C 08"), 0x80),
+        )
+        self.assertEqual(
+            builder(d, "fhk61ssr_pwm", percentage=100, period_seconds=240),
+            ("FF-A6-04-C2", bytes.fromhex("02 64 18 09"), 0x80),
+        )
+        self.assertEqual(
+            builder({**d, "pwm_repeater": "false"}, "fhk61ssr_pwm", percentage=45, period_seconds=100),
+            ("FF-A6-04-C2", bytes.fromhex("02 2D 0A 09"), 0x80),
+        )
+        self.assertEqual(
+            builder({**d, "pwm_repeater": "true"}, "fhk61ssr_pwm", percentage=45, period_seconds=100),
+            ("FF-A6-04-C2", bytes.fromhex("02 2D 0A 0B"), 0x80),
+        )
 
 
 if __name__ == "__main__":
