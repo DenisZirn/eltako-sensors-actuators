@@ -40,6 +40,29 @@ class Fhk61FeedbackRegression(unittest.TestCase):
                     mode,
                 )
 
+    def test_ssr_pwm_dewpoint_feedback_is_not_a_climate_preset(self):
+        for code, active in ((0x70, True), (0x50, False)):
+            with self.subTest(code=code):
+                result = feedback.decode_fhk61_rps_feedback(
+                    bytes((code, 0, 0, 0)), "FHK61SSR-230V",
+                    control_mode="direct_pwm",
+                )
+                self.assertEqual(result["fhk61_feedback_type"], "dewpoint_input")
+                self.assertEqual(result["fhk61_dewpoint_input_active"], active)
+                self.assertNotIn("fhk61_mode", result)
+                self.assertNotIn("fhk61_relay_on", result)
+        mode_result = feedback.decode_fhk61_rps_feedback(
+            bytes.fromhex("50 00 00 00"), "FHK61SSR-230V",
+            control_mode="temperature",
+        )
+        self.assertEqual(mode_result["fhk61_mode"], "night_setback")
+        self.assertEqual(
+            feedback.decode_fhk61_rps_feedback(
+                bytes.fromhex("30 00 00 00"), "FHK61SSR-230V",
+                control_mode="direct_pwm",
+            ), {},
+        )
+
     def test_unrelated_devices_and_invalid_payloads(self):
         self.assertEqual(
             feedback.decode_fhk61_rps_feedback(bytes.fromhex("50 00 00 00"), "FHK14"), {},
