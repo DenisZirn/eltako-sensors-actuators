@@ -1015,17 +1015,21 @@ class EltakoFhk61URelayFeedback(EltakoYamlEntity, BinarySensorEntity):
         self._remove_listener = gateway.register_listener(self._handle_telegram)
 
     def _handle_telegram(self, telegram) -> None:
-        if str(telegram.sender_id).upper() != str(self.device_config.get("id") or "").upper():
-            return
         decoded = telegram.decoded or {}
+        # A controller TX echo may carry the logical actuator ID; only a
+        # *physical* FHK61U reply from its Unique-ID is a relay confirmation.
+        if str(decoded.get("physical_sender_id") or "").upper() != str(
+            self.device_config.get("id") or ""
+        ).upper():
+            return
         if decoded.get("direction") == "to_actuator" or decoded.get("tx_echo"):
             return
-        if decoded.get("org") != "0x05":
+        if decoded.get("fhk61_feedback_type") != "relay":
             return
-        action = decoded.get("button_action")
-        if action not in (0x70, 0x50):
+        relay_on = decoded.get("fhk61_relay_on")
+        if not isinstance(relay_on, bool):
             return
-        self._attr_is_on = action == 0x70
+        self._attr_is_on = relay_on
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
