@@ -1107,8 +1107,14 @@ class EltakoGateway:
             if msg.org == ORG_RPS and physical_sender_id.upper() == str(device.get("id") or "").upper():
                 model = str(_device_raw_option(device, "device_type") or "")
                 if model.upper().startswith("FHK61"):
+                    is_direct_pwm = (
+                        model.upper().startswith("FHK61SSR")
+                        and str(device.get("platform") or "").strip().lower() == "number"
+                        and str(_device_raw_option(device, "pwm_mode", "") or "").strip().lower() == "direct"
+                    )
                     feedback = decode_fhk61_rps_feedback(
                         bytes(msg.body[2:6]), model,
+                        control_mode="direct_pwm" if is_direct_pwm else "temperature",
                     )
                     if feedback:
                         decoded.update(feedback)
@@ -2203,11 +2209,14 @@ def _is_fsud_230v(device: dict[str, Any]) -> bool:
 
 
 def _is_fhk_pwm_device(device: dict[str, Any], sender_eep: str, device_eep: str) -> bool:
+    """The SSR PWM writer is only reachable from its dedicated number profile."""
     name = _device_name_upper(device)
-    return "FHK61SSR" in name and (
-        str(device.get("platform") or "").lower() == "number"
-        or str(device.get("pwm_mode") or "").lower() == "direct"
-        or device_eep == "A5-38-08"
+    raw_mode = _device_raw_option(device, "pwm_mode")
+    return (
+        "FHK61SSR" in name
+        and str(device.get("platform") or "").strip().lower() == "number"
+        and str(raw_mode or "").strip().lower() == "direct"
+        and (sender_eep == "A5-38-08" or device_eep == "A5-38-08")
     )
 
 
@@ -2580,7 +2589,11 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             raise UnsupportedEltakoCommand("PWM-Wert oder Periodendauer ist ungültig") from exc
         if not 0 <= pwm <= 100 or not 10 <= period <= 1000 or period % 10 != 0:
             raise UnsupportedEltakoCommand("PWM 0–100 %, Basiszeit 10–1000 s in 10-s-Schritten")
-        repeater = bool(kwargs.get("repeater", device.get("pwm_repeater", False)))
+        repeater_value = kwargs.get("repeater", _device_raw_option(device, "pwm_repeater", False))
+        repeater = (
+            repeater_value.strip().lower() in {"true", "yes", "1", "on", "ja"}
+            if isinstance(repeater_value, str) else bool(repeater_value)
+        )
         data = bytes((0x02, pwm, period // 10, 0x08 | (0x02 if repeater else 0) | (0x01 if pwm else 0)))
         return build_regular_4bs(parse_address(effective), data, status=0x80, outgoing=True)
 
