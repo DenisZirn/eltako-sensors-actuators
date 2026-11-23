@@ -265,6 +265,23 @@ def _build_teach_in_buttons_for_device(gateway, device: dict[str, Any]) -> list[
     """
     if normalize_eep(device.get("eep")) == "A5-20-04":
         return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="arm_fks_hora_teach_in")]
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    model = str(device.get("device_type") or raw.get("device_type") or "").strip().upper().replace(" ", "")
+    if (
+        model.startswith("FHK61-230V")
+        and normalize_platform(device.get("platform")) == "climate"
+        and normalize_eep(device.get("eep")) == "A5-10-06"
+    ):
+        return [
+            EltakoTeachInButton(
+                gateway, device, suffix="Temperaturregler einlernen",
+                command="teach_in",
+            ),
+            EltakoTeachInButton(
+                gateway, device, suffix="Betriebsart einlernen",
+                command="fhk61_teach_in_operating_mode",
+            ),
+        ]
     return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="teach_in")]
 
 
