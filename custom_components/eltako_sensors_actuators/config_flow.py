@@ -343,12 +343,14 @@ def _temperature_entity_choices(hass) -> dict[str, str]:
 
 
 def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
-    """Only allow sensor entities explicitly identified as temperatures.
+    """Allow only available temperature sensors with a usable measurement.
 
-    Numerical sensor values alone do not qualify: gateway IDs, counters,
-    voltages, percentages and other unrelated entities are also numeric.
-    Keep unit-only MQTT/template temperature sensors available when they
-    expose °C/°F but do not declare a device_class.
+    Home Assistant retains device_class and unit_of_measurement metadata when
+    state becomes "unavailable" or "unknown". Checking only the metadata
+    wrongly includes those offline sensors in the assignment dropdown.
+    The runtime already reads values through temperature_to_celsius; use the
+    same validator here so UI choices cannot select a sensor that would be
+    immediately rejected by the controller.
     """
     entity_id = str(entity_id or "").strip()
     if not entity_id.startswith("sensor."):
@@ -359,9 +361,11 @@ def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
     attrs = getattr(state, "attributes", {}) or {}
     device_class = str(attrs.get("device_class") or "").strip().lower()
     unit = str(attrs.get("unit_of_measurement") or "").strip().upper()
-    return device_class == "temperature" or unit in {
+    if device_class != "temperature" and unit not in {
         "°C", "C", "CELSIUS", "°F", "F", "FAHRENHEIT"
-    }
+    }:
+        return False
+    return temperature_to_celsius(getattr(state, "state", None), unit) is not None
 
 
 def _normalize_yaml_input(value: Any) -> str:
@@ -855,9 +859,16 @@ class EltakoSensorsActuatorsOptionsFlow(config_entries.OptionsFlow):
                 else:
                     return self.async_create_entry(title="", data=options)
 
-        default_choice = default_entity if default_entity in entity_choices else next(
-            (choice for choice in entity_choices if choice != _BACK),
-            _BACK,
+        # If a previously assigned sensor is temporarily offline, preserve
+        # the stored assignment. Do not silently preselect a different sensor
+        # that could overwrite it if the user submits the form.
+        default_choice = (
+            default_entity
+            if default_entity in entity_choices
+            else _BACK if default_entity else next(
+                (choice for choice in entity_choices if choice != _BACK),
+                _BACK,
+            )
         )
 
         return self.async_show_form(
