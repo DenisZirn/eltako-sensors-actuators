@@ -6,6 +6,7 @@ on:
       - test/restore-fhk14-f4hk14-fae14
       - test/restore-heating-priority-isolated
       - test/fix-external-ha-room-temperature-priority
+      - test/filter-unavailable-temperature-sensors
   workflow_dispatch:
 
 jobs:
