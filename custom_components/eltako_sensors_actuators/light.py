@@ -412,12 +412,16 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
                 if channel_index in (0, 1, 2):
                     percent = feedback.get("dimmer_percent")
                     if isinstance(percent, int) and 0 <= percent <= 100:
-                        self._frgbw_channel_percent[channel_index] = percent
+                        levels = getattr(self, "_frgbw_channel_percent", None)
+                        if levels is None:
+                            levels = [None, None, None]
+                            self._frgbw_channel_percent = levels
+                        levels[channel_index] = percent
                         # Update the color only after hearing ALL physical
                         # channels at least once. A red=0 packet alone does
                         # not mean the complete RGB light is off.
-                        if all(v is not None for v in self._frgbw_channel_percent):
-                            values = tuple(int(v) for v in self._frgbw_channel_percent)
+                        if all(v is not None for v in levels):
+                            values = tuple(int(v) for v in levels)
                             maximum = max(values)
                             if maximum:
                                 base_rgb = tuple(round(v * 255 / maximum) for v in values)
@@ -450,7 +454,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             # Gateway-mapped controller TX echoes must not overwrite the RGB
             # state that the local command just set optimistically.
             if _is_frgbw14_device(self.device_config):
-                physical = str(feedback.get("physical_sender_id") or "").upper()
+                physical = str(feedback.get("physical_sender_id") or telegram.sender_id or "").upper()
                 device_id = str(self.device_config.get("id") or "").upper()
                 if physical != device_id:
                     return
