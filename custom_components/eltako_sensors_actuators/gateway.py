@@ -19,7 +19,7 @@ from .device_profiles import (
     is_fws81_device,
 )
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
-from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
+from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command, is_fhk61_230v_temperature_profile
 from .bus.fhk61_feedback import decode_fhk61_rps_feedback
 from .bus.eep_series14 import build_series14_switch_command
 from .bus.eep_a5_20_01 import (
@@ -2567,6 +2567,14 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
     if command == "teach_in":
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
 
+    if command == "fhk61_teach_in_operating_mode":
+        if not is_fhk61_230v_temperature_profile(device):
+            raise UnsupportedEltakoCommand("FHK61-Betriebsart-Lernen nur für FHK61-230V")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        # FHK61 learns its operating-mode transmitter via a separate RPS
+        # button role. This is not the A5-10-06 temperature teach-in.
+        return build_fhk_mode_command(effective, "normal")
+
     if platform == "climate" and command == "release_heating_priority":
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
             raise UnsupportedEltakoCommand("Manual release requires A5-10-06")
@@ -2880,15 +2888,18 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
             raise UnsupportedEltakoCommand(f"Climate sender.eep {sender_eep} wird noch nicht unterstuetzt")
         if command == "set_temperature":
+            is_fhk61 = is_fhk61_230v_temperature_profile(device)
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # None preserves the established physical/native room-sensor
-                # path. A numeric value is supplied only for an explicit
-                # Home Assistant room-temperature assignment.
-                current_temperature=kwargs.get("current_temperature"),
+                # FHK61 uses a distinct MiniSafe-compatible 4BS profile.
+                # Do not leak the FHK14 mode byte or external sensor into it.
+                current_temperature=(
+                    None if is_fhk61 else kwargs.get("current_temperature")
+                ),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(kwargs.get("controller_priority") if kwargs.get("controller_priority") is not None else (device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority"))),
+                controller_profile="fhk61_230v" if is_fhk61 else None,
             )
         if command == "set_hvac_mode":
             hvac_mode = str(kwargs.get("hvac_mode") or "heat")
