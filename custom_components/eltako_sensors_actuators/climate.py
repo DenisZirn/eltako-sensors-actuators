@@ -51,6 +51,7 @@ from .const import (
     SIGNAL_ROOM_TEMPERATURE_UPDATED,
 )
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
+from .bus.operating_mode import heating_operating_mode_family, configured_operating_mode_sender
 from .room_temperature import (
     is_room_temperature_assignable_device,
     resolve_room_temperature_config,
@@ -696,6 +697,16 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             else "Aus" if self._is_fks_sv
             else fhk_mode_labels.get(self._fhk_heater_mode, "Unbekannt")
         )
+        operating_family = heating_operating_mode_family(self.device_config)
+        if operating_family is not None:
+            base["betriebsart_sender_id"] = configured_operating_mode_sender(
+                self.device_config, str(self.device_config.get("sender_id") or "")
+            )
+            base["betriebsart_einlernen"] = (
+                "EEDTOY FG4 / Funktion 30" if operating_family == "series14"
+                else "Separater Funk-Lernvorgang am FHK61"
+            )
+            base["betriebsart_aktor_bestaetigt"] = False
         base["protokoll_temperatureinheit"] = UnitOfTemperature.CELSIUS
         base["ha_temperatureinheit"] = str(self.hass.config.units.temperature_unit)
         if self._is_fhk14 or self._is_fae14lpr:
