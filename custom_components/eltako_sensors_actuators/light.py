@@ -92,6 +92,21 @@ def _device_name(device: dict[str, Any]) -> str:
     return str(device.get("name") or "")
 
 
+def _is_frgbw14_device(device: dict[str, Any]) -> bool:
+    """Distinguish the Series-14 RGBW actuator from the RF FRGBW71L."""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    return any(
+        "FRGBW14" in str(value or "").upper()
+        for value in (
+            device.get("device_type"),
+            device.get("model"),
+            device.get("name"),
+            raw.get("device_type"),
+            raw.get("name"),
+        )
+    )
+
+
 def _is_rgbw_device(device: dict[str, Any]) -> bool:
     eep = normalize_eep(device.get("eep"))
     sender_eep = normalize_eep(device.get("sender_eep"))
@@ -331,7 +346,17 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             try:
                 self._rgbw_color = tuple(max(0, min(255, int(v))) for v in rgbw[:4])
                 if _is_rgbw_device(self.device_config):
-                    self._frgbw_base_rgbw = self._rgbw_color
+                    if _is_frgbw14_device(self.device_config):
+                        # Older state entries stored the visible/scaled channels
+                        # rather than the full-intensity color. Reconstruct the
+                        # base once, so the next color change does not dim again.
+                        saved_brightness = max(1, self._brightness or 255)
+                        self._frgbw_base_rgbw = tuple(
+                            _clamp_u8(channel * 255.0 / saved_brightness)
+                            for channel in self._rgbw_color
+                        )
+                    else:
+                        self._frgbw_base_rgbw = self._rgbw_color
             except (TypeError, ValueError):
                 pass
 
@@ -349,6 +374,11 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
 
     @property
     def rgb_color(self):
+        # HA's RGB color and its brightness are independent properties. The
+        # hardware receives brightness-scaled RGBW, but reporting the scaled
+        # values back as RGB causes HA to apply brightness again on color changes.
+        if _is_frgbw14_device(self.device_config) and self._frgbw_base_rgbw is not None:
+            return tuple(self._frgbw_base_rgbw[:3])
         if self._rgbw_color is None:
             return None
         return tuple(self._rgbw_color[:3])
@@ -362,6 +392,25 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             self.device_config, telegram.decoded, telegram.sender_id
         )
         if feedback is None:
+            return
+        if (
+            _is_frgbw14_device(self.device_config)
+            and feedback.get("telegram_type") == "frgbw_dimmer_status"
+        ):
+            # FRGBW14 FUNC38 status (DB3=0x02, DB0=0x09) reports a color
+            # channel intensity, not the global Home Assistant brightness.
+            # Field data showed e.g. R=69/255 followed by 27%, and R=110
+            # followed by 43%, even more than 2.5 s after the color command.
+            # Ignore this misleading value unconditionally, including its
+            # ON/OFF flag (red=0 does not imply RGBW is off). HA retains the
+            # explicit brightness requested through the entity command path.
+            # FRGBW71L and other physical feedback are not affected.
+            _LOGGER.debug(
+                "FRGBW14 ignoring channel-derived FUNC38 status: "
+                "percent=%s requested_brightness=%s",
+                feedback.get("dimmer_percent"),
+                self._brightness,
+            )
             return
         if "rgbw_color" in feedback:
             self._rgbw_color = tuple(feedback["rgbw_color"])
@@ -380,8 +429,18 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             self._rgbw_color = (r, g, b, w)
             if _is_rgbw_device(self.device_config):
                 max_channel = max(r, g, b, w)
-                self._is_on = max_channel > 0
-                self._brightness = max_channel if self._is_on else 0
+                if _is_frgbw14_device(self.device_config):
+                    # A single RGBW component is not global HA brightness.
+                    # During a color switch some components can temporarily be
+                    # zero while the remainder of the telegram burst arrives.
+                    # Do not dim (or turn off) the light on those partial
+                    # updates. Global brightness is set by HA turn_on commands.
+                    if max_channel > 0:
+                        self._is_on = True
+                else:
+                    # Preserve established FRGBW71L feedback semantics.
+                    self._is_on = max_channel > 0
+                    self._brightness = max_channel if self._is_on else 0
                 self.schedule_update_ha_state()
                 return
         if "brightness" in feedback:
@@ -408,7 +467,18 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         if command == "turn_on" and _is_rgbw_device(self.device_config):
             self._effect = None
             explicit_color = _rgbw_from_kwargs(kwargs)
-            brightness = _clamp_u8(kwargs.get(ATTR_BRIGHTNESS), self._brightness if self._brightness is not None else 255)
+            if _is_frgbw14_device(self.device_config):
+                _LOGGER.debug(
+                    "FRGBW14 turn_on request: color=%s brightness_arg=%s "
+                    "previous_brightness=%s",
+                    explicit_color,
+                    kwargs.get(ATTR_BRIGHTNESS),
+                    self._brightness,
+                )
+            brightness = _clamp_u8(
+                kwargs.get(ATTR_BRIGHTNESS),
+                self._brightness if (self._brightness is not None and self._brightness > 0) else 255,
+            )
 
             if explicit_color is not None:
                 frgbw_target_base = explicit_color
