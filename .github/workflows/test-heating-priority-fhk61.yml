@@ -19,17 +19,22 @@ jobs:
         run: python -m compileall -q custom_components/eltako_sensors_actuators tests
       - name: Run all isolated regression tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Build Home Assistant test integration ZIP
+      - name: Prepare standard Home Assistant integration folder
         run: |
           mkdir -p package
           cp -R custom_components/eltako_sensors_actuators package/eltako_sensors_actuators
           find package -type d -name __pycache__ -prune -exec rm -rf '{}' +
-          cd package
-          zip -q -r ../eltako_sensors_actuators_heating_fhk61_test.zip eltako_sensors_actuators
-      - name: Upload installable test integration
+          test -f package/eltako_sensors_actuators/manifest.json
+          test -f package/eltako_sensors_actuators/__init__.py
+          test -f package/eltako_sensors_actuators/gateway.py
+      # upload-artifact already creates a ZIP. Uploading another .zip caused
+      # double packaging; downloaders then had to open a ZIP inside a ZIP.
+      # The artifact root must contain only eltako_sensors_actuators/.
+      - name: Upload directly installable integration folder
         uses: actions/upload-artifact@v4
         with:
           name: eltako-sensors-actuators-heating-fhk61-test
-          path: eltako_sensors_actuators_heating_fhk61_test.zip
+          path: package/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
