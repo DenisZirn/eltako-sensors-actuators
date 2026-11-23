@@ -456,7 +456,7 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             if _is_frgbw14_device(self.device_config):
                 physical = str(feedback.get("physical_sender_id") or telegram.sender_id or "").upper()
                 device_id = str(self.device_config.get("id") or "").upper()
-                if physical != device_id:
+                if device_id and physical != device_id:
                     return
             r, g, b, w = self._rgbw_color or (0, 0, 0, 0)
             component = feedback.get("component")
