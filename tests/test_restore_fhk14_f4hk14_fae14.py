@@ -18,17 +18,10 @@ def _builder():
     # Exercise the actual climate branch with its exact sender/data arguments.
     # Avoid unrelated switch/cover/RGBW guards that precede it in the full
     # builder and are outside this test's purpose.
-    setup = [
-        stmt for stmt in node.body
-        if isinstance(stmt, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id in {
-                "sender_id", "gateway_type", "gateway_base_id", "sender_eep",
-                "device_eep", "platform",
-            }
-            for target in stmt.targets
-        )
-    ]
+    # Only the first six assignments initialize the builder context.
+    # A later sender_id re-assignment depends on unrelated gateway code.
+    setup = node.body[:6]
+    assert all(isinstance(stmt, ast.Assign) for stmt in setup)
     climate = next(
         stmt for stmt in node.body
         if isinstance(stmt, ast.If)
