@@ -35,6 +35,10 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_PRESET_MODE = 16
 
 from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data
+from .heating_priority import (
+    SIGNAL_HEATING_PRIORITY_TX, supports_heating_priority, heating_control_mode,
+    priority_mode, set_priority_mode,
+)
 from .bus.eep_a5_20_01 import (
     encode_a5_20_01_temperature_setpoint_data,
     encode_a5_20_01_valve_position_data,
@@ -288,6 +292,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
+        self._remove_heating_priority_listener = None
 
 
     async def async_added_to_hass(self) -> None:
@@ -370,6 +375,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
                 self._last_controller_response = attrs.get("letzte_controllerantwort")
 
+        if supports_heating_priority(self.device_config):
+            self._remove_heating_priority_listener = async_dispatcher_connect(
+                self.hass, SIGNAL_HEATING_PRIORITY_TX, self._on_heating_priority_changed
+            )
+
         if self._has_room_temperature_assignment:
             self._remove_temperature_options_listener = async_dispatcher_connect(
                 self.hass,
@@ -388,6 +398,31 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 and self._external_temperature is not None
             ):
                 self._schedule_a5_10_06_room_temperature_push()
+
+    def _selected_priority(self) -> str | None:
+        if not supports_heating_priority(self.device_config):
+            return None
+        if heating_control_mode(self.device_config, self._entry_options()) != "learned_sensor":
+            return None
+        return priority_mode(self.device_config, self._entry_options())
+
+    def _priority_send_keyword(self) -> str | None:
+        selected = self._selected_priority()
+        if selected is None or selected == "manual":
+            return None
+        return {"central": "ha", "auto": "auto", "limit": "limit"}[selected]
+
+    def _priority_manual_active(self) -> bool:
+        return self._selected_priority() == "manual"
+
+    def _on_heating_priority_changed(self, entry_id: str, device_id: str) -> None:
+        if entry_id != self.gateway.entry_id:
+            return
+        if str(device_id).upper() != str(self.device_config.get("id") or "").upper():
+            return
+        if not self._priority_manual_active():
+            self._schedule_a5_10_06_room_temperature_push()
+        self.schedule_update_ha_state()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -478,7 +513,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         return None
 
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
-        if self._room_temperature_device_kind != "a5_10_06":
+        if self._room_temperature_device_kind != "a5_10_06" or self._priority_manual_active():
             return
         # Coalesce rapid events but never lose the last update if a serial
         # send is still running. A later source change triggers a final send.
@@ -503,6 +538,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     async def _async_push_a5_10_06_room_temperature(self) -> None:
         """Push source changes immediately to mains-powered A5-10-06 actuators."""
+        if self._priority_manual_active():
+            return
         current_temperature = self._a5_10_06_outgoing_room_temperature()
         target = float(self._target_temperature or 20.0)
         heater_mode = (
@@ -515,10 +552,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             temperature=target,
             current_temperature=current_temperature,
             heater_mode=heater_mode,
+            **({"controller_priority": self._priority_send_keyword()} if self._priority_send_keyword() else {}),
         )
         if ok:
             raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
-            priority = self.device_config.get("priority") or raw.get("priority")
+            priority = self._priority_send_keyword() or self.device_config.get("priority") or raw.get("priority")
             data = encode_a5_10_06_room_control_data(
                 target_temperature=target,
                 current_temperature=current_temperature,
@@ -1205,16 +1243,21 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if self._room_temperature_device_kind == "a5_10_06"
             else None
         )
+        was_manual = self._priority_manual_active()
+        outgoing_priority = "auto" if was_manual else self._priority_send_keyword()
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
             temperature=temperature,
             current_temperature=outgoing_room_temperature,
             heater_mode=heater_mode,
+            **({"controller_priority": outgoing_priority} if outgoing_priority is not None else {}),
         )
         if not ok:
             detail = self.gateway.last_send_error or "unbekannter Fehler"
             raise HomeAssistantError(f"ELTAKO Temperatur-Telegramm konnte nicht gesendet werden: {detail}")
+        if was_manual:
+            set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, "auto")
         self._target_temperature = temperature
         self._attr_hvac_mode = HVACMode.HEAT
         if not self._is_fks_sv:
@@ -1223,7 +1266,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._attr_preset_mode = PRESET_HOME
         if self._room_temperature_device_kind == "a5_10_06":
             raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
-            priority = self.device_config.get("priority") or raw.get("priority")
+            priority = outgoing_priority or self.device_config.get("priority") or raw.get("priority")
             data = encode_a5_10_06_room_control_data(
                 target_temperature=temperature,
                 current_temperature=outgoing_room_temperature,
@@ -1248,6 +1291,9 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if self._remove_external_temperature_listener is not None:
             self._remove_external_temperature_listener()
             self._remove_external_temperature_listener = None
+        if self._remove_heating_priority_listener is not None:
+            self._remove_heating_priority_listener()
+            self._remove_heating_priority_listener = None
         if self._remove_temperature_options_listener is not None:
             self._remove_temperature_options_listener()
             self._remove_temperature_options_listener = None
