@@ -52,7 +52,7 @@ class Series14CompatibilityTests(unittest.TestCase):
                                    heater_mode="normal")
                 self.assertEqual(sender, "FF-A6-04-C1")
                 self.assertEqual(kw["current_temperature"], 21.3)
-                self.assertEqual(kw["temperature"], 24)
+                self.assertEqual(kw["target_temperature"], 24)
                 self.assertEqual(kw["hvac_mode"], "normal")
                 self.assertEqual(kw["priority"], "ha")
                 self.assertIsNone(kw["controller_profile"])
