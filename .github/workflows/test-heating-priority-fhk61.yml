@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - test/a5-10-06-priority-fhk61
+      - test/restore-fhk14-f4hk14-fae14
   workflow_dispatch:
 
 jobs:
