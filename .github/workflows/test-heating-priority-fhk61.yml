@@ -8,6 +8,7 @@ on:
       - test/fix-external-ha-room-temperature-priority
       - test/filter-unavailable-temperature-sensors
       - test/heating-frgbw-regressionfix-20261123
+      - test/fg4-fhk61-operating-mode-20261123
   workflow_dispatch:
 
 jobs:
