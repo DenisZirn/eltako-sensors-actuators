@@ -303,6 +303,9 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         self._brightness = None
         # Last visible/scaled color reported to Home Assistant.
         self._rgbw_color = None
+        # Physical FRGBW14 channel feedback is spread over three consecutive
+        # actuator IDs. Keep it separate from global HA brightness.
+        self._frgbw_channel_percent: list[int | None] = [None, None, None]
         # FRGBW71L base color at 100% brightness. Kept separate from
         # brightness so brightness-only calls do not create new colors and
         # color changes always replace all four channels.
@@ -397,6 +400,35 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
             _is_frgbw14_device(self.device_config)
             and feedback.get("telegram_type") == "frgbw_dimmer_status"
         ):
+            # FUNC38 statuses refer to *individual* physical R/G/B channels,
+            # never the independent overall HA brightness slider.
+            physical = str(feedback.get("physical_sender_id") or "").replace("-", "").upper()
+            base = str(self.device_config.get("id") or "").replace("-", "").upper()
+            if len(physical) == len(base) == 8:
+                try:
+                    channel_index = int(physical, 16) - int(base, 16)
+                except ValueError:
+                    channel_index = -1
+                if channel_index in (0, 1, 2):
+                    percent = feedback.get("dimmer_percent")
+                    if isinstance(percent, int) and 0 <= percent <= 100:
+                        self._frgbw_channel_percent[channel_index] = percent
+                        # Update the color only after hearing ALL physical
+                        # channels at least once. A red=0 packet alone does
+                        # not mean the complete RGB light is off.
+                        if all(v is not None for v in self._frgbw_channel_percent):
+                            values = tuple(int(v) for v in self._frgbw_channel_percent)
+                            maximum = max(values)
+                            if maximum:
+                                base_rgb = tuple(round(v * 255 / maximum) for v in values)
+                                self._frgbw_base_rgbw = (*base_rgb, 0)
+                                scale = (self._brightness if self._brightness is not None else 255) / 255
+                                self._rgbw_color = tuple(round(v * scale) for v in (*base_rgb, 0))
+                                self._is_on = True
+                                self.schedule_update_ha_state()
+                            else:
+                                self._is_on = False
+                                self.schedule_update_ha_state()
             # FRGBW14 FUNC38 status (DB3=0x02, DB0=0x09) reports a color
             # channel intensity, not the global Home Assistant brightness.
             # Field data showed e.g. R=69/255 followed by 27%, and R=110
@@ -415,6 +447,13 @@ class EltakoLight(EltakoYamlEntity, LightEntity):
         if "rgbw_color" in feedback:
             self._rgbw_color = tuple(feedback["rgbw_color"])
         if "component" in feedback and "component_value" in feedback:
+            # Gateway-mapped controller TX echoes must not overwrite the RGB
+            # state that the local command just set optimistically.
+            if _is_frgbw14_device(self.device_config):
+                physical = str(feedback.get("physical_sender_id") or "").upper()
+                device_id = str(self.device_config.get("id") or "").upper()
+                if physical != device_id:
+                    return
             r, g, b, w = self._rgbw_color or (0, 0, 0, 0)
             component = feedback.get("component")
             value = int(feedback.get("component_value") or 0)
