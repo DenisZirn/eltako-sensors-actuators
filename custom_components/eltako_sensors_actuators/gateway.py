@@ -867,6 +867,25 @@ class EltakoGateway:
             for address in _candidate_addresses_for_device(device):
                 lookup[address.upper()] = device
 
+            # A single FRGBW14 RGB Light represents three consecutive physical
+            # color-channel feedback addresses: base (R), base+1 (G),
+            # base+2 (B). Route only unused addresses to the RGB Light.
+            # Never replace an explicitly configured device at these IDs.
+            model = str(_device_raw_option(device, "device_type", "") or "").upper()
+            if "FRGBW14" in model and str(device.get("platform") or "").lower() == "light":
+                base_address = _normalized_address_or_none(device.get("id"))
+                if base_address:
+                    try:
+                        base_bytes = parse_address(base_address)
+                        base_int = int.from_bytes(base_bytes, "big")
+                        for channel in (1, 2):
+                            channel_address = format_address(
+                                (base_int + channel).to_bytes(4, "big")
+                            )
+                            lookup.setdefault(channel_address.upper(), device)
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
             # F4USM61B modes 1, 2, 4, 5 and 7 transmit the approximately
             # daily battery status from the physical Unique-ID using A5-07-01,
             # while their normal channel telegrams use Base-ID+1/+2. Register
