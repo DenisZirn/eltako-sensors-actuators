@@ -15,6 +15,29 @@ from test_fks_sv_room_temperature import INTEGRATION, eep10, const
 def _builder():
     tree = ast.parse((INTEGRATION / "gateway.py").read_text(encoding="utf-8"))
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_build_actuator_message")
+    # Exercise the actual climate branch with its exact sender/data arguments.
+    # Avoid unrelated switch/cover/RGBW guards that precede it in the full
+    # builder and are outside this test's purpose.
+    setup = [
+        stmt for stmt in node.body
+        if isinstance(stmt, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id in {
+                "sender_id", "gateway_type", "gateway_base_id", "sender_eep",
+                "device_eep", "platform",
+            }
+            for target in stmt.targets
+        )
+    ]
+    climate = next(
+        stmt for stmt in node.body
+        if isinstance(stmt, ast.If)
+        and ast.unparse(stmt.test) == "platform == 'climate'"
+    )
+    isolated = ast.FunctionDef(
+        name=node.name, args=node.args, body=[*setup, climate],
+        decorator_list=[], returns=node.returns, type_comment=None,
+    )
     ns = {
         "Any": object,
         "UnsupportedEltakoCommand": ValueError,
@@ -27,7 +50,7 @@ def _builder():
         "build_a5_10_06_room_control": lambda sender, **kwargs: (sender, kwargs),
         "build_fhk_mode_command": lambda sender, mode: ("rps", sender, mode),
     }
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[isolated], type_ignores=[])),
                  "gateway.py", "exec"), ns)
     return ns["_build_actuator_message"]
 
