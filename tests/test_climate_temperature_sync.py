@@ -259,6 +259,45 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(e._current_temperature, 22.5)
                 self.assertEqual(e._last_sent_room_temperature, 22.5)
 
+    async def test_external_function64_forces_auto_even_with_legacy_ha_priority(self):
+        for kind in ("FHK14", "F4HK14", "FAE14LPR", "FAE14SSR"):
+            with self.subTest(kind=kind):
+                e, gateway, hass = make_climate(kind, external=21.3, source="external")
+                await e.async_added_to_hass()
+                self.assertEqual(e._priority_send_keyword(), "auto")
+                e._handle_temperature_options_updated(gateway.entry_id)
+                await _wait_for_push(e)
+                self.assertEqual(len(gateway.calls), 1)
+                self.assertEqual(gateway.calls[-1][2]["controller_priority"], "auto")
+                self.assertEqual(gateway.calls[-1][2]["current_temperature"], 21.3)
+                self.assertEqual(e._last_controller_telegram, "70-85-77-0E")
+
+    async def test_external_source_overrides_stale_manual_priority_without_blocking_push(self):
+        e, gateway, hass = make_climate("F4HK14", external=21.3, source="external")
+        hass.options["heating_priority_overrides"] = {"01-02-03-04": "manual"}
+        # Explicit learned_sensor in YAML must not override the actual HA
+        # external controller source selected through the integration UI.
+        e.device_config["heating_control_mode"] = "learned_sensor"
+        await e.async_added_to_hass()
+        self.assertFalse(e._priority_manual_active())
+        self.assertEqual(e._priority_send_keyword(), "auto")
+        hass.states.set("sensor.room", 22.5)
+        e._handle_external_temperature_state_event(None)
+        await _wait_for_push(e)
+        self.assertEqual(len(gateway.calls), 1)
+        self.assertEqual(gateway.calls[0][2]["controller_priority"], "auto")
+        self.assertEqual(gateway.calls[0][2]["current_temperature"], 22.5)
+
+    async def test_native_function65_keeps_selected_priority(self):
+        e, gateway, hass = make_climate("FHK14", source="native")
+        hass.options["heating_priority_overrides"] = {"01-02-03-04": "limit"}
+        await e.async_added_to_hass()
+        self.assertEqual(e._priority_send_keyword(), "limit")
+        e._handle_temperature_options_updated(gateway.entry_id)
+        await _wait_for_push(e)
+        self.assertEqual(gateway.calls[0][2]["controller_priority"], "limit")
+        self.assertIsNone(gateway.calls[0][2]["current_temperature"])
+
     async def test_rapid_changes_replay_last_update_after_busy_send(self):
         e, gateway, hass = make_climate("FHK14", external=20.0)
         await e.async_added_to_hass()
