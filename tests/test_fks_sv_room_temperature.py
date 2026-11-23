@@ -466,7 +466,9 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         self.assertIn('device_class == "temperature"', source)
         self.assertIn('"°C"', source)
         self.assertIn('"°F"', source)
-        self.assertNotIn('temperature_to_celsius(getattr(state', source)
+        # Keep the strict temperature-metadata check AND require a live,
+        # finite, in-range reading; offline metadata alone is insufficient.
+        self.assertIn('temperature_to_celsius(getattr(state', source)
         selector = self._function_source(
             INTEGRATION / "config_flow.py", "async_step_room_temperature_entity"
         )
