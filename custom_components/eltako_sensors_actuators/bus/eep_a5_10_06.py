@@ -59,23 +59,56 @@ def _priority_byte(priority: str | int | None) -> int:
     return 0x0E
 
 
+def is_fhk61_230v_temperature_profile(device: dict) -> bool:
+    """Identify the FHK61-230V thermostat, excluding U/SSR variants."""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    model = str(device.get("device_type") or raw.get("device_type") or "").strip().upper().replace(" ", "")
+    return (
+        model.startswith("FHK61-230V")
+        and str(device.get("platform") or "").lower() == "climate"
+        and str(device.get("eep") or "").upper() == "A5-10-06"
+    )
+
+
+def _fhk61_setpoint_byte(value: float | int | None) -> int:
+    """MiniSafe observed: 10 C -> 0x40, 30 C -> 0xBF.
+
+    This uses nearest-integer scaling and is intentionally specific to the
+    decentralized FHK61-230V. Existing FHK14/F4HK14 controllers continue to
+    use the eltako14bus-compatible truncation in _temp_to_byte.
+    """
+    try:
+        temperature = float(value) if value is not None else 20.0
+    except (TypeError, ValueError):
+        temperature = 20.0
+    temperature = max(0.0, min(40.0, temperature))
+    return max(0, min(255, round(temperature / 40.0 * 255.0)))
+
+
 def encode_a5_10_06_room_control_data(
     *,
     target_temperature: float | int | None = None,
     current_temperature: float | int | None = None,
     hvac_mode: str | None = "heat",
     priority: str | int | None = None,
+    controller_profile: str | None = None,
 ) -> bytes:
-    """Return DB3..DB0 for an ELTAKO A5-10-06 controller telegram.
+    """Encode A5-10-06 without conflating 61-series and 14-series protocols.
 
-    current_temperature=None preserves the established actuator/native
-    room-sensor path (DB1=0x00 / 40 C protocol value).
+    The FHK61-230V MiniSafe trace uses DB3=0x00 for its A5-10-06
+    temperature/setpoint profile, with DB0=0x0E. Operating-mode selection
+    is a separate learned RPS telegram. Other actuators keep their
+    established mode-byte encoding.
     """
-    target_byte = _temp_to_byte(target_temperature, default=20.0)
+    fhk61 = controller_profile == "fhk61_230v"
+    target_byte = (
+        _fhk61_setpoint_byte(target_temperature)
+        if fhk61 else _temp_to_byte(target_temperature, default=20.0)
+    )
     effective_current = 40.0 if current_temperature is None else current_temperature
     current_byte = _current_temp_to_byte(effective_current)
     return bytes([
-        _mode_byte(hvac_mode),
+        0x00 if fhk61 else _mode_byte(hvac_mode),
         target_byte,
         current_byte,
         _priority_byte(priority),
@@ -88,6 +121,7 @@ def build_a5_10_06_room_control(
     current_temperature: float | int | None = None,
     hvac_mode: str | None = "heat",
     priority: str | int | None = None,
+    controller_profile: str | None = None,
 ) -> ESP2Message:
     """Build an ELTAKO A5-10-06 software-controller telegram.
 
@@ -102,6 +136,7 @@ def build_a5_10_06_room_control(
         current_temperature=current_temperature,
         hvac_mode=hvac_mode,
         priority=priority,
+        controller_profile=controller_profile,
     )
     return build_regular_4bs(address, data, status=0x80, outgoing=True)
 
