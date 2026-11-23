@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import CONF_DEVICES, DOMAIN
 from .entity_base import EltakoGatewayEntity, EltakoYamlEntity, normalize_eep, normalize_platform
+from .bus.operating_mode import heating_operating_mode_family
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,11 +268,7 @@ def _build_teach_in_buttons_for_device(gateway, device: dict[str, Any]) -> list[
         return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="arm_fks_hora_teach_in")]
     raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
     model = str(device.get("device_type") or raw.get("device_type") or "").strip().upper().replace(" ", "")
-    if (
-        model.startswith("FHK61-230V")
-        and normalize_platform(device.get("platform")) == "climate"
-        and normalize_eep(device.get("eep")) == "A5-10-06"
-    ):
+    if heating_operating_mode_family(device) == "fhk61":
         return [
             EltakoTeachInButton(
                 gateway, device, suffix="Temperaturregler einlernen",
