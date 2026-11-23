@@ -130,6 +130,51 @@ class FRGBW14BrightnessTests(unittest.TestCase):
         self.assertTrue(light._is_on)
         self.assertEqual(light.rgb_color, (0, 0, 255))
 
+    def test_physical_rgb_channel_status_is_combined_without_dimming(self):
+        light = DummyLight("FRGBW14", 255)
+        light.device_config["id"] = "FF-BF-5C-A3"
+        light._frgbw_channel_percent = [None, None, None]
+        # White from MiniSafe: physical A3/A4/A5 each report 100%.
+        for address in ("FF-BF-5C-A3", "FF-BF-5C-A4", "FF-BF-5C-A5"):
+            decoded = _decode_4bs(bytes.fromhex("02 64 00 09"), "07-3F-7F")
+            decoded["physical_sender_id"] = address
+            light._handle_telegram(SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3"))
+        self.assertEqual(light.rgb_color, (255, 255, 255))
+        self.assertEqual(light._brightness, 255)
+        # Physical green-only state: R=0, G=100, B=0.
+        for address, raw in (
+            ("FF-BF-5C-A3", "02 00 00 08"),
+            ("FF-BF-5C-A4", "02 64 00 09"),
+            ("FF-BF-5C-A5", "02 00 00 08"),
+        ):
+            decoded = _decode_4bs(bytes.fromhex(raw), "07-3F-7F")
+            decoded["physical_sender_id"] = address
+            light._handle_telegram(SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3"))
+        self.assertEqual(light.rgb_color, (0, 255, 0))
+        self.assertTrue(light._is_on)
+        self.assertEqual(light._brightness, 255)
+
+    def test_partial_channel_feedback_never_zeros_ha_brightness(self):
+        light = DummyLight("FRGBW14", 175)
+        light.device_config["id"] = "FF-BF-5C-A3"
+        light._frgbw_channel_percent = [None, None, None]
+        decoded = _decode_4bs(bytes.fromhex("02 00 00 08"), "07-3F-7F")
+        decoded["physical_sender_id"] = "FF-BF-5C-A4"
+        light._handle_telegram(SimpleNamespace(decoded=decoded, sender_id="FF-BF-5C-A3"))
+        self.assertTrue(light._is_on)
+        self.assertEqual(light._brightness, 175)
+
+    def test_controller_tx_echo_does_not_override_selected_color(self):
+        light = DummyLight("FRGBW14", 255)
+        light.device_config["id"] = "FF-BF-5C-A3"
+        light._rgbw_color = (0, 255, 0, 0)
+        light._frgbw_base_rgbw = (0, 255, 0, 0)
+        echo = _decode_4bs(bytes.fromhex("03 FF 12 0F"), "07-3F-7F")
+        echo["physical_sender_id"] = "FF-A6-04-A3"
+        light._handle_telegram(SimpleNamespace(decoded=echo, sender_id="FF-BF-5C-A3"))
+        self.assertEqual(light.rgb_color, (0, 255, 0))
+        self.assertEqual(light._brightness, 255)
+
     def test_frgbw14_other_brightness_feedback_still_supported(self):
         light = DummyLight("FRGBW14", 255)
         light._handle_telegram(
