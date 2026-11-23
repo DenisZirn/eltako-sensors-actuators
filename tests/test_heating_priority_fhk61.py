@@ -81,11 +81,10 @@ class PriorityTests(unittest.TestCase):
             self.assertEqual(data[1], 127)
             self.assertEqual(data[2], 0)
 
-    def test_priority_select_platform_is_suspended_during_14series_restore(self):
-        # The new priority feature is not allowed to interfere with baseline climate.
-        self.assertNotIn("select", const.PLATFORMS)
+    def test_priorities_are_restored_for_14series_only(self):
+        self.assertIn("select", const.PLATFORMS)
         source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
-        self.assertNotIn("_manual_priority_active", source)
+        self.assertIn("_priority_manual_active", source)
         self.assertNotIn("_heating_controller_priority", source)
 
     def test_per_channel_priority_is_independent(self):
