@@ -9,7 +9,9 @@ import ast
 from pathlib import Path
 import unittest
 
-from test_fks_sv_room_temperature import INTEGRATION, eep10, const
+from test_fks_sv_room_temperature import INTEGRATION, eep10, const, PKG, _load
+
+operating_mode = _load(f"{PKG}.bus.operating_mode", INTEGRATION / "bus" / "operating_mode.py")
 
 
 def _builder():
@@ -40,6 +42,8 @@ def _builder():
         "format_address": lambda addr: addr,
         "parse_address": lambda addr: addr,
         "is_fhk61_230v_temperature_profile": eep10.is_fhk61_230v_temperature_profile,
+        "heating_operating_mode_family": operating_mode.heating_operating_mode_family,
+        "configured_operating_mode_sender": operating_mode.configured_operating_mode_sender,
         "build_a5_10_06_room_control": lambda sender, **kwargs: (sender, kwargs),
         "build_fhk_mode_command": lambda sender, mode: ("rps", sender, mode),
     }
