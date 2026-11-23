@@ -49,10 +49,10 @@ def _builder():
 
 
 class Series14CompatibilityTests(unittest.TestCase):
-    def test_priority_select_disabled_until_hardware_verified(self):
-        self.assertNotIn("select", const.PLATFORMS)
+    def test_select_restored_without_fhk61_priority_override(self):
+        self.assertIn("select", const.PLATFORMS)
         climate_source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
-        self.assertNotIn("_manual_priority_active", climate_source)
+        self.assertIn("_priority_manual_active", climate_source)
         self.assertNotIn("controller_priority=self._heating_controller_priority()", climate_source)
 
     def test_gateway_preserves_setpoint_room_temperature_and_priority_for_14_series(self):
