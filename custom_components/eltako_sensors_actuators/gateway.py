@@ -2889,14 +2889,15 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             raise UnsupportedEltakoCommand(f"Climate sender.eep {sender_eep} wird noch nicht unterstuetzt")
         if command == "set_temperature":
             is_fhk61 = is_fhk61_230v_temperature_profile(device)
+            if is_fhk61:
+                # FHK61-230V MiniSafe-compatible setpoints do not carry the
+                # external temperature in DB1. Never alter FHK14/F4HK14/FAE14
+                # kwargs or their established 4BS controller encoding.
+                kwargs = {**kwargs, "current_temperature": None}
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # FHK61 uses a distinct MiniSafe-compatible 4BS profile.
-                # Do not leak the FHK14 mode byte or external sensor into it.
-                current_temperature=(
-                    None if is_fhk61 else kwargs.get("current_temperature")
-                ),
+                current_temperature=kwargs.get("current_temperature"),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
                 priority=(kwargs.get("controller_priority") if kwargs.get("controller_priority") is not None else (device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority"))),
                 controller_profile="fhk61_230v" if is_fhk61 else None,
