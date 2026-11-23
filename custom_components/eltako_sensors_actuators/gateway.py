@@ -20,6 +20,7 @@ from .device_profiles import (
 )
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
 from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command, is_fhk61_230v_temperature_profile
+from .bus.operating_mode import heating_operating_mode_family, configured_operating_mode_sender
 from .bus.fhk61_feedback import decode_fhk61_rps_feedback
 from .bus.eep_series14 import build_series14_switch_command
 from .bus.eep_a5_20_01 import (
@@ -1789,7 +1790,7 @@ class EltakoGateway:
             else (
                 (
                     "fhk_rps_mode_command"
-                    if command in {"set_hvac_mode", "set_preset_mode"}
+                    if command in {"set_hvac_mode", "set_preset_mode", "fhk61_teach_in_operating_mode"}
                     else "fhk_a5_10_06_setpoint_command"
                 )
                 if is_fhk
@@ -2587,11 +2588,17 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
 
     if command == "fhk61_teach_in_operating_mode":
-        if not is_fhk61_230v_temperature_profile(device):
-            raise UnsupportedEltakoCommand("FHK61-Betriebsart-Lernen nur für FHK61-230V")
-        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
-        # FHK61 learns its operating-mode transmitter via a separate RPS
-        # button role. This is not the A5-10-06 temperature teach-in.
+        if heating_operating_mode_family(device) != "fhk61":
+            raise UnsupportedEltakoCommand(
+                "FHK61-Betriebsart-Lernen nur im A5-10-06-Temperaturmodus"
+            )
+        operating_sender = configured_operating_mode_sender(device, sender_id)
+        effective = _effective_sender_id_for_gateway(
+            operating_sender, gateway_type, gateway_base_id, device=device
+        )
+        # The actor must already be placed into operating-mode teach-in
+        # (LRN, lower rotary 4.5). This sends an RPS normal-mode frame to
+        # learn the separately configurable operating-mode sender.
         return build_fhk_mode_command(effective, "normal")
 
     if platform == "climate" and command == "release_heating_priority":
@@ -2921,11 +2928,24 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                 priority=(kwargs.get("controller_priority") if kwargs.get("controller_priority") is not None else (device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority"))),
                 controller_profile="fhk61_230v" if is_fhk61 else None,
             )
-        if command == "set_hvac_mode":
-            hvac_mode = str(kwargs.get("hvac_mode") or "heat")
-            return build_fhk_mode_command(sender_id, hvac_mode)
-        if command == "set_preset_mode":
-            return build_fhk_mode_command(sender_id, kwargs.get("preset_mode"))
+        if command in ("set_hvac_mode", "set_preset_mode"):
+            family = heating_operating_mode_family(device)
+            # The RPS sender is programmed in Series-14 FG4/F30 or learned
+            # separately at FHK61. Do not reuse a temperature sender when a
+            # dedicated operating-mode sender is configured.
+            operating_sender = (
+                configured_operating_mode_sender(device, sender_id)
+                if family is not None else sender_id
+            )
+            operating_sender = _effective_sender_id_for_gateway(
+                operating_sender, gateway_type, gateway_base_id, device=device
+            )
+            mode = (
+                str(kwargs.get("hvac_mode") or "heat")
+                if command == "set_hvac_mode"
+                else kwargs.get("preset_mode")
+            )
+            return build_fhk_mode_command(operating_sender, mode)
 
     if platform == "cover":
         if sender_eep != "H5-3F-7F":
