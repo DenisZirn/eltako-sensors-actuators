@@ -361,9 +361,10 @@ def _is_temperature_entity_compatible(hass, entity_id: str) -> bool:
     attrs = getattr(state, "attributes", {}) or {}
     device_class = str(attrs.get("device_class") or "").strip().lower()
     unit = str(attrs.get("unit_of_measurement") or "").strip().upper()
-    if device_class != "temperature" and unit not in {
+    temperature_metadata = device_class == "temperature" or unit in {
         "°C", "C", "CELSIUS", "°F", "F", "FAHRENHEIT"
-    }:
+    }
+    if not temperature_metadata:
         return False
     return temperature_to_celsius(getattr(state, "state", None), unit) is not None
 
