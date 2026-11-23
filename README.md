@@ -58,7 +58,7 @@ Die Konfiguration wird über den Integrationsdialog importiert und **nicht in `c
 - Unterstützung des älteren **FRW-ws Rauchwarnmelders** mit Rauchalarm- und Batteriestatus.
 - Unterstützung neuerer **FRWB-Rauchmelder** mit `A5-30-03`.
 - Unterstützung des **FWS81 Wassermelders** mit `F6-05-01` als Wasseralarm.
-- `serialx` mit gepuffertem ESP2-Empfang einschließlich zuverlässiger FT55-Tast-/Loslass-Telegramme und separater Batterie-IDs.
+- `serialx` mit gepuffertem ESP2-Empfang
 - EEDTOY-Geräteimport mit technischen Gerätetypen für eine eindeutige Geräteerkennung.
 - **Automatische Raumzuordnung:** In EEDTOY hinterlegte Räume werden beim YAML-Import in Home Assistant übernommen.
 - Persistente Geräte- und Raumtemperaturzuordnung.
