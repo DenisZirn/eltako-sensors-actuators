@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import unittest
 
 from test_fks_sv_room_temperature import INTEGRATION, eep10, _load, PKG
-from test_climate_temperature_sync import make_climate, priority
+from test_fks_sv_room_temperature import const
+
+priority = _load(f"{PKG}.heating_priority", INTEGRATION / "heating_priority.py")
 
 
 class ControllerEchoRoutingTests(unittest.TestCase):
@@ -79,12 +81,12 @@ class PriorityTests(unittest.TestCase):
             self.assertEqual(data[1], 127)
             self.assertEqual(data[2], 0)
 
-    def test_manual_suppresses_temperature_push(self):
-        e, gateway, hass = make_climate("F4HK14", source="internal")
-        e.hass.options["heating_priority_overrides"] = {"01-02-03-04": "manual"}
-        e._schedule_a5_10_06_room_temperature_push()
-        self.assertFalse(e._room_temperature_push_pending)
-        self.assertFalse(gateway.calls)
+    def test_priority_select_platform_is_suspended_during_14series_restore(self):
+        # The new priority feature is not allowed to interfere with baseline climate.
+        self.assertNotIn("select", const.PLATFORMS)
+        source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
+        self.assertNotIn("_manual_priority_active", source)
+        self.assertNotIn("_heating_controller_priority", source)
 
     def test_per_channel_priority_is_independent(self):
         d1 = self.device()
