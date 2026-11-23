@@ -21,6 +21,8 @@ def _builder():
         "_get_sender_id": lambda d: d.get("sender_id"),
         "_get_sender_eep": lambda d: d.get("sender_eep", "A5-10-06"),
         "_effective_sender_id_for_gateway": lambda sender, *a, **kw: sender,
+        "format_address": lambda addr: addr,
+        "parse_address": lambda addr: addr,
         "is_fhk61_230v_temperature_profile": eep10.is_fhk61_230v_temperature_profile,
         "build_a5_10_06_room_control": lambda sender, **kwargs: (sender, kwargs),
         "build_fhk_mode_command": lambda sender, mode: ("rps", sender, mode),
