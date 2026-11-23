@@ -8,8 +8,7 @@
 [![License](https://img.shields.io/github/license/DenisZirn/eltako-sensors-actuators)](LICENSE)
 [![Documentation](https://img.shields.io/badge/Documentation-Guides-1F6FEB?logo=readthedocs&logoColor=white)](docs/README.md)
 
-[![Generic badge](https://shields.io)](https://www.paypal.me/DenisZirnb)
-
+[![Generic badge](https://img.shields.io/badge/SUPPORT_THIS_PROJECT-PayPal.me-27ae60.svg)](https://paypal.me/DenisZirn)
 
 </div>
 
