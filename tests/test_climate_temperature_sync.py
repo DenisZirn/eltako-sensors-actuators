@@ -289,7 +289,7 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gateway.calls[0][2]["current_temperature"], 22.5)
 
     async def test_native_function65_keeps_selected_priority(self):
-        e, gateway, hass = make_climate("FHK14", source="native")
+        e, gateway, hass = make_climate("FHK14", source="internal")
         hass.options["heating_priority_overrides"] = {"01-02-03-04": "limit"}
         await e.async_added_to_hass()
         self.assertEqual(e._priority_send_keyword(), "limit")
