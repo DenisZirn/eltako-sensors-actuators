@@ -407,12 +407,29 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         return priority_mode(self.device_config, self._entry_options())
 
     def _priority_send_keyword(self) -> str | None:
+        # The Function-64 HA room controller requires AUTO (DB0=0x0E).
+        # Do not allow a legacy YAML priority ("ha" -> DB0=0x08) or a
+        # saved Function-65 priority to override this verified path.
+        if self._room_temperature_device_kind == "a5_10_06":
+            source, _entity, _origin = resolve_room_temperature_config(
+                self.device_config, self._entry_options()
+            )
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                return "auto"
         selected = self._selected_priority()
         if selected is None or selected == "manual":
             return None
         return {"central": "ha", "auto": "auto", "limit": "limit"}[selected]
 
     def _priority_manual_active(self) -> bool:
+        # HA external temperature is a Function-64 controller; a stale saved
+        # manual state must never prevent its periodic source updates.
+        if self._room_temperature_device_kind == "a5_10_06":
+            source, _entity, _origin = resolve_room_temperature_config(
+                self.device_config, self._entry_options()
+            )
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                return False
         return self._selected_priority() == "manual"
 
     def _on_heating_priority_changed(self, entry_id: str, device_id: str) -> None:
@@ -552,7 +569,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             temperature=target,
             current_temperature=current_temperature,
             heater_mode=heater_mode,
-            **({"controller_priority": self._priority_send_keyword()} if self._priority_send_keyword() else {}),
+            **({"controller_priority": priority_keyword} if (priority_keyword := self._priority_send_keyword()) is not None else {}),
         )
         if ok:
             raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
