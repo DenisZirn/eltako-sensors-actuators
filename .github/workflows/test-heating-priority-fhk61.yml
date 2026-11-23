@@ -5,6 +5,7 @@ on:
       - test/a5-10-06-priority-fhk61
       - test/restore-fhk14-f4hk14-fae14
       - test/restore-heating-priority-isolated
+      - test/fix-external-ha-room-temperature-priority
   workflow_dispatch:
 
 jobs:
