@@ -6,6 +6,7 @@ harness checks source-code routing without requiring a Home Assistant runtime.
 from __future__ import annotations
 
 import unittest
+import ast
 
 from test_fks_sv_room_temperature import INTEGRATION, PKG, _load, eep10
 from test_restore_fhk14_f4hk14_fae14 import _builder
@@ -82,6 +83,48 @@ class OperatingModeSenderRegressionTests(unittest.TestCase):
                         device, device["sender_id"]
                     ), "FF-A6-04-81"
                 )
+
+    def test_fhk61_operating_mode_learn_uses_separate_sender(self):
+        tree = ast.parse((INTEGRATION / "gateway.py").read_text(encoding="utf-8"))
+        full = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef)
+            and node.name == "_build_actuator_message"
+        )
+        learn = next(
+            node for node in full.body
+            if isinstance(node, ast.If)
+            and ast.unparse(node.test) == "command == 'fhk61_teach_in_operating_mode'"
+        )
+        isolated = ast.FunctionDef(
+            name=full.name, args=full.args, body=[*full.body[:6], learn],
+            decorator_list=[], returns=full.returns, type_comment=None,
+        )
+        ns = {
+            "Any": object,
+            "_get_sender_id": lambda d: d.get("sender_id"),
+            "_get_sender_eep": lambda d: d.get("sender_eep", "A5-10-06"),
+            "heating_operating_mode_family": operating_mode.heating_operating_mode_family,
+            "configured_operating_mode_sender": operating_mode.configured_operating_mode_sender,
+            "_effective_sender_id_for_gateway": lambda sender, *a, **kw: sender,
+            "build_fhk_mode_command": eep10.build_fhk_mode_command,
+            "UnsupportedEltakoCommand": ValueError,
+        }
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[isolated], type_ignores=[])),
+                     "gateway.py", "exec"), ns)
+        for model in ("FHK61-230V", "FHK61U-230V", "FHK61SSR-230V"):
+            with self.subTest(model=model):
+                d = {
+                    "platform": "climate", "eep": "A5-10-06",
+                    "device_type": model, "sender_id": "FF-A6-04-81",
+                    "operating_mode_sender_id": "FF-A6-04-82",
+                    "control_mode": "temperature",
+                }
+                telegram = ns["_build_actuator_message"](
+                    d, "fhk61_teach_in_operating_mode"
+                )
+                self.assertEqual(telegram.body[1], 0x05)
+                self.assertEqual(telegram.body[2], 0x70)
+                self.assertEqual(telegram.body[6:10], bytes.fromhex("FF A6 04 82"))
 
     def test_ssr_direct_pwm_excluded_from_rps_temperature_mode(self):
         device = {
