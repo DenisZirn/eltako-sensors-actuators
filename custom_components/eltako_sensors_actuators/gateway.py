@@ -2778,7 +2778,9 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             )
             return build_a5_38_08_switch(sender_id, command == "turn_on")
 
-    if platform == "light":
+    # EEDTOY selects the HA entity domain; simple switches reuse the verified
+    # light on/off telegram builder without altering sender IDs or teach-in.
+    if platform in ("light", "switch"):
         if _is_rgbw_device_config(device):
             # FRGBW14 and FRGBW71L use the ELTAKO 07-3F-7F RGB component data
             # model. For FRGBW14, sender.id is the controller identity already
