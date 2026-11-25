@@ -23,7 +23,7 @@ PRIORITY_BYTES = {"central": 0x08, "auto": 0x0E, "limit": 0x0A}
 CONF_HEATING_PRIORITY_OVERRIDES = "heating_priority_overrides"
 SIGNAL_HEATING_PRIORITY_TX = "eltako_sensors_actuators_heating_priority_tx"
 
-_HEATING_MODELS = ("FHK14", "F4HK14", "FAE14LPR", "FAE14SSR")
+_HEATING_MODELS = ("FHK14", "F4HK14", "FAE14LPR", "FAE14SSR", "FHK61-230V")
 
 
 def _device_option(device: dict[str, Any], key: str, default: Any = None) -> Any:
