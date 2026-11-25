@@ -102,10 +102,22 @@ class EltakoHeatingPrioritySelect(EltakoYamlEntity, SelectEntity):
         self._last_error = None
         if mode == "manual":
             # M is a one-shot release, not a normal priority value.
-            self._last_telegram = "00-00-00-0E"
-            ok = await self.gateway.async_send_actuator_command(
-                self.device_config, "release_heating_priority",
-            )
+            # MiniSafe2 FHK61-230V manual mode transmits 00-00-00-08.
+            # Reuse the existing FHK61 A5-10-06 setpoint encoder; Series-14
+            # continues to use its independently verified manual release.
+            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+            model = str(self.device_config.get("device_type") or raw.get("device_type") or self.device_config.get("name") or "").upper().replace(" ", "")
+            is_fhk61 = model.startswith("FHK61-230V")
+            self._last_telegram = "00-00-00-08" if is_fhk61 else "00-00-00-0E"
+            if is_fhk61:
+                ok = await self.gateway.async_send_actuator_command(
+                    self.device_config, "set_temperature", temperature=0,
+                    current_temperature=None, controller_priority="ha",
+                )
+            else:
+                ok = await self.gateway.async_send_actuator_command(
+                    self.device_config, "release_heating_priority",
+                )
             self._last_tx = datetime.now(timezone.utc).isoformat()
             self._last_success = bool(ok)
             if not ok:
