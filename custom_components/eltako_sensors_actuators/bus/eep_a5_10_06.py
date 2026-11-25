@@ -138,7 +138,11 @@ def build_a5_10_06_room_control(
         priority=priority,
         controller_profile=controller_profile,
     )
-    return build_regular_4bs(address, data, status=0x80, outgoing=True)
+    # MiniSafe2 DolphinView 2026-11-25 shows RF status B0 for the
+    # FHK61-230V controller telegrams (00-XX-00-0E). Keep the
+    # established 0x80 status for the Series-14 and other profiles.
+    status = 0xB0 if controller_profile == "fhk61_230v" else 0x80
+    return build_regular_4bs(address, data, status=status, outgoing=True)
 
 
 def build_fhk_mode_command(sender_id: str, mode: str | None) -> ESP2Message:
