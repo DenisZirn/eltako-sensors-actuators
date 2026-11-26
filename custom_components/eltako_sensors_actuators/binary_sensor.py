@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from .const import CONF_DEVICES, DOMAIN
 from .diagnostics import diagnostic_event
 from .device_profiles import is_fws81_device, is_legacy_frw_device
+from .ftr_profiles import is_ftr_temperature_device
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import EltakoBaseEntity, EltakoGatewayEntity, EltakoYamlEntity, _f4usm61b_mode, _futh55ed_mode, _is_f4usm61b_device, _is_futh55ed_device, _is_ffg7b_device, _is_frwb_device, _is_fts14em_device, _fts14em_inverted, device_key, legacy_device_key, normalize_eep, normalize_platform
 
@@ -273,7 +274,10 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                         suffix="Heizanforderung",
                     )
                 )
-            elif mode == "fhk" and eep == "A5-10-06":
+            elif mode == "fhk" and eep == "A5-10-06" and not is_ftr_temperature_device(device):
+                # FTR dials use a nominal 8 C frost-symbol setpoint, not
+                # a transmitted frost-protection state. Preserve this legacy
+                # entity only for non-FTR controllers with distinct semantics.
                 entities.append(
                     EltakoYamlBinarySensor(
                         gateway,
@@ -384,6 +388,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
     _remove_obsolete_wall_rocker_binary_entities(hass, entry, devices)
     _remove_obsolete_frw_rocker_binary_entities(hass, entry, devices)
+    _remove_obsolete_ftr_frost_binary_entities(hass, entry, devices)
 
     _LOGGER.info(
         "ELTAKO binary_sensor setup entry=%s imported_devices=%s binary_entities=%s",
@@ -394,6 +399,42 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     async_add_entities(entities)
 
 
+
+
+def _remove_obsolete_ftr_frost_binary_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove only obsolete FTR frost flags from this integration entry.
+
+    The thermostat's frost dial marking indicates an 8 C setpoint, not a
+    boolean frost state. Include legacy per-gateway entity keys to clean up
+    already registered helper entities after upgrading, without affecting
+    non-FTR controllers or any other integration.
+    """
+    registry = er.async_get(hass)
+    obsolete_unique_ids = set()
+    for device in devices or []:
+        if not is_ftr_temperature_device(device):
+            continue
+        for base in {device_key(device), legacy_device_key(device)}:
+            obsolete_unique_ids.add(
+                f"{DOMAIN}_{entry.entry_id}_{base}_Frostschutz"
+                .lower().replace(" ", "_").replace("/", "_")
+            )
+    for unique_id in sorted(obsolete_unique_ids):
+        entity_id = registry.async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+        if entity_id is None:
+            continue
+        entity = registry.async_get(entity_id)
+        if (
+            entity is None
+            or entity.platform != DOMAIN
+            or entity.config_entry_id != entry.entry_id
+        ):
+            continue
+        try:
+            registry.async_remove(entity_id)
+            _LOGGER.info("Removed obsolete FTR frost-state helper %s", entity_id)
+        except Exception:
+            _LOGGER.exception("Unable to remove obsolete FTR frost-state helper %s", entity_id)
 
 
 def _remove_obsolete_frw_rocker_binary_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
