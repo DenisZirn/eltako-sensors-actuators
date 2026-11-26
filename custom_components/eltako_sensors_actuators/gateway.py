@@ -2567,6 +2567,12 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
             "FKS-SV wird bidirektional eingelernt: Integration aktiv lassen und den Taster am Ventil kurz druecken"
         )
 
+    # FHK61-230V: MiniSafe2/DolphinView reference (2026-11-25) uses
+    # 40-30-0D-85. Keep the existing 40-30-0D-87 for other A5-10-06 models.
+    if is_fhk61_230v_temperature_profile(device):
+        _LOGGER.info("FHK61-230V temperature teach-in: payload=40-30-0D-85 status=80 device=%s", device.get("name"))
+        return [build_regular_4bs(address, bytes.fromhex("40300D85"), status=0x80, outgoing=True)]
+
     if sender_eep == "A5-10-06" or device_eep == "A5-10-06" or "FHK14" in name or "F4HK14" in name:
         _LOGGER.info("ELTAKO teach-in matrix selected: A5-10-06 heating/cooling, payload=40-30-0D-87 status=80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_A5_10_06_HEATING_COOLING, status=0x80, outgoing=True)]
