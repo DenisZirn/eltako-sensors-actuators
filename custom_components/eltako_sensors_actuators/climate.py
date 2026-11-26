@@ -854,8 +854,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if self._is_fhk61 and decoded.get("org") == "0x07":
             # Physical 4BS feedback provides telemetry, not preset changes.
             # Unlike an RPS status confirmation, DB3=0x00 carries no preset.
+            # FHK61-230V reports DB1=0x7F in 4BS acknowledgements
+            # (00-XX-7F-0F). This is a protocol marker, not a measured
+            # room temperature. Keep the last genuine sensor temperature.
+            # Other FHK61-family variants retain their existing handling.
             if "temperature" in decoded and decoded.get("actuator_response"):
-                self._current_temperature = decoded["temperature"]
+                data_hex = str(decoded.get("data_hex") or "").replace("-", "").upper()
+                is_fhk61_ack = (
+                    self._is_fhk61 and not self._is_fhk61u
+                    and len(data_hex) == 8 and data_hex[4:6] == "7F"
+                    and data_hex[6:8] == "0F"
+                )
+                if not is_fhk61_ack:
+                    self._current_temperature = decoded["temperature"]
             self._last_rx = _now_iso()
             self.schedule_update_ha_state()
             return
