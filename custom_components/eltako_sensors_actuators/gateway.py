@@ -1798,7 +1798,9 @@ class EltakoGateway:
             )
         )
         inter_message_delay = (
-            0.25 if command == "f2l14_set_stage" and len(messages) > 1
+            0.12 if len(messages) > 1 and command in {"fhk61_teach_in_operating_mode", "set_hvac_mode", "set_preset_mode"}
+            and heating_operating_mode_family(device) == "fhk61"
+            else 0.25 if command == "f2l14_set_stage" and len(messages) > 1
             else (
                 0.02 if is_frgbw14 and len(messages) > 1
                 else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
