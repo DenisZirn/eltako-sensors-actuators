@@ -65,11 +65,15 @@ def normalize_ftr_4bs(
         return decoded
     eep = str(device.get("eep") or "").strip().upper()[:8]
     result = dict(decoded)
+    # The frost symbol on the FTR dial means a nominal 8 C setpoint.
+    # It is not a transmitted frost-protection mode, flag or status.
+    # In particular, never infer an HVAC mode from DB3 or from a target of 8 C.
     for key in (
         "temperature", "target_temperature", "hvac_mode", "heater_mode",
         "heater_mode_code", "heating_mode", "heating_mode_label",
         "controller_priority", "controller_priority_code", "actuator_response",
-        "frost_protection", "setpoint_in_adjustable_range", "night_setback_k",
+        "frost_protection", "frost_protection_active", "frost_mode",
+        "setpoint_in_adjustable_range", "night_setback_k",
     ):
         result.pop(key, None)
 
