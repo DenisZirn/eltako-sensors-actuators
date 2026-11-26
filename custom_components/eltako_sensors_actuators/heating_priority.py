@@ -43,6 +43,14 @@ def supports_heating_priority(device: dict[str, Any]) -> bool:
     return any(model.startswith(prefix) for prefix in _HEATING_MODELS)
 
 
+def is_fhk61_priority_device(device: dict[str, Any]) -> bool:
+    """MiniSafe2 C/A/M/L applies to the FHK61-230V radio controller as well."""
+    if not supports_heating_priority(device):
+        return False
+    model = str(_device_option(device, "device_type") or device.get("name") or "").upper().replace(" ", "")
+    return model.startswith("FHK61-230V")
+
+
 def heating_control_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
     """Use an explicit EEDTOY mode; legacy configurations use the source."""
     explicit = str(_device_option(device, "heating_control_mode", "") or "").lower()
@@ -53,7 +61,9 @@ def heating_control_mode(device: dict[str, Any], options: dict[str, Any]) -> str
 
 
 def priority_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
-    if heating_control_mode(device, options) == "ha_external":
+    # FHK61-230V priority is an independently learned MiniSafe-compatible
+    # radio command; do not force it into the Series-14 FG1/FG3 logic.
+    if not is_fhk61_priority_device(device) and heating_control_mode(device, options) == "ha_external":
         # Never change the verified F4HK14 Function-64 controller path.
         # For legacy YAML with explicit priority, retain its old behavior.
         if _device_option(device, "heating_control_mode") == "ha_external":
