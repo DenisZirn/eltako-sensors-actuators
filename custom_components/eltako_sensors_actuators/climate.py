@@ -851,9 +851,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             }.get(mode, self._attr_preset_mode)
             self.schedule_update_ha_state()
             return
-        if self._is_fhk61 and (
+        if (self._is_fhk61 or self._room_temperature_device_kind == "a5_10_06") and (
             decoded.get("tx_echo") or decoded.get("direction") == "to_actuator"
         ):
+            # A local controller echo is not actuator feedback. In particular,
+            # re-decoding the quantized target (25 -> 24.9) must not change the
+            # setpoint sent on the next external room-temperature update.
             return
         if self._is_fhk61 and decoded.get("org") == "0x07":
             # Physical 4BS feedback provides telemetry, not preset changes.
@@ -1276,9 +1279,14 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             return
 
         heater_mode = self._fhk_heater_mode
-        if not self._is_fks_sv and heater_mode == "off":
-            # Grimm switches an OFF actuator back to NORMAL when the user
-            # chooses a new target temperature.
+        resume_series14_heating = (
+            heating_operating_mode_family(self.device_config) == "series14"
+            and (self._attr_hvac_mode == HVACMode.OFF or heater_mode == "off")
+        )
+        if heater_mode == "off" or resume_series14_heating:
+            # A new target resumes normal operation. Series 14 also needs its
+            # separate RPS operating-mode command below; a 4BS target alone
+            # cannot confirm that an OFF actuator has resumed heating.
             heater_mode = "normal"
 
         outgoing_room_temperature = (
@@ -1299,14 +1307,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if not ok:
             detail = self.gateway.last_send_error or "unbekannter Fehler"
             raise HomeAssistantError(f"ELTAKO Temperatur-Telegramm konnte nicht gesendet werden: {detail}")
-        if was_manual:
-            set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, "auto")
         self._target_temperature = temperature
-        self._attr_hvac_mode = HVACMode.HEAT
-        if not self._is_fks_sv:
-            self._fhk_heater_mode = heater_mode
-            if heater_mode == "normal":
-                self._attr_preset_mode = PRESET_HOME
         if self._room_temperature_device_kind == "a5_10_06":
             raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
             priority = outgoing_priority or self.device_config.get("priority") or raw.get("priority")
@@ -1320,6 +1321,30 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._last_sent_target_temperature = temperature
             self._last_controller_telegram = data.hex("-").upper()
             self._last_controller_response = _now_iso()
+        if resume_series14_heating:
+            ok = await self.gateway.async_send_actuator_command(
+                self.device_config,
+                "set_hvac_mode",
+                hvac_mode=str(HVACMode.HEAT),
+            )
+            if not ok:
+                # Keep the successful target send visible, but do not claim
+                # HEAT after the separate operating-mode send failed.
+                self._attr_hvac_mode = HVACMode.OFF
+                self._fhk_heater_mode = "off"
+                self.schedule_update_ha_state()
+                detail = self.gateway.last_send_error or "unbekannter Fehler"
+                raise HomeAssistantError(
+                    "ELTAKO Solltemperatur wurde gesendet, aber Normalbetrieb "
+                    f"konnte nicht gesendet werden: {detail}"
+                )
+        self._attr_hvac_mode = HVACMode.HEAT
+        if not self._is_fks_sv:
+            self._fhk_heater_mode = heater_mode
+            if heater_mode == "normal":
+                self._attr_preset_mode = PRESET_HOME
+        if was_manual:
+            set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, "auto")
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:

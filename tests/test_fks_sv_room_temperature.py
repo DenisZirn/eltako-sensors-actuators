@@ -426,9 +426,15 @@ class TestStaticIntegrationGuards(unittest.TestCase):
         self.assertIn('_device_option(self.device_config, "area", "")', device_info_source)
         self.assertIn("suggested_area=suggested_area", device_info_source)
 
-    def test_manifest_matches_release_version(self):
+    def test_manifest_has_release_version_and_integration_domain(self):
         manifest = json.loads((INTEGRATION / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.1.168")
+        self.assertEqual(manifest["domain"], const.DOMAIN)
+        self.assertEqual(manifest["domain"], INTEGRATION.name)
+        self.assertIsInstance(manifest["version"], str)
+        self.assertRegex(
+            manifest["version"],
+            r"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z",
+        )
 
     def test_options_flow_is_generalized(self):
         source = (INTEGRATION / "config_flow.py").read_text(encoding="utf-8")

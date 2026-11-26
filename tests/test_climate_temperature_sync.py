@@ -148,6 +148,7 @@ def _extract_method_class():
         "SIGNAL_ROOM_TEMPERATURE_UPDATED": const.SIGNAL_ROOM_TEMPERATURE_UPDATED,
         "SIGNAL_HEATING_PRIORITY_TX": priority.SIGNAL_HEATING_PRIORITY_TX,
         "supports_heating_priority": priority.supports_heating_priority,
+        "is_fhk61_priority_device": priority.is_fhk61_priority_device,
         "heating_control_mode": priority.heating_control_mode,
         "priority_mode": priority.priority_mode,
         "set_priority_mode": priority.set_priority_mode,
@@ -197,11 +198,16 @@ def make_climate(kind, *, native=None, external=20.0, source="external", restore
     e.last_state = restored
     e.added_to_hass = False
     e.state_updates = 0
-    e._has_room_temperature_assignment = True
+    e._eep = device["eep"]
+    e._has_room_temperature_assignment = room.is_room_temperature_assignable_device(device)
     e._room_temperature_device_kind = room.room_temperature_device_kind(device)
     e._is_fks_sv = kind == "FKS-SV"
+    e._is_fks_hora = False
     e._is_fhk14 = kind in ("FHK14", "F4HK14")
-    e._is_fae14lpr = kind in ("FAE14LPR", "FAE14SSR")
+    e._is_fae14lpr = kind == "FAE14LPR"
+    e._is_fhk61u = "FHK61U" in kind
+    e._is_fhk61 = "FHK61" in kind and not e._is_fhk61u
+    e._is_fhk61_230v = eep10.is_fhk61_230v_temperature_profile(device)
     e._target_temperature = 21.0
     e._attr_min_temp = 8.0 if e._is_fks_sv else 16.0
     e._attr_max_temp = 28.0 if e._is_fks_sv else 25.0
@@ -213,7 +219,7 @@ def make_climate(kind, *, native=None, external=20.0, source="external", restore
     e._internal_temperature = native
     e._current_temperature = None
     e._external_temperature = None
-    e._configured_temperature_source = "native"
+    e._configured_temperature_source = const.ROOM_TEMPERATURE_SOURCE_NATIVE
     e._temperature_source_status = "error"
     e._temperature_config_origin = "default"
     e._actual_temperature_source = None

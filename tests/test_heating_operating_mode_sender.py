@@ -107,6 +107,8 @@ class OperatingModeSenderRegressionTests(unittest.TestCase):
             "configured_operating_mode_sender": operating_mode.configured_operating_mode_sender,
             "_effective_sender_id_for_gateway": lambda sender, *a, **kw: sender,
             "build_fhk_mode_command": eep10.build_fhk_mode_command,
+            "build_rps": eep10.build_rps,
+            "parse_address": eep10.parse_address,
             "UnsupportedEltakoCommand": ValueError,
         }
         exec(compile(ast.fix_missing_locations(ast.Module(body=[isolated], type_ignores=[])),
@@ -119,12 +121,18 @@ class OperatingModeSenderRegressionTests(unittest.TestCase):
                     "operating_mode_sender_id": "FF-A6-04-82",
                     "control_mode": "temperature",
                 }
-                telegram = ns["_build_actuator_message"](
+                telegrams = ns["_build_actuator_message"](
                     d, "fhk61_teach_in_operating_mode"
                 )
-                self.assertEqual(telegram.body[1], 0x05)
-                self.assertEqual(telegram.body[2], 0x70)
-                self.assertEqual(telegram.body[6:10], bytes.fromhex("FF A6 04 82"))
+                self.assertEqual(len(telegrams), 2)
+                for telegram, data_byte, status in zip(
+                    telegrams, (0x70, 0x00), (0x30, 0x20)
+                ):
+                    self.assertEqual(telegram.body[0], 0x6B)
+                    self.assertEqual(telegram.body[1], 0x05)
+                    self.assertEqual(telegram.body[2:6], bytes((data_byte, 0, 0, 0)))
+                    self.assertEqual(telegram.body[6:10], bytes.fromhex("FF A6 04 82"))
+                    self.assertEqual(telegram.body[10], status)
 
     def test_ssr_direct_pwm_excluded_from_rps_temperature_mode(self):
         device = {
