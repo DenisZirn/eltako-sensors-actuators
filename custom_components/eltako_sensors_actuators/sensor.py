@@ -67,6 +67,7 @@ from .const import CONF_DEVICES, DOMAIN
 from .bus.eep_a5_09_04 import decode_a5_09_04
 from .device_profiles import is_eltako_illuminance_device, is_legacy_frw_device
 from .room_temperature import is_fks_sv_device
+from .ftr_profiles import is_ftr_temperature_device, ftr_has_night_setback
 from .bus.eep_ffg7b import enrich_ffg7b_decoded
 from .entity_base import (
     EltakoBaseEntity,
@@ -357,6 +358,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.extend(_meter_entities(gateway, device))
         elif eep == "A5-08-01":
             entities.extend(_a5_08_01_entities(gateway, device))
+        elif eep in ("A5-10-06", "A5-10-03") and is_ftr_temperature_device(device):
+            entities.extend(_a5_10_06_entities(gateway, device))
         elif eep == "A5-10-06":
             entities.extend(_a5_10_06_entities(gateway, device))
         elif eep in ("A5-04-01", "A5-04-02", "A5-04-03"):
@@ -409,6 +412,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     _migrate_eltako_illuminance_entities(hass, entry, devices)
     _remove_obsolete_frw_rocker_sensor_entities(hass, entry, devices)
     _remove_obsolete_fks_sv_temperature_entities(hass, entry, devices)
+    _remove_obsolete_ftr_hvac_entities(hass, entry, devices)
     _migrate_a5_12_01_registry_entities(hass, entry, devices)
     _migrate_flgtf_entity_ids(hass, entry, devices)
 
@@ -1048,6 +1052,23 @@ def _remove_obsolete_weather_brightness_entities(hass, entry, devices: list[dict
     _remove_owned_legacy_sensor_entities(registry, entry, obsolete_unique_ids, "A5-13-01 generic brightness")
 
 
+def _remove_obsolete_ftr_hvac_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
+    """Remove only old synthetic FTR HVAC sensors owned by this entry.
+
+    No other A5-10-06 or Series-14 entities are modified. Preserve real
+    FTR temperatures, last seen, and FTR65HS night reduction sensors.
+    """
+    unique_ids = {
+        _yaml_entity_unique_id(entry.entry_id, device, "Betriebsart")
+        for device in devices or []
+        if is_ftr_temperature_device(device)
+    }
+    if unique_ids:
+        _remove_owned_legacy_sensor_entities(
+            er.async_get(hass), entry, unique_ids, "synthetic FTR HVAC mode"
+        )
+
+
 def _remove_obsolete_fbh_temperature_entities(hass, entry, devices: list[dict[str, Any]]) -> None:
     """Remove legacy temperature only from non-temperature FBH devices.
 
@@ -1167,16 +1188,26 @@ def _a5_07_01_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
 def _a5_10_06_entities(gateway, device: dict[str, Any]) -> list[SensorEntity]:
     """Room controller / temperature sensor values.
 
-    Used by FTR55ESB/FTR55EHB/FTR65... style room controllers in FHK mode.
-    The ELTAKO telegram table defines DB2 as setpoint temperature 0..40 C
-    and DB1 as actual room temperature 0..40 C.
+    FTR temperature transmitters do not report a general HVAC operating
+    mode. Keep their temperature and target sensors, but never create a
+    synthetic 'Betriebsart' entity. Non-FTR profiles are untouched.
     """
-    return [
+    entities = [
         EltakoYamlValueSensor(gateway, device, "temperature", "Temperatur", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
         EltakoYamlValueSensor(gateway, device, "target_temperature", "Solltemperatur", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
-        EltakoYamlValueSensor(gateway, device, "hvac_mode", "Betriebsart", None, None),
-        EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None),
     ]
+    if not is_ftr_temperature_device(device):
+        entities.append(
+            EltakoYamlValueSensor(gateway, device, "hvac_mode", "Betriebsart", None, None)
+        )
+    if ftr_has_night_setback(device):
+        entities.append(
+            EltakoYamlValueSensor(gateway, device, "night_setback_k", "Nachtabsenkung", None, "K")
+        )
+    entities.append(
+        EltakoYamlValueSensor(gateway, device, "last_seen", "Letztes Telegramm", None, None)
+    )
+    return entities
 
 
 
