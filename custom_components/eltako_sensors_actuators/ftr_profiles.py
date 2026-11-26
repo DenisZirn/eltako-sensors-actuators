@@ -13,7 +13,7 @@ from typing import Any
 
 # Accept the FTR55, FTR65, FTRF65, FTR78, FTR86 and legacy FTR595 families.
 # Match an actual model token, not an incidental substring in a display name.
-_FTR_MODEL = re.compile(r"(?<![A-Z0-9])(FTRF?\d{2,3}[A-Z]{1,5})(?=$|[^A-Z0-9])")
+_FTR_MODEL = re.compile(r"(?<![A-Z0-9])(FTRF?\d{2,3}[A-Z]{0,5})(?=$|[^A-Z0-9])")
 _NIGHT_SETBACK_K = {0x00: 0, 0x06: 1, 0x0C: 2, 0x13: 3, 0x19: 4, 0x1F: 5}
 _FTR_TEACH_IN = {
     "A5-10-06": bytes.fromhex("40300D87"),
