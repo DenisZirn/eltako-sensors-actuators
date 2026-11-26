@@ -13,7 +13,7 @@ from .const import CONF_DEVICES, DOMAIN, SIGNAL_ROOM_TEMPERATURE_UPDATED
 from .entity_base import EltakoYamlEntity
 from .heating_priority import (
     PRIORITY_BYTES, PRIORITY_OPTIONS, SIGNAL_HEATING_PRIORITY_TX,
-    heating_control_mode, priority_mode, set_priority_mode, supports_heating_priority,
+    heating_control_mode, is_fhk61_priority_device, priority_mode, set_priority_mode, supports_heating_priority,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,7 +55,10 @@ class EltakoHeatingPrioritySelect(EltakoYamlEntity, SelectEntity):
     def available(self) -> bool:
         return bool(
             getattr(self.gateway, "hass", None)
-            and heating_control_mode(self.device_config, self._entry_options()) == "learned_sensor"
+            and (
+                is_fhk61_priority_device(self.device_config)
+                or heating_control_mode(self.device_config, self._entry_options()) == "learned_sensor"
+            )
         )
 
     @property
@@ -95,8 +98,7 @@ class EltakoHeatingPrioritySelect(EltakoYamlEntity, SelectEntity):
             raise HomeAssistantError("Ungültige Heizungspriorität")
         if not self.available:
             raise HomeAssistantError(
-                "Priorität ist nur bei einem in Funktionsgruppe 3 eingelernten "
-                "Controller mit physischem Raumregler verfügbar"
+                "Priorität ist für diese Gerätekonfiguration nicht verfügbar"
             )
         self._last_sender = self.device_config.get("sender_id")
         self._last_error = None
