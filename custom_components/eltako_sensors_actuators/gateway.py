@@ -32,7 +32,7 @@ from .bus.eep_a5_20_04 import build_a5_20_04_control_response, build_a5_20_04_te
 from .bus.eep_a5_38_08 import build_a5_38_08_dimming, build_a5_38_08_switch
 from .bus.eep_f6_02 import build_f6_02_01_rocker
 from .bus.eep_h5_3f_7f import build_h5_3f_7f_cover
-from .bus.esp2 import ESP2Message, ORG_4BS, ORG_RPS, build_regular_4bs
+from .bus.esp2 import ESP2Message, ORG_4BS, ORG_RPS, build_regular_4bs, build_rps
 from .bus.exceptions import UnsupportedCommandError
 from .bus.ids import format_address, parse_address
 from .bus.transport import SerialTransport
@@ -2605,7 +2605,12 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         # The actor must already be placed into operating-mode teach-in
         # (LRN, lower rotary 4.5). This sends an RPS normal-mode frame to
         # learn the separately configurable operating-mode sender.
-        return build_fhk_mode_command(effective, "normal")
+        # Match the physical MiniSafe2 RPS teach-in sequence: press then release.
+        # Temperature teach-in and its sender ID are intentionally unchanged.
+        return [
+            build_fhk_mode_command(effective, "normal"),
+            build_rps(parse_address(effective), 0x00, status=0x20, outgoing=True),
+        ]
 
     if platform == "climate" and command == "release_heating_priority":
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
@@ -2953,6 +2958,13 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
                 if command == "set_hvac_mode"
                 else kwargs.get("preset_mode")
             )
+            if family == "fhk61" and is_fhk61_230v_temperature_profile(device):
+                # A real rocker press needs its release. Do not alter the
+                # already verified Series-14 operating-mode telegram path.
+                return [
+                    build_fhk_mode_command(operating_sender, mode),
+                    build_rps(parse_address(operating_sender), 0x00, status=0x20, outgoing=True),
+                ]
             return build_fhk_mode_command(operating_sender, mode)
 
     if platform == "cover":
