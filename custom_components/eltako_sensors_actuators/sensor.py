@@ -299,6 +299,13 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.extend(_ffg7b_entities(gateway, device))
             continue
 
+        # Older EEDTOY FTR rows may omit room_controller_mode altogether.
+        # Their sensor EEP plus concrete FTR model is sufficient to create
+        # temperature entities. Explicit non-FHK configurations remain intact.
+        if is_ftr_temperature_device(device) and _futh55ed_mode(device) in {"", "fhk"}:
+            entities.extend(_a5_10_06_entities(gateway, device))
+            continue
+
         if _is_futh55ed_device(device):
             mode = _futh55ed_mode(device)
             if mode == "fhk" and eep == "A5-10-06":
