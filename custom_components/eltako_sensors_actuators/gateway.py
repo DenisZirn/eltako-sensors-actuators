@@ -10,6 +10,7 @@ from typing import Any
 from pathlib import Path
 
 from .bus.decoder import decode_esp2_message
+from .ftr_profiles import normalize_ftr_4bs, is_ftr_temperature_device
 from .device_profiles import (
     decode_eltako_a5_06_01,
     decode_legacy_frw_rps,
@@ -1043,6 +1044,16 @@ class EltakoGateway:
                 elif msg.org == ORG_4BS:
                     decoder_eep = "A5-14-09"
             _, decoded = decode_esp2_message(msg, decoder_eep, direction=direction)
+            # FTR thermostats share EEP A5-10-06 with heating actuators.
+            # Their DB3 contains no general HVAC state and DB0=0F is a
+            # sensor marker, not an actuator acknowledgement. Interpret the
+            # physical profile before exposing decoded fields to HA entities.
+            if (
+                device is not None
+                and is_ftr_temperature_device(device)
+                and msg.org == ORG_4BS
+            ):
+                decoded = normalize_ftr_4bs(device, bytes(msg.body[2:6]), decoded)
             if a5_controller_echo:
                 decoded["direction"] = "to_actuator"
                 decoded["tx_echo"] = True
