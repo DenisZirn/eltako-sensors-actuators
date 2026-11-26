@@ -34,9 +34,9 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
     _SUPPORT_PRESET_MODE = 16
 
-from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data
+from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data, is_fhk61_230v_temperature_profile
 from .heating_priority import (
-    SIGNAL_HEATING_PRIORITY_TX, supports_heating_priority, heating_control_mode,
+    SIGNAL_HEATING_PRIORITY_TX, supports_heating_priority, is_fhk61_priority_device, heating_control_mode,
     priority_mode, set_priority_mode,
 )
 from .bus.eep_a5_20_01 import (
@@ -240,6 +240,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._eep == "A5-10-06" and "FHK61" in model_text
             and not self._is_fhk61u
         )
+        self._is_fhk61_230v = is_fhk61_230v_temperature_profile(device)
         self._fhk61u_relay_on: bool | None = None
         self._fhk61_reported_mode: str | None = None
         self._fhk61_reported_mode_time: str | None = None
@@ -403,7 +404,10 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
     def _selected_priority(self) -> str | None:
         if not supports_heating_priority(self.device_config):
             return None
-        if heating_control_mode(self.device_config, self._entry_options()) != "learned_sensor":
+        if (
+            not is_fhk61_priority_device(self.device_config)
+            and heating_control_mode(self.device_config, self._entry_options()) != "learned_sensor"
+        ):
             return None
         return priority_mode(self.device_config, self._entry_options())
 
@@ -415,7 +419,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             source, _entity, _origin = resolve_room_temperature_config(
                 self.device_config, self._entry_options()
             )
-            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and not self._is_fhk61_230v:
                 return "auto"
         selected = self._selected_priority()
         if selected is None or selected == "manual":
@@ -429,7 +433,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             source, _entity, _origin = resolve_room_temperature_config(
                 self.device_config, self._entry_options()
             )
-            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and not self._is_fhk61_230v:
                 return False
         return self._selected_priority() == "manual"
 
@@ -861,7 +865,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             if "temperature" in decoded and decoded.get("actuator_response"):
                 data_hex = str(decoded.get("data_hex") or "").replace("-", "").upper()
                 is_fhk61_ack = (
-                    self._is_fhk61 and not self._is_fhk61u
+                    self._is_fhk61_230v
                     and len(data_hex) == 8 and data_hex[4:6] == "7F"
                     and data_hex[6:8] == "0F"
                 )
