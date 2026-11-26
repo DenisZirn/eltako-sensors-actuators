@@ -124,14 +124,30 @@ def is_a5_10_06_heating_actuator(device: Any) -> bool:
     return any(marker in legacy for marker in ASSIGNABLE_A5_10_06_TYPES)
 
 
+def is_fhk61_radio_temperature_actuator(device: Any) -> bool:
+    """FHK61 family uses a temperature sensor learned directly at the actor.
+
+    Do not expose a Home Assistant room-temperature source for these radio
+    actuators. This intentionally excludes FHK14/F4HK14/FAE14 bus devices.
+    """
+    if not is_a5_10_06_heating_actuator(device):
+        return False
+    model = technical_device_type(device) or _legacy_device_text(device)
+    compact = model.replace("-", "").replace("_", "").replace(" ", "")
+    return "FHK61" in compact
+
+
 def is_room_temperature_assignable_device(device: Any) -> bool:
-    return is_fks_sv_device(device) or is_a5_10_06_heating_actuator(device)
+    return is_fks_sv_device(device) or (
+        is_a5_10_06_heating_actuator(device)
+        and not is_fhk61_radio_temperature_actuator(device)
+    )
 
 
 def room_temperature_device_kind(device: Any) -> str | None:
     if is_fks_sv_device(device):
         return "fks_sv"
-    if is_a5_10_06_heating_actuator(device):
+    if is_a5_10_06_heating_actuator(device) and not is_fhk61_radio_temperature_actuator(device):
         return "a5_10_06"
     return None
 
@@ -205,6 +221,12 @@ def resolve_room_temperature_config(
     options: dict[str, Any] | None,
 ) -> tuple[str, str | None, str]:
     """Resolve UI override > legacy YAML > native/default source."""
+    # A5-10-06 FHK61 radio actuators keep their physically learned FTR
+    # temperature source. Ignore stale external overrides and YAML entries
+    # without deleting stored options; Series-14 source selection is unchanged.
+    if is_fhk61_radio_temperature_actuator(device):
+        return ROOM_TEMPERATURE_SOURCE_NATIVE, None, "device"
+
     physical_id = normalize_enocean_id(device.get("id"))
     if physical_id is not None:
         override = room_temperature_overrides(options).get(physical_id)
