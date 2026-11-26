@@ -50,7 +50,24 @@ Wird bei einer ausgeschalteten Series-14-Climate ein neuer Sollwert gewählt, se
 
 Ein erfolgreicher Sendeaufruf bestätigt nur die Übertragung an das Gateway. Der Climate-Zustand allein beweist nicht, dass der Aktor den Steuerbefehl ausgeführt hat.
 
-Die Echo-Korrektur erklärt keine größeren Abweichungen echter Rückmeldungen. Im Hardwarevideo vom 26.11.2026 springt der native FHK14 nach 19,5 / 22,5 / 25 °C Sollvorgabe auf 16,5 / 19,5 / 22 °C zurück. Diese wiederholte Differenz von 3 K ist mit der Rundung des eigenen Sendeechos nicht erklärbar. Dafür sind die tatsächlichen Empfangstelegramme und die Prioritätsauswertung am Aktor noch abzugleichen. Testversion 0.1.175 ist deshalb kein hardwarebestätigter Fix dieses 3-K-Verhaltens oder des ausbleibenden Schaltens.
+## Priorität bei eingelerntem Raumregler
+
+In der Beschreibung der Heizungsprioritäten entspricht die **App** hier **Home Assistant**. Die Priorität bestimmt die Sollwertvorgabe. Ein in FG1 eingelernter Temperatursensor liefert weiterhin die Isttemperatur.
+
+| Auswahl | Sollwertvorgabe |
+| --- | --- |
+| **Zentral (C)** | Der von HA vorgegebene Sollwert hat Vorrang. |
+| **Automatisch (A)** | HA und Raumregler sind gleichberechtigt. |
+| **Manuell (M)** | Freigabe an den Raumregler, bis HA erneut einen Sollwert vorgibt. |
+| **Begrenzt ±3 K (L)** | HA gibt den Sollwert vor; der Raumregler kann innerhalb von ±3 K verändern. |
+
+Im Hardwaretest vom 26.11.2026 sprang der native FHK14 unter A nach 19,5 / 22,5 / 25 °C Sollvorgabe auf 16,5 / 19,5 / 22 °C zurück. Nach dem Wechsel auf C schaltete derselbe Aktor bei Sollwertänderungen sofort und der Sollwert blieb stabil. Dieser Test bestätigt C für den gewünschten Betrieb mit HA als Sollwertgeber. Die interne Ursache der einzelnen 3-K-Rückmeldungen wird damit nicht für alle Geräte oder Prioritätsmodi verallgemeinert.
+
+Ab Testversion **0.1.176** gilt für Series 14 mit eingelerntem Sensor daher **C als Standard, wenn keine Priorität vorgegeben ist**. Das betrifft auch bestehende Konfigurationen ohne eigene Prioritätsvorgabe. Eine bereits gespeicherte Auswahl sowie explizite YAML-Prioritäten bleiben erhalten. Insbesondere wird ein bewusst gewähltes A oder L nicht durch das Update ersetzt. Für die ausschließliche Sollwertvorgabe durch HA ist C auszuwählen; diese Auswahl bleibt bei Neustarts erhalten.
+
+Ein neuer HA-Sollwert nach M verwendet in diesem Series-14-Steuerweg ebenfalls C. Bei erfolgreichem Versand wird die Auswahl auf C aktualisiert. Scheitert der Versand, bleibt die gespeicherte manuelle Auswahl erhalten. Eine ausdrücklich in HA gewählte Temperaturquelle hat bei Series 14 Vorrang vor einer älteren YAML-Angabe `heating_control_mode`.
+
+Der externe HA-Sensorpfad über FG1/Funktion 64 und die FHK61-Prioritätssteuerung behalten ihre bisherigen Telegramme. Das erfolgreiche C-Ergebnis am nativen FHK14 belegt noch keine Behebung eines separaten Problems mit einem externen HA-Sensor.
 
 ## Diagnoseattribute
 

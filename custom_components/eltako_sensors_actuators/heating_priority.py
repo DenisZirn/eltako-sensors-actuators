@@ -32,7 +32,7 @@ def _device_option(device: dict[str, Any], key: str, default: Any = None) -> Any
 
 
 def supports_heating_priority(device: dict[str, Any]) -> bool:
-    """Priorities C/A/M/L are verified for Series-14 controller assignments."""
+    """Identify the actuator profiles that expose controller priority."""
     if str(device.get("platform") or "").lower() != "climate":
         return False
     if str(device.get("eep") or "").upper() != "A5-10-06":
@@ -52,12 +52,36 @@ def is_fhk61_priority_device(device: dict[str, Any]) -> bool:
 
 
 def heating_control_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
-    """Use an explicit EEDTOY mode; legacy configurations use the source."""
+    """Honor a Series-14 UI source before an older EEDTOY mode."""
+    source, _sensor, origin = resolve_room_temperature_config(device, options)
+    if (
+        origin == "ui"
+        and supports_heating_priority(device)
+        and not is_fhk61_priority_device(device)
+    ):
+        return "ha_external" if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else "learned_sensor"
     explicit = str(_device_option(device, "heating_control_mode", "") or "").lower()
     if explicit in ("ha_external", "learned_sensor"):
         return explicit
-    source, _sensor, _origin = resolve_room_temperature_config(device, options)
     return "ha_external" if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL else "learned_sensor"
+
+
+def default_priority_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
+    """Give HA setpoints priority for a Series-14 learned-sensor controller.
+
+    FHK14 hardware testing confirmed C/0x08 holds the requested HA target.
+    F64 external-temperature and FHK61 commands retain their own defaults.
+    Use the configured source, never a temporary sensor-failure fallback.
+    """
+    source, _sensor, _origin = resolve_room_temperature_config(device, options)
+    if (
+        supports_heating_priority(device)
+        and not is_fhk61_priority_device(device)
+        and source != ROOM_TEMPERATURE_SOURCE_EXTERNAL
+        and heating_control_mode(device, options) == "learned_sensor"
+    ):
+        return "central"
+    return "auto"
 
 
 def priority_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
@@ -77,7 +101,10 @@ def priority_mode(device: dict[str, Any], options: dict[str, Any]) -> str:
         stored = overrides.get(physical_id)
         if stored in PRIORITY_OPTIONS:
             return stored
-    legacy = str(_device_option(device, "priority", "auto") or "auto").lower()
+    configured_priority = _device_option(device, "priority", "")
+    legacy = "" if configured_priority is None else str(configured_priority).strip().lower()
+    if not legacy:
+        return default_priority_mode(device, options)
     return {
         "ha": "central", "home_automation": "central", "home_assistant": "central",
         "software": "central", "0x08": "central", "8": "central",

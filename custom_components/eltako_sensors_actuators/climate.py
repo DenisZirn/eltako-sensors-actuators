@@ -37,7 +37,7 @@ except Exception:  # pragma: no cover - older HA compatibility
 from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data, is_fhk61_230v_temperature_profile
 from .heating_priority import (
     SIGNAL_HEATING_PRIORITY_TX, supports_heating_priority, is_fhk61_priority_device, heating_control_mode,
-    priority_mode, set_priority_mode,
+    default_priority_mode, priority_mode, set_priority_mode,
 )
 from .bus.eep_a5_20_01 import (
     encode_a5_20_01_temperature_setpoint_data,
@@ -1295,7 +1295,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             else None
         )
         was_manual = self._priority_manual_active()
-        outgoing_priority = "auto" if was_manual else self._priority_send_keyword()
+        if was_manual:
+            resume_priority = default_priority_mode(self.device_config, self._entry_options())
+            outgoing_priority = "ha" if resume_priority == "central" else "auto"
+        else:
+            resume_priority = None
+            outgoing_priority = self._priority_send_keyword()
         ok = await self.gateway.async_send_actuator_command(
             self.device_config,
             "set_temperature",
@@ -1343,8 +1348,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self._fhk_heater_mode = heater_mode
             if heater_mode == "normal":
                 self._attr_preset_mode = PRESET_HOME
-        if was_manual:
-            set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, "auto")
+        if resume_priority is not None:
+            set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, resume_priority)
         self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
