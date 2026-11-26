@@ -8,9 +8,10 @@ from typing import Any
 from homeassistant.components.select import SelectEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICES, DOMAIN, SIGNAL_ROOM_TEMPERATURE_UPDATED
-from .entity_base import EltakoYamlEntity
+from .entity_base import EltakoYamlEntity, device_key
 from .heating_priority import (
     PRIORITY_BYTES, PRIORITY_OPTIONS, SIGNAL_HEATING_PRIORITY_TX,
     heating_control_mode, is_fhk61_priority_device, priority_mode, set_priority_mode, supports_heating_priority,
@@ -19,16 +20,60 @@ from .heating_priority import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _should_create_priority_select(device: dict[str, Any], options: dict[str, Any]) -> bool:
+    """Do not register an unusable select for Series-14 ha_external controllers.
+
+    The FHK61-230V uses a separate radio-priority mode and retains its select.
+    No changes to the actuator's heating commands or source assignment.
+    """
+    return supports_heating_priority(device) and (
+        is_fhk61_priority_device(device)
+        or heating_control_mode(device, options) == "learned_sensor"
+    )
+
+
+def _priority_unique_id(entry_id: str, device: dict[str, Any]) -> str:
+    """Mirror EltakoYamlEntity(..., suffix='Priorität') exactly."""
+    base = f"{device_key(device)}_Priorität".lower().replace(" ", "_").replace("/", "_")
+    return f"{DOMAIN}_{entry_id}_{base}"
+
+
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     config = {**entry.data, **entry.options}
     gateway = hass.data[DOMAIN][entry.entry_id]
     devices = config.get(CONF_DEVICES) or []
-    entities = [
+    options = dict(entry.options)
+
+    active_devices = []
+    obsolete_unique_ids = set()
+    for device in devices:
+        if not isinstance(device, dict) or not supports_heating_priority(device):
+            continue
+        if _should_create_priority_select(device, options):
+            active_devices.append(device)
+        else:
+            # Previously-created unavailable selects remain in HA's entity
+            # registry unless they are explicitly removed on config reload.
+            obsolete_unique_ids.add(_priority_unique_id(entry.entry_id, device))
+
+    if obsolete_unique_ids:
+        registry = er.async_get(hass)
+        for existing in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if (
+                existing.domain == "select"
+                and existing.platform == DOMAIN
+                and existing.unique_id in obsolete_unique_ids
+            ):
+                _LOGGER.info(
+                    "Removing obsolete ELTAKO heating priority select %s (ha_external)",
+                    existing.entity_id,
+                )
+                registry.async_remove(existing.entity_id)
+
+    async_add_entities([
         EltakoHeatingPrioritySelect(gateway, device)
-        for device in devices
-        if isinstance(device, dict) and supports_heating_priority(device)
-    ]
-    async_add_entities(entities)
+        for device in active_devices
+    ])
 
 
 class EltakoHeatingPrioritySelect(EltakoYamlEntity, SelectEntity):
