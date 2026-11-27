@@ -2,8 +2,6 @@
 
 *Stabile Farben, zuverlässigere Heizungssteuerung und übersichtlichere Raumregler.*
 
-Diese Version enthält die erfolgreich getesteten Verbesserungen aus **v0.1.169-beta.2**.
-
 ## Verbessert
 
 - **FRGBW14:** Beim Farbwechsel bleibt die eingestellte Helligkeit erhalten. Unerwartete Helligkeitssprünge und falsche Aus-Anzeigen wurden behoben.

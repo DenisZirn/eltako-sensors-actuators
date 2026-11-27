@@ -8,7 +8,7 @@
 - **Heizung der Serie 14:** Stabile Solltemperaturen, zentrale HA-Sollwertvorgabe als Standard bei fehlender bisheriger Priorität und Wiederaufnahme des Normalbetriebs nach einer neuen Sollwertvorgabe.
 - **Externe Temperaturquelle:** Korrigiertes F64-Sensorformat, gemeinsame Rundung von Soll- und Isttemperatur, serialisierte Aktualisierung und regelmäßige Wiederholung gültiger Werte.
 - **FTR-Raumregler und Diagnose:** Korrigierte modellspezifische Temperaturauswertung; irreführende Betriebsart-/Frostschutz-Entitäten werden bereinigt. Eigene Sendungen und Aktorrückmeldungen werden zuverlässiger unterschieden.
-- **Bestätigter Funktionsstand aus beta.2:** Die Laufzeitfunktionen einschließlich FHK61 bleiben erhalten. Der Anwender bestätigt die FHK61-Temperatursteuerung ohne eingelernte Betriebsart. Beim FHK61 vorerst keine Betriebsart einlernen; dieser Teil wird separat weiter geprüft.
+- **FHK61:** Die Temperatursteuerung bleibt enthalten und funktioniert im bestätigten Aufbau ohne eingelernte Betriebsart. Beim FHK61 vorerst keine Betriebsart einlernen; dieser Teil wird separat weiter geprüft.
 - Zwei Installationspakete: Marketplace/HACS mit Dateien an der ZIP-Wurzel und manuelles Paket mit dem Ordner `eltako_sensors_actuators`.
 
 ## Testversion v0.1.169-beta.2
