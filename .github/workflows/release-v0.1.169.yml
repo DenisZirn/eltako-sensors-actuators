@@ -160,3 +160,20 @@ jobs:
             --notes-file RELEASE_NOTES_v0.1.169.md \
             --latest
           gh release view v0.1.169 --json tagName,isDraft,isPrerelease,assets --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease, assets: [.assets[].name]}'
+
+  update_notes:
+    name: Update release notes v0.1.169
+    runs-on: ubuntu-latest
+    needs: [regression, hacs, hassfest]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release-notes-v0.1.169]')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Update the existing release description
+        run: |
+          gh release edit v0.1.169 --notes-file RELEASE_NOTES_v0.1.169.md
+          gh release view v0.1.169 --json tagName,isDraft,isPrerelease --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease}'

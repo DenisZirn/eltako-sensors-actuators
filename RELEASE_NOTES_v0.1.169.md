@@ -13,7 +13,7 @@
 
 ## Hinweis zum FHK61
 
-**FHK61 bleibt enthalten.** In der getesteten Konfiguration funktioniert die Temperatursteuerung, solange **keine Betriebsart eingelernt ist**. Bitte die Schaltfläche **„Betriebsart einlernen“ beim FHK61 vorerst nicht verwenden**. Diese Funktion wird separat weiter geprüft.
+In der getesteten Konfiguration funktioniert die Temperatursteuerung, solange **keine Betriebsart eingelernt ist**. Bitte die Schaltfläche **„Betriebsart einlernen“ beim FHK61 vorerst nicht verwenden**. Diese Funktion wird separat weiter geprüft.
 
 ## Update
 
