@@ -2,6 +2,24 @@
 
 [← Dokumentationsübersicht](README.md)
 
+## Änderungen in v0.1.169
+
+- **FRGBW14:** Stabile Helligkeit bei Farbwechseln und einzelnen Kanalrückmeldungen.
+- **Heizung der Serie 14:** Stabile Solltemperaturen, zentrale HA-Sollwertvorgabe als Standard bei fehlender bisheriger Priorität und Wiederaufnahme des Normalbetriebs nach einer neuen Sollwertvorgabe.
+- **Externe Temperaturquelle:** Korrigiertes F64-Sensorformat, gemeinsame Rundung von Soll- und Isttemperatur, serialisierte Aktualisierung und regelmäßige Wiederholung gültiger Werte.
+- **FTR-Raumregler und Diagnose:** Korrigierte modellspezifische Temperaturauswertung; irreführende Betriebsart-/Frostschutz-Entitäten werden bereinigt. Eigene Sendungen und Aktorrückmeldungen werden zuverlässiger unterschieden.
+- **FHK61:** Die Temperatursteuerung bleibt enthalten und funktioniert im bestätigten Aufbau ohne eingelernte Betriebsart. Beim FHK61 vorerst keine Betriebsart einlernen; dieser Teil wird separat weiter geprüft.
+- Zwei Installationspakete: Marketplace/HACS mit Dateien an der ZIP-Wurzel und manuelles Paket mit dem Ordner `eltako_sensors_actuators`.
+
+## Testversion v0.1.169-beta.2
+
+**Bestätigter Referenzstand vom 27.11.2026:** Der Anwender bestätigte zunächst die eingesetzte Konfiguration mit einer FHK61-Ausnahme. Anschließend präzisierte er: FHK61 funktioniert, solange keine Betriebsart eingelernt ist. Code-Stand, Paket-Prüfsumme und diese Präzisierung sind im [Referenzstand](verified-baseline.md) festgehalten.
+
+- Externe Series-14-Temperaturquelle über Funktion 64: Soll- und Isttemperatur werden auf dasselbe nächstgelegene Protokollraster gerundet. Die bisherige Kombination aus abgerundetem Sollwert und aufgerundetem Istwert entfällt.
+- Reproduzierter Grenzfall: 20,3 °C Ist und 20,5 °C Soll wurden zuvor beide als etwa 20,392 °C übertragen. Bei 21,0 °C Soll blieb der übertragene Abstand außerdem knapp unter einer Hysterese von 0,5 K.
+- Native F65-Prioritäten und FHK61-Sendepfade behalten ihre bisherigen Bytes. Die Funktionen aus beta.1 bleiben enthalten.
+- Automatisiert geprüft wurden der konkrete Schaltgrenzfall, gleiche Temperaturen, die maximale Rundungsabweichung sowie echte Encoder-/Decoder- und Rückmeldepfade; 197 Tests bestanden. Die Hardwarebestätigung des Anwenders gilt mit der genannten Einschränkung beim FHK61-Betriebsarteinlernen.
+
 ## Änderungen in v0.1.168
 
 - Manuelle Raumzuordnungen bleiben nach Home-Assistant-Neustarts erhalten; YAML-`area` wird nur als `suggested_area` berücksichtigt.
@@ -234,7 +252,7 @@ Bekannte Einschränkung: Das direkte Einlernen einer Home-Assistant-Sender-ID in
 - Lerntelegramm `E0-40-0D-80`.
 - Statusrückmeldungen liefern Ein/Aus, Dimmwert und Dimmgeschwindigkeit an Home Assistant.
 
-## FRGBW14 / FRGBW71L
+## FRGBW14 / FRGBW71L – historischer Stand vor v0.1.169
 
 Der FRGBW71L unterstützt Ein/Aus, Helligkeit sowie Rot, Grün, Blau und Weiß.
 

@@ -1,0 +1,162 @@
+name: Release v0.1.169
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-v0.1.169.yml"
+      - "custom_components/eltako_sensors_actuators/**"
+      - "hacs.json"
+      - ".gitignore"
+      - "tests/**"
+      - "RELEASE_NOTES_v0.1.169.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.1.169-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    name: Validate code and regression tests
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Validate integration and package metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('custom_components/eltako_sensors_actuators')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '0.1.169', manifest['version']
+          assert manifest['requirements'] == ['serialx>=1.15.1']
+          hacs = json.loads(Path('hacs.json').read_text(encoding='utf-8'))
+          assert hacs['zip_release'] is True
+          assert hacs['filename'] == 'ELTAKO_Sensors_Actuators.zip'
+          assert hacs['homeassistant'] == '2026.11.0'
+          assert not list(root.rglob('*.pyc')), 'Bytecode files must not be present in the checkout'
+          assert not list(root.rglob('__pycache__')), 'Bytecode directories must not be present in the checkout'
+          for path in root.rglob('*.py'):
+              compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+          for path in root.rglob('*.json'):
+              json.loads(path.read_text(encoding='utf-8'))
+          print('Manifest, JSON, bytecode hygiene and Python syntax OK')
+          PY
+      - name: Run all isolated regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  hacs:
+    name: HACS compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    name: hassfest compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: home-assistant/actions/hassfest@master
+
+  publish:
+    name: Publish GitHub release v0.1.169
+    runs-on: ubuntu-latest
+    needs: [regression, hacs, hassfest]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release-v0.1.169]')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Refuse an existing release or tag
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+          repository = os.environ['GITHUB_REPOSITORY']
+          for resource in ('releases/tags/v0.1.169', 'git/ref/tags/v0.1.169'):
+              request = Request(
+                  f'https://api.github.com/repos/{repository}/{resource}',
+                  headers={
+                      'Authorization': f"Bearer {os.environ['GH_TOKEN']}",
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30):
+                      pass
+              except HTTPError as error:
+                  if error.code == 404:
+                      continue
+                  raise RuntimeError(f'Cannot check {resource}: HTTP {error.code}') from None
+              raise RuntimeError(f'{resource} already exists; refusing to overwrite it')
+          print('Release and tag are available for this new release')
+          PY
+      - name: Build and verify Marketplace and manual installation ZIPs
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+          import zipfile
+          root = Path('custom_components/eltako_sensors_actuators')
+          marketplace = Path('ELTAKO_Sensors_Actuators.zip')
+          manual = Path('eltako_sensors_actuators_v0.1.169.zip')
+          tracked = subprocess.check_output(['git', 'ls-files', '-z', '--', str(root)]).decode().split('\0')
+          files = sorted(Path(name) for name in tracked if name)
+          assert files, 'No integration files found'
+          assert all(path.is_file() for path in files)
+          assert not any('__pycache__' in path.parts or path.suffix == '.pyc' for path in files)
+          with zipfile.ZipFile(marketplace, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as market_zip, zipfile.ZipFile(manual, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as manual_zip:
+              for path in files:
+                  market_zip.write(path, path.relative_to(root).as_posix())
+                  manual_zip.write(path, path.relative_to(root.parent).as_posix())
+          with zipfile.ZipFile(marketplace) as market_zip, zipfile.ZipFile(manual) as manual_zip:
+              assert market_zip.testzip() is None
+              assert manual_zip.testzip() is None
+              names = set(market_zip.namelist())
+              required = {
+                  '__init__.py', 'manifest.json', 'device_profiles.py',
+                  'gateway.py', 'sensor.py', 'binary_sensor.py',
+                  'bus/transport.py', 'serial_ports_compat.py',
+                  'frontend/diagnostics-panel.js',
+              }
+              assert required <= names, required - names
+              prefix = 'eltako_sensors_actuators/'
+              assert set(manual_zip.namelist()) == {prefix + name for name in names}
+              for name in names:
+                  assert market_zip.read(name) == manual_zip.read(prefix + name), name
+              manifest = json.loads(market_zip.read('manifest.json'))
+              assert manifest['version'] == '0.1.169', manifest['version']
+          for output in (marketplace, manual):
+              print(output.name, output.stat().st_size, 'bytes', hashlib.sha256(output.read_bytes()).hexdigest())
+          PY
+      - name: Publish the new tagged release and both installation assets
+        run: |
+          gh release create v0.1.169 \
+            ELTAKO_Sensors_Actuators.zip \
+            eltako_sensors_actuators_v0.1.169.zip \
+            --target "$GITHUB_SHA" \
+            --title "ELTAKO Sensors & Actuators v0.1.169" \
+            --notes-file RELEASE_NOTES_v0.1.169.md \
+            --latest
+          gh release view v0.1.169 --json tagName,isDraft,isPrerelease,assets --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease, assets: [.assets[].name]}'

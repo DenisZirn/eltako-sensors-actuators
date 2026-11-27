@@ -19,14 +19,14 @@
 
 **Unabhängige Home-Assistant-Integration für kompatible ELTAKO-EnOcean-Sensoren und -Aktoren.** Lokale Kommunikation über **FAM-USB** (Funk) und **FGW14-USB / FAM14** (Serie-14-Bus), ohne Cloud-Zwang.
 
-**Version:** v0.1.168 · **Home Assistant:** 2026.11.0+ · **Lizenz:** [MIT](LICENSE) · **Sprachen:** Deutsch und Englisch
+**Version:** v0.1.169 · **Home Assistant:** 2026.11.0+ · **Lizenz:** [MIT](LICENSE) · **Sprachen:** Deutsch und Englisch
 
 > Dieses Community-Projekt ist keine offizielle ELTAKO-Integration und wird nicht von ELTAKO herausgegeben oder unterstützt.
 
 ## Schnellstart
 
 1. **Gateway anschließen:** FAM-USB oder FGW14-USB verbinden und möglichst den stabilen `/dev/serial/by-id/`-Port auswählen.
-2. Integration installieren: Im Home Assistant Marketplace (HACS) nach ELTAKO Sensors & Actuators suchen und installieren oder direkt über den Marketplace-Link öffnen. Alternativ die Release-ZIP manuell installieren.
+2. **Integration installieren:** Im Home Assistant Marketplace (HACS) nach **ELTAKO Sensors & Actuators** suchen oder direkt über den [Marketplace-Link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=DenisZirn&repository=eltako-sensors-actuators&category=integration) öffnen. Alternativ das [manuelle Installationspaket](https://github.com/DenisZirn/eltako-sensors-actuators/releases/download/v0.1.169/eltako_sensors_actuators_v0.1.169.zip) verwenden.
 3. **Home Assistant neu starten** und unter **Einstellungen → Geräte & Dienste** die Integration hinzufügen.
 4. **YAML mit [EEDTOY](https://github.com/DenisZirn/eedtoy)** erstellen und unter **Konfigurieren → EEDTOY YAML importieren oder ersetzen** einlesen. Für aktuelle Geräteprofile wird **EEDTOY 1.1.01 oder neuer** empfohlen.
 5. Entitäten und bei Bedarf die **Funk-/Bus-Diagnose** prüfen.
@@ -65,14 +65,17 @@ Die Konfiguration wird über den Integrationsdialog importiert und **nicht in `c
 - Integrierte **Funk-/Bus-Diagnose** zur Analyse empfangener und gesendeter Telegramme.
 - Deutsche und englische Oberflächentexte.
 
-## Hinweise zu v0.1.168
+## Neu in v0.1.169
 
-- **Raumzuordnung:** EEDTOY-Räume werden beim ersten Anlegen vorgeschlagen. Manuelle Änderungen oder das Entfernen der Raumzuordnung bleiben nach einem Neustart erhalten.
-- **Externe Raumtemperatur:** FHK14/FAE14 übernehmen den gewählten externen Sensor und spätere Messwertänderungen sofort, ohne Sollwertänderung.
-- **FKS-SV:** Doppelte Temperatur-Entity aus älteren Versionen wird auf die Climate-Isttemperatur vereinheitlicht.
-- **Gerätezuordnung:** Heizungsaktoren sind beim Zuweisen einer Raumtemperaturquelle direkt anklickbar.
-- Bestehende Entitäten und Konfigurationen werden nach Möglichkeit beibehalten.
-- **Sensorwerte:** YAML-Sensoren behandeln auch `0` und `false` korrekt; FRGBW14-Helligkeitsverbesserungen folgen separat.
+- **FRGBW14:** Farbwechsel und Rückmeldungen behalten die eingestellte Helligkeit bei.
+- **Heizung der Serie 14:** Stabile Sollwerte, verbesserte externe Temperaturübertragung und regelmäßige Aktualisierung auch bei konstanten Messwerten.
+- **HA-Sollwertvorgabe:** Zentral ist die Standardeinstellung bei eingelerntem Raumregler, sofern keine bisherige Priorität festgelegt wurde.
+- **FTR-Raumregler:** Verbesserte Temperaturauswertung und bereinigte Betriebsart-/Frostschutz-Anzeigen.
+- **Diagnose:** Zuverlässigere Unterscheidung eigener Sendungen von Aktorrückmeldungen.
+
+**FHK61 bleibt enthalten:** Die Temperatursteuerung funktioniert im bestätigten Aufbau, solange **keine Betriebsart eingelernt ist**. Bitte beim FHK61 vorerst keine Betriebsart einlernen; diese Funktion wird separat weiter geprüft.
+
+[Alle Hinweise zu v0.1.169](RELEASE_NOTES_v0.1.169.md)
 
 **Bekannte Einschränkungen:** Die Unterstützung einzelner Geräte und Funktionen hängt von der verwendeten Hardware, dem EEP und der Gerätekonfiguration ab. Siehe [Gerätekatalog](docs/devices.md).
 

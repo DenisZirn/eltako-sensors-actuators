@@ -1,6 +1,6 @@
 # Dokumentation – ELTAKO Sensors & Actuators
 
-**Home Assistant 2026.11+ · Integration v0.1.166 · Deutsch**
+**Home Assistant 2026.11+ · Integration v0.1.169 · Deutsch**
 
 Diese Dokumentation behandelt die unabhängige Home-Assistant-Custom-Integration **ELTAKO Sensors & Actuators** für lokale ELTAKO-EnOcean- und Serie-14-Systeme.
 
@@ -32,19 +32,19 @@ Die Integration unterstützt unter anderem **FAM-USB**, **FGW14-USB / FAM14**, d
 
 Die EEDTOY-Konfiguration wird über den Integrationsdialog importiert und **nicht in `configuration.yaml` eingetragen**.
 
-## Neu in v0.1.166
+## Neu in v0.1.169
 
-- Verbesserte Kompatibilität mit Home Assistant 2026.11.
-- Verbesserte Stabilität der Funk-/Bus-Diagnose.
-- Unterstützung für **FAH, FAH60B, FAH65S, FIH65S und FHD60SB** als Helligkeitssensoren mit Ausgabe in Lux.
-- Unterstützung des älteren **FRW-ws Rauchwarnmelders** inklusive Rauchalarm- und Batteriestatus.
-- Verbesserte Geräteerkennung anhand der von EEDTOY exportierten Gerätetypen.
-- Bestehende Geräte- und Entitätszuordnungen werden nach Möglichkeit beibehalten.
-- Normale `F6-02-01`-Taster wie FT55 bleiben durch die FRW-Unterstützung unverändert.
+- FRGBW14: stabile Helligkeit bei Farbwechseln und Kanalrückmeldungen.
+- Serie-14-Heizung: stabile Solltemperaturen und verbesserte externe Temperaturübertragung.
+- Regelmäßige Aktualisierung externer Temperaturwerte auch ohne Messwertänderung.
+- Bereinigte FTR-Raumregleranzeigen und verbesserte Telegrammdiagnose.
+- **FHK61 bleibt enthalten:** Temperatursteuerung ohne eingelernte Betriebsart. Die Betriebsart beim FHK61 vorerst nicht einlernen.
+
+Details stehen in den [Release-Hinweisen](../RELEASE_NOTES_v0.1.169.md).
 
 ## Versions- und Sicherheitsinformationen
 
-- Aktuelles GitHub-Release: [v0.1.166](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.166)
+- Aktuelles GitHub-Release: [v0.1.169](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.169)
 - Quellcode: [GitHub Repository](https://github.com/DenisZirn/eltako-sensors-actuators)
 - Fehler und Funktionswünsche: [GitHub Issues](https://github.com/DenisZirn/eltako-sensors-actuators/issues)
 - Lizenz: [MIT](../LICENSE)

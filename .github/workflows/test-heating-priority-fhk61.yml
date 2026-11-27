@@ -1,0 +1,46 @@
+name: Test heating priority + FHK61 family (no release)
+on:
+  push:
+    branches:
+      - test/a5-10-06-priority-fhk61
+      - test/restore-fhk14-f4hk14-fae14
+      - test/restore-heating-priority-isolated
+      - test/fix-external-ha-room-temperature-priority
+      - test/filter-unavailable-temperature-sensors
+      - test/heating-frgbw-regressionfix-20261123
+      - test/fg4-fhk61-operating-mode-20261123
+  workflow_dispatch:
+
+jobs:
+  test-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python modules
+        run: python -m compileall -q custom_components/eltako_sensors_actuators tests
+      - name: Run all isolated regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Prepare standard Home Assistant integration folder
+        run: |
+          mkdir -p package
+          cp -R custom_components/eltako_sensors_actuators package/eltako_sensors_actuators
+          find package -type d -name __pycache__ -prune -exec rm -rf '{}' +
+          test -f package/eltako_sensors_actuators/manifest.json
+          test -f package/eltako_sensors_actuators/__init__.py
+          test -f package/eltako_sensors_actuators/gateway.py
+      # upload-artifact already creates a ZIP. Uploading another .zip caused
+      # double packaging; downloaders then had to open a ZIP inside a ZIP.
+      # The artifact root must contain only eltako_sensors_actuators/.
+      - name: Upload directly installable integration folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: eltako-sensors-actuators-heating-fhk61-test
+          path: package/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

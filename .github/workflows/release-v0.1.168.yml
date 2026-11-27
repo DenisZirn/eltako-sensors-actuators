@@ -1,21 +1,6 @@
 name: Release v0.1.168
 
 on:
-  pull_request:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/release-v0.1.168.yml"
-      - "custom_components/eltako_sensors_actuators/**"
-      - "hacs.json"
-      - ".gitignore"
-      - "tests/test_fks_sv_room_temperature.py"
-      - "tests/test_serialx_rx.py"
-      - "tests/test_f2l14_sender_id.py"
-      - "tests/test_frw_fah.py"
-      - "tests/test_yaml_generic_sensor.py"
-      - "tests/test_climate_temperature_sync.py"
-      - "RELEASE_NOTES_v0.1.168.md"
   workflow_dispatch:
 
 permissions:

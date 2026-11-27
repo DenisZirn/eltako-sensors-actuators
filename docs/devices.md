@@ -2,7 +2,7 @@
 
 [← Dokumentationsübersicht](README.md)
 
-Diese Übersicht beschreibt die unterstützten Gerätetypen der Integration **v0.1.166**. Die verfügbare Home-Assistant-Plattform und die Funktionen hängen vom ausgewählten EEP, der Betriebsart und der Konfiguration des Geräts ab.
+Diese Übersicht beschreibt die unterstützten Gerätetypen der Integration **v0.1.169**. Die verfügbare Home-Assistant-Plattform und die Funktionen hängen vom ausgewählten EEP, der Betriebsart und der Konfiguration des Geräts ab.
 
 | Home-Assistant-Plattform | Typische Geräte und Funktionen |
 | --- | --- |
@@ -23,10 +23,12 @@ Diese Übersicht beschreibt die unterstützten Gerätetypen der Integration **v0
 - **F2L14:** `fan` mit Aus, Stufe 1 und Stufe 2; Betriebsarten exklusiv und addierend.
 - **FMS14:** zwei separate Kanäle; Steuerung über `A5-38-08`.
 - **FRGBW71L:** RGBW-Steuerung unterstützt.
-- **FRGBW14:** Telegramme implementiert, **Hardwaresteuerung noch im Test**.
+- **FRGBW14:** RGBW-Steuerung unterstützt; Farbwechsel und Kanalrückmeldungen behalten die eingestellte Helligkeit bei.
 - **FHK14 / F4HK14:** Steuerung als Climate-Entität einschließlich externer Raumtemperaturquelle.
 - **FKS-SV / FKS-B:** bidirektionale Kommunikation; die Übertragung erfolgt im Empfangsfenster des batteriebetriebenen Stellantriebs.
-- **FAE14SSR / FHK61SSR:** **noch im Test**.
+- **FAE14SSR:** **noch im Test**.
+- **FHK61:** Temperatursteuerung im getesteten Aufbau bestätigt, solange **keine Betriebsart eingelernt ist**. Die Betriebsart beim FHK61 vorerst nicht einlernen; diese Funktion wird separat weiter geprüft.
+- **FHK61U / FHK61SSR:** Der bisherige Funktionsumfang aus v0.1.169-beta.2 bleibt enthalten. Die Bestätigung für FHK61 ersetzt keine gesonderten Hardwaretests dieser Varianten.
 - **FWG14MS:** Wetterdaten-Gateway mit eigener Empfangs-ID entsprechend dem eingestellten ID-Bereich. Die PCT14-Busadresse darf nicht als Empfangs-ID der Wettertelegramme verwendet werden.
 
 ## Unterstützte Gerätetypen
@@ -80,7 +82,8 @@ Die genaue Funktion hängt vom Gerät, EEP, der Betriebsart und der jeweiligen H
 - FKS-B – bidirektionaler Heizkörper-Stellantrieb mit `A5-20-04`
 - FHK14, F4HK14 – Heizung/Klima
 - FAE14LPR – Aktor Heizen/Kühlen für zwei Zonen
-- FAE14SSR, FHK61SSR – Heizungs-/Schaltaktoren, **noch im Test**
+- FAE14SSR – Heizungs-/Schaltaktor, **noch im Test**
+- FHK61, FHK61U, FHK61SSR – Heizung/Klima; beim FHK61 die oben genannte Einschränkung zum Betriebsarteinlernen beachten
 
 ### Energie und Wetter
 
@@ -96,7 +99,7 @@ Die genaue Funktion hängt vom Gerät, EEP, der Betriebsart und der jeweiligen H
 - FD62, FD62NP-230V, FD62NPN-230V
 - FSUD-230V
 - FRGBW71L – RGBW-Aktor
-- FRGBW14 – RGBW-Aktor, **noch im Test**
+- FRGBW14 – RGBW-Aktor mit stabiler Farb- und Helligkeitssteuerung
 
 ### Schalt- und Lüfteraktoren
 

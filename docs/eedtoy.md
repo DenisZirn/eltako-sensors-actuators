@@ -51,7 +51,8 @@ Der Importer verarbeitet unter anderem die Plattformen `sensor`, `binary_sensor`
 - **F2L14:** `sender.id` ist die **eingelernte Steuer-ID**. `stage_1_id` und `stage_2_id` sind Rückmelde-IDs. `f2l14_mode` kann `exclusive` oder `additive` sein.
 - **FHK14 / F4HK14:** Controller-Zuordnung im Aktor kontrollieren; siehe [Heizung](climate.md).
 - **F4USM61B:** Kanaltelegramme und Batteriemeldungen können verschiedene physische IDs verwenden; diese nicht vereinheitlichen.
-- **FRGBW14:** Telegrammverarbeitung vorhanden, Ansteuerung noch nicht vollständig hardwarevalidiert.
+- **FRGBW14:** RGBW-Steuerung unterstützt. Die HA-Sender-ID wird in **Funktionsgruppe 3 / Funktion 81 (Vierkanalmaske)** zugeordnet.
+- **FHK61:** Die Temperatursteuerung bleibt enthalten. Beim FHK61 vorerst **keine Betriebsart einlernen**; bestätigt ist der Betrieb ohne diese zusätzliche Einlernung. Siehe [Einlernen](teach-in.md#fhk61--temperatursteuerung-ohne-betriebsarteinlernen).
 
 ## Nach einem erneuten Import
 

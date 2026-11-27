@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from .esp2 import ESP2Message, build_regular_4bs, build_rps
 from .ids import parse_address
 
@@ -16,10 +18,9 @@ def _temp_to_byte(value: float | int | None, default: float = 20.0) -> int:
 
 
 def _mode_byte(hvac_mode: str | None) -> int:
-    """Return DB3 for an A5-10-06 heating/cooling controller command.
+    """Return the ELTAKO operating-mode value used by RPS and legacy F65.
 
-    These values are the ELTAKO/eltako14bus ``HeaterMode`` values.  DB3=0x00
-    is not the normal heating command; it is used for unknown/special cases.
+    F64 room-sensor telegrams use DB3=0x00 and do not encode these modes.
     """
     mode = str(hvac_mode or "heat").strip().lower()
     if mode in {"off", "aus", "false", "0"} or mode.endswith(".off"):
@@ -41,12 +42,28 @@ def _current_temp_to_byte(value: float | int | None, default: float = 40.0) -> i
     return max(0, min(255, int((40.0 - temperature) / 40.0 * 255.0)))
 
 
+def _f64_temp_to_byte(value: float | int | None, default: float = 20.0) -> int:
+    """Round F64 temperatures onto the same ascending 0..40 C grid.
+
+    Truncating DB2 lowers the target while truncating inverted DB1 raises
+    the actual temperature. That can erase a real temperature difference
+    or move a 0.5 K switching threshold. Quantize both on this one grid
+    and only then invert the actual byte, including at halfway values.
+    """
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError):
+        temperature = default
+    temperature = max(0.0, min(40.0, temperature))
+    return max(0, min(255, round(temperature / 40.0 * 255.0)))
+
+
 def _priority_byte(priority: str | int | None) -> int:
-    """Return DB0 for an A5-10-06 controller command.
+    """Return DB0 for the existing central-controller priority profiles.
 
     0x0E is AUTO/no-priority, 0x08 gives the software controller priority and
-    0x0A limits a learned thermostat to +/-3 K.  0x0F is deliberately rejected
-    here because it marks an actuator response, not a controller command.
+    0x0A limits a learned thermostat to +/-3 K. F64 is a separate room-sensor
+    role: its FTR-compatible day telegram uses 0x0F, not a priority value.
     """
     if isinstance(priority, int):
         value = priority & 0xFF
@@ -59,23 +76,76 @@ def _priority_byte(priority: str | int | None) -> int:
     return 0x0E
 
 
+def is_fhk61_230v_temperature_profile(device: dict) -> bool:
+    """Identify the FHK61-230V thermostat, excluding U/SSR variants."""
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    model = str(device.get("device_type") or raw.get("device_type") or "").strip().upper().replace(" ", "")
+    return (
+        model.startswith("FHK61-230V")
+        and str(device.get("platform") or "").lower() == "climate"
+        and str(device.get("eep") or "").upper() == "A5-10-06"
+    )
+
+
+def _fhk61_setpoint_byte(value: float | int | None) -> int:
+    """MiniSafe observed: 10 C -> 0x40, 30 C -> 0xBF.
+
+    This uses nearest-integer scaling and is intentionally specific to the
+    decentralized FHK61-230V. Native F65 controllers continue to use the
+    eltako14bus-compatible truncation in _temp_to_byte; external F64 uses
+    one common nearest-step grid for its target and actual temperatures.
+    """
+    try:
+        temperature = float(value) if value is not None else 20.0
+    except (TypeError, ValueError):
+        temperature = 20.0
+    temperature = max(0.0, min(40.0, temperature))
+    return max(0, min(255, round(temperature / 40.0 * 255.0)))
+
+
 def encode_a5_10_06_room_control_data(
     *,
     target_temperature: float | int | None = None,
     current_temperature: float | int | None = None,
     hvac_mode: str | None = "heat",
     priority: str | int | None = None,
+    controller_profile: str | None = None,
 ) -> bytes:
-    """Return DB3..DB0 for an ELTAKO A5-10-06 controller telegram.
+    """Encode A5-10-06 for its configured sensor or controller role.
 
-    current_temperature=None preserves the established actuator/native
-    room-sensor path (DB1=0x00 / 40 C protocol value).
+    The FHK61-230V MiniSafe trace uses DB3=0x00 for its A5-10-06
+    temperature/setpoint profile, with DB0=0x0E. Operating-mode selection
+    is a separate learned RPS telegram. Series-14 F64 emulates an ELTAKO
+    FTR room sensor (DB3=0x00, DB0=0x0F); its operating modes also remain
+    separate RPS commands. Native F65 retains its established priority bytes.
     """
-    target_byte = _temp_to_byte(target_temperature, default=20.0)
+    if controller_profile == "series14_f64":
+        # ELTAKO "Inhalte der Funktelegramme": FTR55ESB/FTR55EHB et al.,
+        # FHK mode, DB2=target, DB1=inverted actual temperature, DB0=0x0F.
+        # EEP A5-10-06 reserves DB3=0 and defines DB0.0=1 as Day/On.
+        # Never substitute F65's synthetic 40 C marker for a missing sensor.
+        try:
+            room_temperature = float(current_temperature)
+        except (TypeError, ValueError):
+            raise ValueError("F64 requires a valid external room temperature") from None
+        if not math.isfinite(room_temperature):
+            raise ValueError("F64 requires a valid external room temperature")
+        return bytes((
+            0x00,
+            _f64_temp_to_byte(target_temperature),
+            255 - _f64_temp_to_byte(room_temperature),
+            0x0F,
+        ))
+
+    fhk61 = controller_profile == "fhk61_230v"
+    target_byte = (
+        _fhk61_setpoint_byte(target_temperature)
+        if fhk61 else _temp_to_byte(target_temperature, default=20.0)
+    )
     effective_current = 40.0 if current_temperature is None else current_temperature
     current_byte = _current_temp_to_byte(effective_current)
     return bytes([
-        _mode_byte(hvac_mode),
+        0x00 if fhk61 else _mode_byte(hvac_mode),
         target_byte,
         current_byte,
         _priority_byte(priority),
@@ -88,13 +158,13 @@ def build_a5_10_06_room_control(
     current_temperature: float | int | None = None,
     hvac_mode: str | None = "heat",
     priority: str | int | None = None,
+    controller_profile: str | None = None,
 ) -> ESP2Message:
-    """Build an ELTAKO A5-10-06 software-controller telegram.
+    """Build the configured ELTAKO A5-10-06 sensor/controller telegram.
 
-    Byte order is DB3 mode, DB2 target, DB1 current temperature (inverted),
-    DB0 controller priority.  The established Home Assistant/eltako14bus path
-    sends 40 C as the controller's current temperature, resulting in DB1=0x00;
-    the physical room sensor learned in function group 1 remains authoritative.
+    Native F65 uses DB3 mode, DB2 target, DB1=0x00 and DB0 priority, with
+    the learned FG1 sensor providing the actual temperature. External F64
+    instead sends the real HA temperature in the neutral FTR sensor format.
     """
     address = parse_address(sender_id)
     data = encode_a5_10_06_room_control_data(
@@ -102,15 +172,20 @@ def build_a5_10_06_room_control(
         current_temperature=current_temperature,
         hvac_mode=hvac_mode,
         priority=priority,
+        controller_profile=controller_profile,
     )
-    return build_regular_4bs(address, data, status=0x80, outgoing=True)
+    # MiniSafe2 DolphinView 2026-11-25 shows RF status B0 for the
+    # FHK61-230V controller telegrams (00-XX-00-0E). Keep the
+    # established 0x80 status for the Series-14 and other profiles.
+    status = 0xB0 if controller_profile == "fhk61_230v" else 0x80
+    return build_regular_4bs(address, data, status=status, outgoing=True)
 
 
 def build_fhk_mode_command(sender_id: str, mode: str | None) -> ESP2Message:
     """Build the RPS operating-mode command used by FHK/FHK14 actuators.
 
-    Grimm's Home Assistant integration changes the actuator operating mode
-    with an outgoing RPS telegram, not with A5-10-06.
+    The separately learned RPS sender selects the actuator operating mode.
+    An A5-10-06 temperature telegram is not a mode confirmation.
     """
     return build_rps(
         parse_address(sender_id),
