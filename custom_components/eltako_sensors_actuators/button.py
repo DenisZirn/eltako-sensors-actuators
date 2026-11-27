@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import CONF_DEVICES, DOMAIN
 from .entity_base import EltakoGatewayEntity, EltakoYamlEntity, normalize_eep, normalize_platform
+from .bus.operating_mode import heating_operating_mode_family
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def _supports_teach_in_button(device: Any) -> bool:
     if not isinstance(device, dict):
         return False
     platform = normalize_platform(device.get("platform"))
-    if platform not in {"light", "cover", "climate", "switch"}:
+    if platform not in {"light", "cover", "climate", "switch", "number"}:
         return False
     # FKS-SV A5-20-01 teach-in remains fully valve initiated. FKS-H/FKS-B
     # A5-20-04 expose a button that arms a short teach-in wait window; the
@@ -265,6 +266,19 @@ def _build_teach_in_buttons_for_device(gateway, device: dict[str, Any]) -> list[
     """
     if normalize_eep(device.get("eep")) == "A5-20-04":
         return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="arm_fks_hora_teach_in")]
+    raw = device.get("raw") if isinstance(device.get("raw"), dict) else {}
+    model = str(device.get("device_type") or raw.get("device_type") or "").strip().upper().replace(" ", "")
+    if heating_operating_mode_family(device) == "fhk61":
+        return [
+            EltakoTeachInButton(
+                gateway, device, suffix="Temperaturregler einlernen",
+                command="teach_in",
+            ),
+            EltakoTeachInButton(
+                gateway, device, suffix="Betriebsart einlernen",
+                command="fhk61_teach_in_operating_mode",
+            ),
+        ]
     return [EltakoTeachInButton(gateway, device, suffix="Lerntelegramm senden", command="teach_in")]
 
 

@@ -239,9 +239,15 @@ Dabei kann zwischen der bestehenden beziehungsweise eingelernten Temperaturquell
 ## RGBW
 
 - **FRGBW71L:** Ein/Aus und Farb-/Helligkeitssteuerung werden unterstützt. Für das Einlernen steht eine spezielle Funktion für das freie RGBW-Profil zur Verfügung.
-- **FRGBW14:** Telegrammverarbeitung ist implementiert; die praktische Steuerung ist **noch im Test** und sollte nicht als freigegeben betrachtet werden.
+- **FRGBW14:** Farb- und Helligkeitssteuerung werden unterstützt. Die HA-Sender-ID wird über EEDTOY/PCT14 in **Funktionsgruppe 3 / Funktion 81 (Vierkanalmaske)** zugeordnet.
 
 Der FRGBW14 ist ein Serie-14-Busaktor. Seine Controller-Zuordnung wird über die Busprogrammierung beziehungsweise EEDTOY vorgenommen und nicht über das Funk-Lerntelegramm des FRGBW71L.
+
+## FHK61 – Temperatursteuerung ohne Betriebsarteinlernen
+
+Die Temperatursteuerung des FHK61 bleibt mit dem Funktionsstand aus v0.1.169-beta.2 enthalten. Der Anwender hat bestätigt, dass der FHK61 funktioniert, solange **keine Betriebsart eingelernt ist**.
+
+Beim FHK61 deshalb vorerst nur die Temperatursteuerung einlernen und die zusätzliche Schaltfläche **Betriebsart einlernen** nicht verwenden. Die Kombination mit eingelernter Betriebsart wird separat weiter geprüft. Dieser Hinweis betrifft den getesteten FHK61; er ersetzt keine gesonderte Prüfung der Varianten FHK61U und FHK61SSR. Die oben beschriebenen Series-14-Zuordnungen bleiben davon unabhängig.
 
 ## Sicherheit
 

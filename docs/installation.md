@@ -4,7 +4,7 @@
 
 ## Voraussetzungen
 
-- Home Assistant **2026.11.0 oder neuer** für v0.1.168.
+- Home Assistant **2026.11.0 oder neuer** für v0.1.169.
 - Ein kompatibles Gateway, z. B. **FAM-USB** oder **FGW14-USB**; siehe [Gateways](gateways.md).
 - Schreibzugriff auf die Home-Assistant-Konfiguration für die manuelle Installation.
 - Für die komfortable Geräteeinrichtung empfiehlt sich [EEDTOY](eedtoy.md).
@@ -15,18 +15,18 @@
 
 1. In Home Assistant den **Marketplace** öffnen.
 2. Nach **ELTAKO Sensors & Actuators** suchen und die Integration installieren.
-3. Solange das Repository noch **nicht im öffentlichen Katalog** freigegeben ist, die Funktion **Add from link / Aus Link hinzufügen** mit der URL
+3. Alternativ die Funktion **Add from link / Aus Link hinzufügen** mit der URL
    `https://github.com/DenisZirn/eltako-sensors-actuators` verwenden.
 4. Nach der Installation **Home Assistant neu starten**.
 5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → ELTAKO Sensors & Actuators** öffnen, USB-Port auswählen und die Einrichtung abschließen.
 
-Die [öffentliche Katalogaufnahme](https://github.com/hacs/default/pull/13465) ist unabhängig von der Verfügbarkeit des GitHub-Releases.
+Die [öffentliche Katalogaufnahme](https://github.com/hacs/default/pull/13465) wurde am 19.11.2026 angenommen.
 
 ## Manuelle Installation
 
-1. Die Datei [`ELTAKO_Sensors_Actuators.zip` aus dem Release](https://github.com/DenisZirn/eltako-sensors-actuators/releases/tag/v0.1.168) herunterladen.
-2. Archiv entpacken und die enthaltenen Dateien nach
-   `/config/custom_components/eltako_sensors_actuators/` kopieren.
+1. Das [manuelle Installationspaket `eltako_sensors_actuators_v0.1.169.zip`](https://github.com/DenisZirn/eltako-sensors-actuators/releases/download/v0.1.169/eltako_sensors_actuators_v0.1.169.zip) herunterladen.
+2. Archiv entpacken und den enthaltenen Ordner `eltako_sensors_actuators` nach
+   `/config/custom_components/` kopieren.
 3. Kontrollieren, dass die Dateien direkt an dieser Stelle liegen:
 
    ```text
@@ -41,6 +41,10 @@ Die [öffentliche Katalogaufnahme](https://github.com/hacs/default/pull/13465) i
    **Keinen zusätzlichen verschachtelten Ordner** beim Entpacken erzeugen.
 4. Home Assistant vollständig neu starten.
 5. Die Integration unter **Geräte & Dienste** hinzufügen.
+
+Das zusätzlich veröffentlichte `ELTAKO_Sensors_Actuators.zip` ist das Paket für Marketplace/HACS. Dort liegen die Integrationsdateien direkt an der Archivwurzel.
+
+**FHK61-Hinweis für v0.1.169:** Die Temperatursteuerung bleibt enthalten und funktioniert im bestätigten Aufbau ohne eingelernte Betriebsart. Bitte beim FHK61 vorerst **keine Betriebsart einlernen**; dieser Teil wird separat weiter geprüft.
 
 ## Einrichtung nach der Installation
 

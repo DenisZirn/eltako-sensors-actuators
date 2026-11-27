@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
@@ -24,7 +25,7 @@ except Exception:  # pragma: no cover - older HA compatibility
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 
 try:
     from homeassistant.components.climate import ClimateEntityFeature
@@ -34,7 +35,11 @@ except Exception:  # pragma: no cover - older HA compatibility
     _SUPPORT_TARGET_TEMPERATURE = 1
     _SUPPORT_PRESET_MODE = 16
 
-from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data
+from .bus.eep_a5_10_06 import encode_a5_10_06_room_control_data, is_fhk61_230v_temperature_profile
+from .heating_priority import (
+    SIGNAL_HEATING_PRIORITY_TX, supports_heating_priority, is_fhk61_priority_device, heating_control_mode,
+    default_priority_mode, priority_mode, set_priority_mode,
+)
 from .bus.eep_a5_20_01 import (
     encode_a5_20_01_temperature_setpoint_data,
     encode_a5_20_01_valve_position_data,
@@ -47,6 +52,7 @@ from .const import (
     SIGNAL_ROOM_TEMPERATURE_UPDATED,
 )
 from .entity_base import EltakoYamlEntity, normalize_platform, _futh55ed_mode
+from .bus.operating_mode import heating_operating_mode_family, configured_operating_mode_sender
 from .room_temperature import (
     is_room_temperature_assignable_device,
     resolve_room_temperature_config,
@@ -230,6 +236,15 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             and "FAE14LPR" not in model_text
         )
         self._is_fae14lpr = self._eep == "A5-10-06" and "FAE14LPR" in model_text
+        self._is_fhk61u = self._eep == "A5-10-06" and "FHK61U" in model_text
+        self._is_fhk61 = (
+            self._eep == "A5-10-06" and "FHK61" in model_text
+            and not self._is_fhk61u
+        )
+        self._is_fhk61_230v = is_fhk61_230v_temperature_profile(device)
+        self._fhk61u_relay_on: bool | None = None
+        self._fhk61_reported_mode: str | None = None
+        self._fhk61_reported_mode_time: str | None = None
         # FHK14/F4HK14 report the A5-10-06 protocol value 40 °C when no
         # room-temperature sensor is learned. Keep this value visible until a
         # genuine actuator response provides a different room temperature.
@@ -272,6 +287,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._last_sent_target_temperature: float | None = None
         self._last_controller_telegram: str | None = None
         self._last_controller_response: str | None = None
+        # Live TX evidence only; restored diagnostic strings must not suppress
+        # physical setpoint changes after a restart.
+        self._last_f64_target_tx: tuple[float, bytes] | None = None
+        # Read target/source state only after preceding temperature writes have
+        # completed, including a user target followed by a queued sensor update.
+        self._temperature_command_lock = asyncio.Lock()
 
         self._control_reply_task = None
         self._teach_in_reply_task = None
@@ -280,6 +301,8 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._remove_listener = gateway.register_listener(self._handle_telegram)
         self._remove_temperature_options_listener = None
         self._remove_external_temperature_listener = None
+        self._remove_room_temperature_refresh_listener = None
+        self._remove_heating_priority_listener = None
 
 
     async def async_added_to_hass(self) -> None:
@@ -362,6 +385,11 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._last_controller_telegram = attrs.get("letztes_controllertelegramm")
                 self._last_controller_response = attrs.get("letzte_controllerantwort")
 
+        if supports_heating_priority(self.device_config):
+            self._remove_heating_priority_listener = async_dispatcher_connect(
+                self.hass, SIGNAL_HEATING_PRIORITY_TX, self._on_heating_priority_changed
+            )
+
         if self._has_room_temperature_assignment:
             self._remove_temperature_options_listener = async_dispatcher_connect(
                 self.hass,
@@ -380,6 +408,51 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 and self._external_temperature is not None
             ):
                 self._schedule_a5_10_06_room_temperature_push()
+
+    def _selected_priority(self) -> str | None:
+        if not supports_heating_priority(self.device_config):
+            return None
+        if (
+            not is_fhk61_priority_device(self.device_config)
+            and heating_control_mode(self.device_config, self._entry_options()) != "learned_sensor"
+        ):
+            return None
+        return priority_mode(self.device_config, self._entry_options())
+
+    def _priority_send_keyword(self) -> str | None:
+        # F64 has its own room-sensor profile; C/A/M/L only belongs to F65.
+        # Keep saved F65 choices out of the external path. The F64 encoder
+        # ignores this legacy priority keyword and supplies sensor DB0=0x0F.
+        if self._room_temperature_device_kind == "a5_10_06":
+            source, _entity, _origin = resolve_room_temperature_config(
+                self.device_config, self._entry_options()
+            )
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and not self._is_fhk61_230v:
+                return "auto"
+        selected = self._selected_priority()
+        if selected is None or selected == "manual":
+            return None
+        return {"central": "ha", "auto": "auto", "limit": "limit"}[selected]
+
+    def _priority_manual_active(self) -> bool:
+        # HA external temperature is a Function-64 controller; a stale saved
+        # manual state must never prevent its periodic source updates.
+        if self._room_temperature_device_kind == "a5_10_06":
+            source, _entity, _origin = resolve_room_temperature_config(
+                self.device_config, self._entry_options()
+            )
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL and not self._is_fhk61_230v:
+                return False
+        return self._selected_priority() == "manual"
+
+    def _on_heating_priority_changed(self, entry_id: str, device_id: str) -> None:
+        if entry_id != self.gateway.entry_id:
+            return
+        if str(device_id).upper() != str(self.device_config.get("id") or "").upper():
+            return
+        if not self._priority_manual_active():
+            self._schedule_a5_10_06_room_temperature_push()
+        self.schedule_update_ha_state()
 
     def _entry_options(self) -> dict[str, Any]:
         entry = self.hass.config_entries.async_get_entry(self.gateway.entry_id)
@@ -431,12 +504,17 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 actual_source = ROOM_TEMPERATURE_SOURCE_EXTERNAL
                 displayed = external
             elif source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
-                # For A5-10-06, fallback means restoring the established native/
-                # learned sensor path by transmitting current_temperature=None.
                 used = None
-                status = "fallback"
-                actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
-                displayed = native_display
+                if self._a5_10_06_controller_profile() == "series14_f64":
+                    # A missing HA value cannot change the physical F64
+                    # assignment into a learned-sensor/F65 controller.
+                    status = "error"
+                    actual_source = None
+                    displayed = None
+                else:
+                    status = "fallback"
+                    actual_source = ROOM_TEMPERATURE_SOURCE_NATIVE
+                    displayed = native_display
             else:
                 used = None
                 status = "normal"
@@ -454,6 +532,19 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         self._current_temperature = displayed
         return used if self._room_temperature_device_kind == "fks_sv" else displayed
 
+    def _a5_10_06_controller_profile(self) -> str | None:
+        """Choose the external sensor profile from configuration, not fallback."""
+        if (
+            self._room_temperature_device_kind == "a5_10_06"
+            and heating_operating_mode_family(self.device_config) == "series14"
+        ):
+            source, _entity, _origin = resolve_room_temperature_config(
+                self.device_config, self._entry_options()
+            )
+            if source == ROOM_TEMPERATURE_SOURCE_EXTERNAL:
+                return "series14_f64"
+        return None
+
     def _a5_10_06_outgoing_room_temperature(self) -> float | None:
         """Return numeric external temperature or None for native actuator control."""
         if self._room_temperature_device_kind != "a5_10_06":
@@ -470,7 +561,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         return None
 
     def _schedule_a5_10_06_room_temperature_push(self) -> None:
-        if self._room_temperature_device_kind != "a5_10_06":
+        if self._room_temperature_device_kind != "a5_10_06" or self._priority_manual_active():
             return
         # Coalesce rapid events but never lose the last update if a serial
         # send is still running. A later source change triggers a final send.
@@ -495,42 +586,60 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
 
     async def _async_push_a5_10_06_room_temperature(self) -> None:
         """Push source changes immediately to mains-powered A5-10-06 actuators."""
-        current_temperature = self._a5_10_06_outgoing_room_temperature()
-        target = float(self._target_temperature or 20.0)
-        heater_mode = (
-            "off" if self._attr_hvac_mode == HVACMode.OFF
-            else self._fhk_heater_mode
-        )
-        ok = await self.gateway.async_send_actuator_command(
-            self.device_config,
-            "set_temperature",
-            temperature=target,
-            current_temperature=current_temperature,
-            heater_mode=heater_mode,
-        )
-        if ok:
-            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
-            priority = self.device_config.get("priority") or raw.get("priority")
-            data = encode_a5_10_06_room_control_data(
-                target_temperature=target,
-                current_temperature=current_temperature,
-                hvac_mode=heater_mode,
-                priority=priority,
+        async with self._temperature_command_lock:
+            if self._priority_manual_active():
+                return
+            current_temperature = self._a5_10_06_outgoing_room_temperature()
+            controller_profile = self._a5_10_06_controller_profile()
+            if controller_profile == "series14_f64" and current_temperature is None:
+                self._last_error = "Externe Raumtemperatur nicht verfügbar; Temperaturtelegramm nicht gesendet."
+                self.schedule_update_ha_state()
+                return
+            target = float(self._target_temperature or 20.0)
+            heater_mode = (
+                "off" if self._attr_hvac_mode == HVACMode.OFF
+                else self._fhk_heater_mode
             )
-            timestamp = _now_iso()
-            self._last_sent_room_temperature = current_temperature
-            self._last_sent_target_temperature = target
-            self._last_controller_telegram = data.hex("-").upper()
-            self._last_controller_response = timestamp
-            self._last_error = None
-        else:
-            self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
-        self.schedule_update_ha_state()
+            priority_keyword = self._priority_send_keyword()
+            ok = await self.gateway.async_send_actuator_command(
+                self.device_config,
+                "set_temperature",
+                temperature=target,
+                current_temperature=current_temperature,
+                heater_mode=heater_mode,
+                **({"controller_priority": priority_keyword} if priority_keyword is not None else {}),
+                **({"controller_profile": controller_profile} if controller_profile is not None else {}),
+            )
+            if ok:
+                raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+                priority = priority_keyword or self.device_config.get("priority") or raw.get("priority")
+                data = encode_a5_10_06_room_control_data(
+                    target_temperature=target,
+                    current_temperature=current_temperature,
+                    hvac_mode=heater_mode,
+                    priority=priority,
+                    controller_profile=controller_profile,
+                )
+                timestamp = _now_iso()
+                self._last_sent_room_temperature = current_temperature
+                self._last_sent_target_temperature = target
+                self._last_controller_telegram = data.hex("-").upper()
+                self._last_controller_response = timestamp
+                self._last_f64_target_tx = (
+                    (target, bytes(data)) if controller_profile == "series14_f64" else None
+                )
+                self._last_error = None
+            else:
+                self._last_error = self.gateway.last_send_error or "unbekannter Fehler"
+            self.schedule_update_ha_state()
 
     def _rebind_external_temperature_listener(self) -> None:
         if self._remove_external_temperature_listener is not None:
             self._remove_external_temperature_listener()
             self._remove_external_temperature_listener = None
+        if self._remove_room_temperature_refresh_listener is not None:
+            self._remove_room_temperature_refresh_listener()
+            self._remove_room_temperature_refresh_listener = None
 
         if not self._has_room_temperature_assignment:
             return
@@ -545,6 +654,23 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             [entity_id],
             self._handle_external_temperature_state_event,
         )
+        if self._a5_10_06_controller_profile() == "series14_f64":
+            # F64 enters sensor fault mode after an hour without a telegram.
+            # Repeat valid measurements even when the HA value stays constant.
+            self._remove_room_temperature_refresh_listener = async_track_time_interval(
+                self.hass, self._handle_room_temperature_refresh, timedelta(minutes=15)
+            )
+
+    @callback
+    def _handle_room_temperature_refresh(self, _now) -> None:
+        if (
+            self._a5_10_06_controller_profile() == "series14_f64"
+            and self._last_f64_target_tx is not None
+        ):
+            # The serialized push revalidates the sensor before transmitting.
+            # A new entity must not transmit its guessed initial target merely
+            # because the timer fired before any restored/user target was sent.
+            self._schedule_a5_10_06_room_temperature_push()
 
     @callback
     def _handle_external_temperature_state_event(self, _event) -> None:
@@ -633,10 +759,26 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             else "Aus" if self._is_fks_sv
             else fhk_mode_labels.get(self._fhk_heater_mode, "Unbekannt")
         )
+        operating_family = heating_operating_mode_family(self.device_config)
+        if operating_family is not None:
+            base["betriebsart_sender_id"] = configured_operating_mode_sender(
+                self.device_config, str(self.device_config.get("sender_id") or "")
+            )
+            base["betriebsart_einlernen"] = (
+                "EEDTOY FG4 / Funktion 30" if operating_family == "series14"
+                else "Separater Funk-Lernvorgang am FHK61"
+            )
+            base["betriebsart_aktor_bestaetigt"] = False
         base["protokoll_temperatureinheit"] = UnitOfTemperature.CELSIUS
         base["ha_temperatureinheit"] = str(self.hass.config.units.temperature_unit)
         if self._is_fhk14 or self._is_fae14lpr:
             base["genuine_current_temperature"] = self._has_genuine_current_temperature
+        if self._is_fhk61u:
+            base["relais_ein"] = self._fhk61u_relay_on
+        if self._is_fhk61:
+            base["fhk61_betriebsart_rueckmeldung"] = self._fhk61_reported_mode
+            base["fhk61_betriebsart_rueckmeldung_zeit"] = self._fhk61_reported_mode_time
+            base["fhk61_relaiszustand_bestaetigt"] = False
         if self._is_fks_sv:
             base.update(
                 {
@@ -706,6 +848,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 base["interne_fks_sv_temperatur"] = self._internal_temperature
             elif self._room_temperature_device_kind == "a5_10_06":
                 base["interne_aktor_temperatur"] = self._internal_temperature
+                base["letzter_fehler"] = self._last_error
                 # This is the value that can be encoded in DB1. The
                 # external measurement above remains the genuine value.
                 protocol_temperature = (
@@ -722,6 +865,37 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 )
 
         return base
+
+    def _matches_sent_f64_target(self, telegram) -> bool:
+        """Recognize the quantized target in a physical reply to our live F64 TX."""
+        if self._a5_10_06_controller_profile() != "series14_f64" or self._last_f64_target_tx is None:
+            return False
+        decoded = telegram.decoded or {}
+        if (
+            not decoded.get("actuator_response")
+            or decoded.get("tx_echo")
+            or decoded.get("direction") == "to_actuator"
+            or decoded.get("org") not in ("0x07", 0x07)
+        ):
+            return False
+        physical_sender = str(decoded.get("physical_sender_id") or telegram.sender_id or "").upper()
+        if physical_sender != str(self.device_config.get("id") or "").upper():
+            return False
+        data_hex = decoded.get("data_hex")
+        if not isinstance(data_hex, str):
+            return False
+        try:
+            data = bytes.fromhex(data_hex.replace("-", ""))
+        except ValueError:
+            return False
+        requested_target, sent_data = self._last_f64_target_tx
+        return bool(
+            len(data) == 4
+            and data[3] == 0x0F
+            and len(sent_data) == 4
+            and data[1] == sent_data[1]
+            and self._target_temperature == requested_target
+        )
 
     def _matches_physical_device(self, telegram) -> bool:
         sender = str(telegram.sender_id or "").upper()
@@ -748,6 +922,51 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             str(self.device_config.get("sender_id")).upper(),
         }:
             return
+        # FHK61-family feedback is model specific; do not interpret a
+        # controller TX echo as physical relay feedback.
+        decoded = telegram.decoded or {}
+        if self._is_fhk61u and decoded.get("fhk61_feedback_type") == "relay":
+            self._fhk61u_relay_on = bool(decoded["fhk61_relay_on"])
+            self.schedule_update_ha_state()
+            return
+        if self._is_fhk61 and decoded.get("fhk61_feedback_type") == "operating_mode":
+            mode = str(decoded["fhk61_mode"])
+            self._fhk61_reported_mode = mode
+            self._fhk61_reported_mode_time = _now_iso()
+            self._fhk_heater_mode = mode
+            self._attr_hvac_mode = HVACMode.OFF if mode == "off" else HVACMode.HEAT
+            self._attr_preset_mode = {
+                "normal": PRESET_HOME, "night_setback": PRESET_SLEEP,
+                "setback": PRESET_ECO,
+            }.get(mode, self._attr_preset_mode)
+            self.schedule_update_ha_state()
+            return
+        if (self._is_fhk61 or self._room_temperature_device_kind == "a5_10_06") and (
+            decoded.get("tx_echo") or decoded.get("direction") == "to_actuator"
+        ):
+            # A local controller echo is not actuator feedback. In particular,
+            # re-decoding the quantized target (25 -> 24.9) must not change the
+            # setpoint sent on the next external room-temperature update.
+            return
+        if self._is_fhk61 and decoded.get("org") == "0x07":
+            # Physical 4BS feedback provides telemetry, not preset changes.
+            # Unlike an RPS status confirmation, DB3=0x00 carries no preset.
+            # FHK61-230V reports DB1=0x7F in 4BS acknowledgements
+            # (00-XX-7F-0F). This is a protocol marker, not a measured
+            # room temperature. Keep the last genuine sensor temperature.
+            # Other FHK61-family variants retain their existing handling.
+            if "temperature" in decoded and decoded.get("actuator_response"):
+                data_hex = str(decoded.get("data_hex") or "").replace("-", "").upper()
+                is_fhk61_ack = (
+                    self._is_fhk61_230v
+                    and len(data_hex) == 8 and data_hex[4:6] == "7F"
+                    and data_hex[6:8] == "0F"
+                )
+                if not is_fhk61_ack:
+                    self._current_temperature = decoded["temperature"]
+            self._last_rx = _now_iso()
+            self.schedule_update_ha_state()
+            return
         if "temperature" in telegram.decoded:
             if self._is_fhk14 or self._is_fae14lpr:
                 # A5-10-06 controller telegrams contain a synthetic DB1 value
@@ -763,7 +982,7 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                     self._has_genuine_current_temperature = value is not None
             else:
                 self._current_temperature = telegram.decoded["temperature"]
-        if "target_temperature" in telegram.decoded:
+        if "target_temperature" in telegram.decoded and not self._matches_sent_f64_target(telegram):
             try:
                 decoded_target = float(telegram.decoded["target_temperature"])
             except (TypeError, ValueError):
@@ -772,7 +991,14 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
                 self._target_temperature = decoded_target
             elif self._target_temperature is None:
                 self._target_temperature = self._attr_min_temp
-        if "hvac_mode" in telegram.decoded:
+        neutral_f64_sensor_data = (
+            self._a5_10_06_controller_profile() == "series14_f64"
+            and decoded.get("org") in ("0x07", 0x07)
+            and decoded.get("heater_mode_code") == 0x00
+        )
+        # DB3=00 is unused in F64 room-sensor data. Its generic decoder
+        # default cannot confirm that the actuator has left OFF mode.
+        if "hvac_mode" in telegram.decoded and not neutral_f64_sensor_data:
             mode = str(telegram.decoded["hvac_mode"]).lower()
             self._attr_hvac_mode = HVACMode.HEAT if mode == "heat" else HVACMode.OFF
         heater_mode = telegram.decoded.get("heater_mode")
@@ -1149,47 +1375,94 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
             self.schedule_update_ha_state()
             return
 
-        heater_mode = self._fhk_heater_mode
-        if not self._is_fks_sv and heater_mode == "off":
-            # Grimm switches an OFF actuator back to NORMAL when the user
-            # chooses a new target temperature.
-            heater_mode = "normal"
-
-        outgoing_room_temperature = (
-            self._a5_10_06_outgoing_room_temperature()
-            if self._room_temperature_device_kind == "a5_10_06"
-            else None
-        )
-        ok = await self.gateway.async_send_actuator_command(
-            self.device_config,
-            "set_temperature",
-            temperature=temperature,
-            current_temperature=outgoing_room_temperature,
-            heater_mode=heater_mode,
-        )
-        if not ok:
-            detail = self.gateway.last_send_error or "unbekannter Fehler"
-            raise HomeAssistantError(f"ELTAKO Temperatur-Telegramm konnte nicht gesendet werden: {detail}")
-        self._target_temperature = temperature
-        self._attr_hvac_mode = HVACMode.HEAT
-        if not self._is_fks_sv:
-            self._fhk_heater_mode = heater_mode
-            if heater_mode == "normal":
-                self._attr_preset_mode = PRESET_HOME
-        if self._room_temperature_device_kind == "a5_10_06":
-            raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
-            priority = self.device_config.get("priority") or raw.get("priority")
-            data = encode_a5_10_06_room_control_data(
-                target_temperature=temperature,
-                current_temperature=outgoing_room_temperature,
-                hvac_mode=heater_mode,
-                priority=priority,
+        async with self._temperature_command_lock:
+            heater_mode = self._fhk_heater_mode
+            resume_series14_heating = (
+                heating_operating_mode_family(self.device_config) == "series14"
+                and (self._attr_hvac_mode == HVACMode.OFF or heater_mode == "off")
             )
-            self._last_sent_room_temperature = outgoing_room_temperature
-            self._last_sent_target_temperature = temperature
-            self._last_controller_telegram = data.hex("-").upper()
-            self._last_controller_response = _now_iso()
-        self.schedule_update_ha_state()
+            if heater_mode == "off" or resume_series14_heating:
+                # A new target resumes normal operation. Series 14 also needs
+                # its separate RPS operating-mode command below.
+                heater_mode = "normal"
+
+            outgoing_room_temperature = (
+                self._a5_10_06_outgoing_room_temperature()
+                if self._room_temperature_device_kind == "a5_10_06"
+                else None
+            )
+            controller_profile = self._a5_10_06_controller_profile()
+            if controller_profile == "series14_f64" and outgoing_room_temperature is None:
+                self._last_error = "Externe Raumtemperatur nicht verfügbar; Temperaturtelegramm nicht gesendet."
+                self.schedule_update_ha_state()
+                raise HomeAssistantError(self._last_error)
+            was_manual = self._priority_manual_active()
+            if was_manual:
+                resume_priority = default_priority_mode(self.device_config, self._entry_options())
+                outgoing_priority = "ha" if resume_priority == "central" else "auto"
+            else:
+                resume_priority = None
+                outgoing_priority = self._priority_send_keyword()
+            ok = await self.gateway.async_send_actuator_command(
+                self.device_config,
+                "set_temperature",
+                temperature=temperature,
+                current_temperature=outgoing_room_temperature,
+                heater_mode=heater_mode,
+                **({"controller_priority": outgoing_priority} if outgoing_priority is not None else {}),
+                **({"controller_profile": controller_profile} if controller_profile is not None else {}),
+            )
+            if not ok:
+                detail = self.gateway.last_send_error or "unbekannter Fehler"
+                self._last_error = f"ELTAKO Temperatur-Telegramm konnte nicht gesendet werden: {detail}"
+                self.schedule_update_ha_state()
+                raise HomeAssistantError(self._last_error)
+            self._target_temperature = temperature
+            if controller_profile != "series14_f64":
+                self._last_f64_target_tx = None
+            if self._room_temperature_device_kind == "a5_10_06":
+                raw = self.device_config.get("raw") if isinstance(self.device_config.get("raw"), dict) else {}
+                priority = outgoing_priority or self.device_config.get("priority") or raw.get("priority")
+                data = encode_a5_10_06_room_control_data(
+                    target_temperature=temperature,
+                    current_temperature=outgoing_room_temperature,
+                    hvac_mode=heater_mode,
+                    priority=priority,
+                    controller_profile=controller_profile,
+                )
+                self._last_sent_room_temperature = outgoing_room_temperature
+                self._last_sent_target_temperature = temperature
+                self._last_controller_telegram = data.hex("-").upper()
+                self._last_controller_response = _now_iso()
+                if controller_profile == "series14_f64":
+                    self._last_f64_target_tx = (temperature, bytes(data))
+            if resume_series14_heating:
+                ok = await self.gateway.async_send_actuator_command(
+                    self.device_config,
+                    "set_hvac_mode",
+                    hvac_mode=str(HVACMode.HEAT),
+                )
+                if not ok:
+                    # Preserve the successful target TX without claiming HEAT
+                    # after the separate operating-mode send failed.
+                    self._attr_hvac_mode = HVACMode.OFF
+                    self._fhk_heater_mode = "off"
+                    detail = self.gateway.last_send_error or "unbekannter Fehler"
+                    self._last_error = (
+                        "ELTAKO Solltemperatur wurde gesendet, aber Normalbetrieb "
+                        f"konnte nicht gesendet werden: {detail}"
+                    )
+                    self.schedule_update_ha_state()
+                    raise HomeAssistantError(self._last_error)
+            self._attr_hvac_mode = HVACMode.HEAT
+            if not self._is_fks_sv:
+                self._fhk_heater_mode = heater_mode
+                if heater_mode == "normal":
+                    self._attr_preset_mode = PRESET_HOME
+            if resume_priority is not None:
+                set_priority_mode(self.hass, self.gateway.entry_id, self.device_config, resume_priority)
+            self._last_error = None
+            self.schedule_update_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         self._room_temperature_push_pending = False
@@ -1203,6 +1476,12 @@ class EltakoClimate(EltakoYamlEntity, ClimateEntity):
         if self._remove_external_temperature_listener is not None:
             self._remove_external_temperature_listener()
             self._remove_external_temperature_listener = None
+        if self._remove_room_temperature_refresh_listener is not None:
+            self._remove_room_temperature_refresh_listener()
+            self._remove_room_temperature_refresh_listener = None
+        if self._remove_heating_priority_listener is not None:
+            self._remove_heating_priority_listener()
+            self._remove_heating_priority_listener = None
         if self._remove_temperature_options_listener is not None:
             self._remove_temperature_options_listener()
             self._remove_temperature_options_listener = None

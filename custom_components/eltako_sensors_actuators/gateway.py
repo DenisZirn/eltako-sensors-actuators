@@ -10,6 +10,7 @@ from typing import Any
 from pathlib import Path
 
 from .bus.decoder import decode_esp2_message
+from .ftr_profiles import normalize_ftr_4bs, is_ftr_temperature_device
 from .device_profiles import (
     decode_eltako_a5_06_01,
     decode_legacy_frw_rps,
@@ -19,7 +20,9 @@ from .device_profiles import (
     is_fws81_device,
 )
 from .bus.eep_07_3f_7f import build_07_3f_7f_off_messages, build_07_3f_7f_rgbw_messages
-from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command
+from .bus.eep_a5_10_06 import build_a5_10_06_room_control, build_fhk_mode_command, is_fhk61_230v_temperature_profile
+from .bus.operating_mode import heating_operating_mode_family, configured_operating_mode_sender
+from .bus.fhk61_feedback import decode_fhk61_rps_feedback
 from .bus.eep_series14 import build_series14_switch_command
 from .bus.eep_a5_20_01 import (
     build_a5_20_01_teach_in_response,
@@ -30,7 +33,7 @@ from .bus.eep_a5_20_04 import build_a5_20_04_control_response, build_a5_20_04_te
 from .bus.eep_a5_38_08 import build_a5_38_08_dimming, build_a5_38_08_switch
 from .bus.eep_f6_02 import build_f6_02_01_rocker
 from .bus.eep_h5_3f_7f import build_h5_3f_7f_cover
-from .bus.esp2 import ESP2Message, ORG_4BS, ORG_RPS, build_regular_4bs
+from .bus.esp2 import ESP2Message, ORG_4BS, ORG_RPS, build_regular_4bs, build_rps
 from .bus.exceptions import UnsupportedCommandError
 from .bus.ids import format_address, parse_address
 from .bus.transport import SerialTransport
@@ -866,6 +869,25 @@ class EltakoGateway:
             for address in _candidate_addresses_for_device(device):
                 lookup[address.upper()] = device
 
+            # A single FRGBW14 RGB Light represents three consecutive physical
+            # color-channel feedback addresses: base (R), base+1 (G),
+            # base+2 (B). Route only unused addresses to the RGB Light.
+            # Never replace an explicitly configured device at these IDs.
+            model = str(_device_raw_option(device, "device_type", "") or "").upper()
+            if "FRGBW14" in model and str(device.get("platform") or "").lower() == "light":
+                base_address = _normalized_address_or_none(device.get("id"))
+                if base_address:
+                    try:
+                        base_bytes = parse_address(base_address)
+                        base_int = int.from_bytes(base_bytes, "big")
+                        for channel in (1, 2):
+                            channel_address = format_address(
+                                (base_int + channel).to_bytes(4, "big")
+                            )
+                            lookup.setdefault(channel_address.upper(), device)
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
             # F4USM61B modes 1, 2, 4, 5 and 7 transmit the approximately
             # daily battery status from the physical Unique-ID using A5-07-01,
             # while their normal channel telegrams use Base-ID+1/+2. Register
@@ -965,6 +987,7 @@ class EltakoGateway:
         logical_sender_id = physical_sender_id
         eep: str | None = None
         device: dict[str, Any] | None = None
+        a5_controller_echo = False
 
         # A5-20-01 uses different DB2 meanings in each direction. Detect a
         # mirrored controller telegram before the generic lookup maps it back
@@ -986,7 +1009,16 @@ class EltakoGateway:
                 # only the common physical module ID for device grouping and
                 # the separate battery telegram; it must never collapse both
                 # channels onto one logical sender.
-                if _is_f4usm61b_device(device):
+                if _is_a5_10_06_controller_echo(
+                    device, physical_sender_id, self.gateway_type,
+                    self.base_id or self.selected_gateway.get("base_id"),
+                    org=msg.org,
+                ):
+                    # A local FAM-USB echo is not a physical FHK/FAE response.
+                    # Keep its actual controller sender ID in diagnostics.
+                    logical_sender_id = physical_sender_id
+                    a5_controller_echo = True
+                elif _is_f4usm61b_device(device):
                     logical_sender_id = physical_sender_id
                 else:
                     logical_sender_id = str(device.get("id") or physical_sender_id).upper()
@@ -1012,6 +1044,20 @@ class EltakoGateway:
                 elif msg.org == ORG_4BS:
                     decoder_eep = "A5-14-09"
             _, decoded = decode_esp2_message(msg, decoder_eep, direction=direction)
+            # FTR thermostats share EEP A5-10-06 with heating actuators.
+            # Their DB3 contains no general HVAC state and DB0=0F is a
+            # sensor marker, not an actuator acknowledgement. Interpret the
+            # physical profile before exposing decoded fields to HA entities.
+            if (
+                device is not None
+                and is_ftr_temperature_device(device)
+                and msg.org == ORG_4BS
+            ):
+                decoded = normalize_ftr_4bs(device, bytes(msg.body[2:6]), decoded)
+            if a5_controller_echo:
+                decoded["direction"] = "to_actuator"
+                decoded["tx_echo"] = True
+                decoded["actuator_response"] = False
             if _is_ffg7b_device(device):
                 decoded.setdefault("configured_eep", eep)
                 decoded.setdefault("detected_eep", decoder_eep)
@@ -1089,6 +1135,21 @@ class EltakoGateway:
         if device is not None:
             decoded.setdefault("device_name", device.get("name"))
             _normalize_device_specific_decoded(device, decoded)
+            if msg.org == ORG_RPS and physical_sender_id.upper() == str(device.get("id") or "").upper():
+                model = str(_device_raw_option(device, "device_type") or "")
+                if model.upper().startswith("FHK61"):
+                    is_direct_pwm = (
+                        model.upper().startswith("FHK61SSR")
+                        and str(device.get("platform") or "").strip().lower() == "number"
+                        and str(_device_raw_option(device, "pwm_mode", "") or "").strip().lower() == "direct"
+                    )
+                    feedback = decode_fhk61_rps_feedback(
+                        bytes(msg.body[2:6]), model,
+                        control_mode="direct_pwm" if is_direct_pwm else "temperature",
+                    )
+                    if feedback:
+                        decoded.update(feedback)
+                        decoded["actuator_response"] = True
 
         self._last_message_received = decoded.get("last_seen") or datetime.now(timezone.utc).isoformat()
         telegram = EltakoTelegram(
@@ -1740,7 +1801,7 @@ class EltakoGateway:
             else (
                 (
                     "fhk_rps_mode_command"
-                    if command in {"set_hvac_mode", "set_preset_mode"}
+                    if command in {"set_hvac_mode", "set_preset_mode", "fhk61_teach_in_operating_mode"}
                     else "fhk_a5_10_06_setpoint_command"
                 )
                 if is_fhk
@@ -1748,7 +1809,9 @@ class EltakoGateway:
             )
         )
         inter_message_delay = (
-            0.25 if command == "f2l14_set_stage" and len(messages) > 1
+            0.12 if len(messages) > 1 and command in {"fhk61_teach_in_operating_mode", "set_hvac_mode", "set_preset_mode"}
+            and heating_operating_mode_family(device) == "fhk61"
+            else 0.25 if command == "f2l14_set_stage" and len(messages) > 1
             else (
                 0.02 if is_frgbw14 and len(messages) > 1
                 else (0.12 if command == "stop" and len(messages) > 1 else 0.0)
@@ -2049,7 +2112,8 @@ TEACH_IN_A5_20_01_FKS_SV = bytes([0x80, 0x08, 0x0D, 0x80])
 # set-temperature telegram and is required for FHK/F4HK/FUTH style learning.
 TEACH_IN_A5_10_06_HEATING_COOLING = bytes([0x40, 0x30, 0x0D, 0x87])
 TEACH_IN_FD2G14_COLOR_TEMP = bytes([0xE0, 0x40, 0x0D, 0x80])
-TEACH_IN_FHK61SSR_PWM = bytes([0xE0, 0x40, 0x0D, 0x80])
+# ELTAKO telegram table, direct FHK61SSR PWM LRN: E0-40-00-80.
+TEACH_IN_FHK61SSR_PWM = bytes([0xE0, 0x40, 0x00, 0x80])
 
 
 # F6-02-01 rocker teach-in pattern used by many decentral 61/62 devices
@@ -2178,8 +2242,15 @@ def _is_fsud_230v(device: dict[str, Any]) -> bool:
 
 
 def _is_fhk_pwm_device(device: dict[str, Any], sender_eep: str, device_eep: str) -> bool:
+    """The SSR PWM writer is only reachable from its dedicated number profile."""
     name = _device_name_upper(device)
-    return "FHK61SSR" in name
+    raw_mode = _device_raw_option(device, "pwm_mode")
+    return (
+        "FHK61SSR" in name
+        and str(device.get("platform") or "").strip().lower() == "number"
+        and str(raw_mode or "").strip().lower() == "direct"
+        and (sender_eep == "A5-38-08" or device_eep == "A5-38-08")
+    )
 
 
 def _prefers_rocker_teach_in(device: dict[str, Any], sender_eep: str, device_eep: str, platform: str) -> bool:
@@ -2487,6 +2558,10 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
         _LOGGER.info("ELTAKO teach-in matrix selected: FSUD-230V special dimmer learn, payload=02-00-00-00 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FSUD_230V_DIMMER, status=status, outgoing=True)]
 
+    if _is_fhk_pwm_device(device, sender_eep, device_eep):
+        _LOGGER.info("ELTAKO teach-in matrix selected: FHK61SSR direct PWM, payload=E0-40-00-80 device=%s", device.get("name"))
+        return [build_regular_4bs(address, TEACH_IN_FHK61SSR_PWM, status=status, outgoing=True)]
+
     if _is_func38_dimmer_device(device, sender_eep, device_eep):
         _LOGGER.info("ELTAKO teach-in matrix selected: FUNC=38 Command 2 dimmer, payload=E0-40-0D-80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FUNC38_DIMMER_CMD2, status=status, outgoing=True)]
@@ -2494,10 +2569,6 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
     if _is_func38_switch_device(device, sender_eep, device_eep):
         _LOGGER.info("ELTAKO teach-in matrix selected: FUNC=38 Command 1 switch, payload=E0-40-0D-80 device=%s", device.get("name"))
         return [build_regular_4bs(address, TEACH_IN_FUNC38_SWITCH_CMD1, status=status, outgoing=True)]
-
-    if _is_fhk_pwm_device(device, sender_eep, device_eep):
-        _LOGGER.info("ELTAKO teach-in matrix selected: FHK61SSR PWM, payload=E0-40-0D-80 device=%s", device.get("name"))
-        return [build_regular_4bs(address, TEACH_IN_FHK61SSR_PWM, status=status, outgoing=True)]
 
     if _is_futh55ed_device(device) and not (sender_eep == "A5-10-06" or device_eep == "A5-10-06"):
         raise UnsupportedEltakoCommand(
@@ -2508,6 +2579,12 @@ def _build_teach_in_message(device: dict[str, Any], gateway_type: str | None = N
         raise UnsupportedEltakoCommand(
             "FKS-SV wird bidirektional eingelernt: Integration aktiv lassen und den Taster am Ventil kurz druecken"
         )
+
+    # FHK61-230V: MiniSafe2/DolphinView reference (2026-11-25) uses
+    # 40-30-0D-85. Keep the existing 40-30-0D-87 for other A5-10-06 models.
+    if is_fhk61_230v_temperature_profile(device):
+        _LOGGER.info("FHK61-230V temperature teach-in: payload=40-30-0D-85 status=80 device=%s", device.get("name"))
+        return [build_regular_4bs(address, bytes.fromhex("40300D85"), status=0x80, outgoing=True)]
 
     if sender_eep == "A5-10-06" or device_eep == "A5-10-06" or "FHK14" in name or "F4HK14" in name:
         _LOGGER.info("ELTAKO teach-in matrix selected: A5-10-06 heating/cooling, payload=40-30-0D-87 status=80 device=%s", device.get("name"))
@@ -2528,6 +2605,55 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
 
     if command == "teach_in":
         return _build_teach_in_message(device, gateway_type, gateway_base_id)
+
+    if command == "fhk61_teach_in_operating_mode":
+        if heating_operating_mode_family(device) != "fhk61":
+            raise UnsupportedEltakoCommand(
+                "FHK61-Betriebsart-Lernen nur im A5-10-06-Temperaturmodus"
+            )
+        operating_sender = configured_operating_mode_sender(device, sender_id)
+        effective = _effective_sender_id_for_gateway(
+            operating_sender, gateway_type, gateway_base_id, device=device
+        )
+        # The actor must already be placed into operating-mode teach-in
+        # (LRN, lower rotary 4.5). This sends an RPS normal-mode frame to
+        # learn the separately configurable operating-mode sender.
+        # Match the physical MiniSafe2 RPS teach-in sequence: press then release.
+        # Temperature teach-in and its sender ID are intentionally unchanged.
+        return [
+            build_fhk_mode_command(effective, "normal"),
+            build_rps(parse_address(effective), 0x00, status=0x20, outgoing=True),
+        ]
+
+    if platform == "climate" and command == "release_heating_priority":
+        if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
+            raise UnsupportedEltakoCommand("Manual release requires A5-10-06")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        return build_regular_4bs(
+            parse_address(effective),
+            bytes((0x00, 0x00, 0x00, 0x0E)),
+            status=0x80,
+            outgoing=True,
+        )
+
+    if command == "fhk61ssr_pwm":
+        if not _is_fhk_pwm_device(device, sender_eep, device_eep):
+            raise UnsupportedEltakoCommand("PWM-Steuerung nur für FHK61SSR im direkten PWM-Profil")
+        effective = _effective_sender_id_for_gateway(sender_id, gateway_type, gateway_base_id, device=device)
+        try:
+            pwm = int(round(float(kwargs.get("percentage", 0))))
+            period = int(round(float(kwargs.get("period_seconds", device.get("pwm_period_seconds", 120)))))
+        except (TypeError, ValueError) as exc:
+            raise UnsupportedEltakoCommand("PWM-Wert oder Periodendauer ist ungültig") from exc
+        if not 0 <= pwm <= 100 or not 10 <= period <= 1000 or period % 10 != 0:
+            raise UnsupportedEltakoCommand("PWM 0–100 %, Basiszeit 10–1000 s in 10-s-Schritten")
+        repeater_value = kwargs.get("repeater", _device_raw_option(device, "pwm_repeater", False))
+        repeater = (
+            repeater_value.strip().lower() in {"true", "yes", "1", "on", "ja"}
+            if isinstance(repeater_value, str) else bool(repeater_value)
+        )
+        data = bytes((0x02, pwm, period // 10, 0x08 | (0x02 if repeater else 0) | (0x01 if pwm else 0)))
+        return build_regular_4bs(parse_address(effective), data, status=0x80, outgoing=True)
 
     if command == "frgbw_free_profile_teach_in":
         if not (_is_rgbw_device_config(device) or sender_eep in {"07-3F-7F"} or device_eep in {"07-3F-7F"}):
@@ -2676,7 +2802,9 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
             )
             return build_a5_38_08_switch(sender_id, command == "turn_on")
 
-    if platform == "light":
+    # EEDTOY selects the HA entity domain; simple switches reuse the verified
+    # light on/off telegram builder without altering sender IDs or teach-in.
+    if platform in ("light", "switch"):
         if _is_rgbw_device_config(device):
             # FRGBW14 and FRGBW71L use the ELTAKO 07-3F-7F RGB component data
             # model. For FRGBW14, sender.id is the controller identity already
@@ -2812,21 +2940,54 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
         if sender_eep != "A5-10-06" and device_eep != "A5-10-06":
             raise UnsupportedEltakoCommand(f"Climate sender.eep {sender_eep} wird noch nicht unterstuetzt")
         if command == "set_temperature":
+            is_fhk61 = is_fhk61_230v_temperature_profile(device)
+            controller_profile = "fhk61_230v" if is_fhk61 else None
+            if (
+                not is_fhk61
+                and kwargs.get("controller_profile") == "series14_f64"
+                and heating_operating_mode_family(device) == "series14"
+            ):
+                # The configured HA source selects the F64 room-sensor role.
+                # A missing measurement must not silently select F65 instead.
+                controller_profile = "series14_f64"
+            if is_fhk61:
+                # FHK61-230V MiniSafe-compatible setpoints do not carry the
+                # external temperature in DB1. Never alter FHK14/F4HK14/FAE14
+                # kwargs or their established 4BS controller encoding.
+                kwargs = {**kwargs, "current_temperature": None}
             return build_a5_10_06_room_control(
                 sender_id,
                 target_temperature=kwargs.get("temperature"),
-                # None preserves the established physical/native room-sensor
-                # path. A numeric value is supplied only for an explicit
-                # Home Assistant room-temperature assignment.
                 current_temperature=kwargs.get("current_temperature"),
                 hvac_mode=kwargs.get("heater_mode") or "heat",
-                priority=(device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority")),
+                priority=(kwargs.get("controller_priority") if kwargs.get("controller_priority") is not None else (device.get("priority") or (device.get("raw") if isinstance(device.get("raw"), dict) else {}).get("priority"))),
+                controller_profile=controller_profile,
             )
-        if command == "set_hvac_mode":
-            hvac_mode = str(kwargs.get("hvac_mode") or "heat")
-            return build_fhk_mode_command(sender_id, hvac_mode)
-        if command == "set_preset_mode":
-            return build_fhk_mode_command(sender_id, kwargs.get("preset_mode"))
+        if command in ("set_hvac_mode", "set_preset_mode"):
+            family = heating_operating_mode_family(device)
+            # The RPS sender is programmed in Series-14 FG4/F30 or learned
+            # separately at FHK61. Do not reuse a temperature sender when a
+            # dedicated operating-mode sender is configured.
+            operating_sender = (
+                configured_operating_mode_sender(device, sender_id)
+                if family is not None else sender_id
+            )
+            operating_sender = _effective_sender_id_for_gateway(
+                operating_sender, gateway_type, gateway_base_id, device=device
+            )
+            mode = (
+                str(kwargs.get("hvac_mode") or "heat")
+                if command == "set_hvac_mode"
+                else kwargs.get("preset_mode")
+            )
+            if family == "fhk61" and is_fhk61_230v_temperature_profile(device):
+                # A real rocker press needs its release. Do not alter the
+                # already verified Series-14 operating-mode telegram path.
+                return [
+                    build_fhk_mode_command(operating_sender, mode),
+                    build_rps(parse_address(operating_sender), 0x00, status=0x20, outgoing=True),
+                ]
+            return build_fhk_mode_command(operating_sender, mode)
 
     if platform == "cover":
         if sender_eep != "H5-3F-7F":
@@ -2853,6 +3014,45 @@ def _build_actuator_message(device: dict[str, Any], command: str, **kwargs: Any)
     raise UnsupportedEltakoCommand(
         f"command={command}, platform={platform}, device_eep={device_eep}, sender_eep={sender_eep}"
     )
+
+
+def _is_a5_10_06_controller_echo(
+    device: dict[str, Any] | None,
+    physical_sender_id: str,
+    gateway_type: str | None,
+    gateway_base_id: str | None,
+    *,
+    org: int | None = None,
+) -> bool:
+    """Distinguish a controller TX echo from physical FHK/FAE feedback.
+
+    Only an A5-10-06 climate controller 4BS using its configured/translated
+    sender ID may match. Real feedback from the actuator's own physical ID
+    must still reach the Climate and relay feedback entities.
+    """
+    if not isinstance(device, dict):
+        return False
+    if str(device.get("platform") or "").lower() != "climate":
+        return False
+    if normalize_eep(device.get("eep")) != "A5-10-06":
+        return False
+    if org is not None and org != ORG_4BS:
+        return False
+    configured = _normalized_address_or_none(_get_sender_id(device))
+    physical = _normalized_address_or_none(physical_sender_id)
+    if configured is None or physical is None:
+        return False
+    addresses = {configured}
+    try:
+        effective = _effective_sender_id_for_gateway(
+            configured, gateway_type, gateway_base_id, device=device,
+        )
+        normalized = _normalized_address_or_none(effective)
+        if normalized:
+            addresses.add(normalized)
+    except (TypeError, ValueError):
+        pass
+    return physical in addresses
 
 
 def _candidate_addresses_for_device(device: dict[str, Any]) -> set[str]:

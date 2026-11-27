@@ -8,12 +8,16 @@ from __future__ import annotations
 import ast
 import asyncio
 import logging
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 import unittest
 
-from test_fks_sv_room_temperature import INTEGRATION, room, eep10, eep20, const
+from test_fks_sv_room_temperature import INTEGRATION, room, eep10, eep20, const, _load, PKG
+
+priority = _load(f"{PKG}.heating_priority", INTEGRATION / "heating_priority.py")
+operating_mode = _load(f"{PKG}.bus.operating_mode", INTEGRATION / "bus" / "operating_mode.py")
 
 
 class _Base:
@@ -22,6 +26,9 @@ class _Base:
 
     async def async_get_last_state(self):
         return self.last_state
+
+    async def async_will_remove_from_hass(self):
+        self.removed_from_hass = True
 
     def schedule_update_ha_state(self):
         self.state_updates += 1
@@ -55,6 +62,7 @@ class _FakeHA:
         self.config = SimpleNamespace(units=SimpleNamespace(temperature_unit="°C"))
         self.tasks = []
         self.trackers = []
+        self.intervals = []
 
     def async_create_task(self, coro):
         task = asyncio.create_task(coro)
@@ -92,6 +100,12 @@ def _register_event_listener(hass, entities, handler):
     return lambda: hass.trackers.remove(item) if item in hass.trackers else None
 
 
+def _register_interval_listener(hass, handler, interval):
+    item = (handler, interval)
+    hass.intervals.append(item)
+    return lambda: hass.intervals.remove(item) if item in hass.intervals else None
+
+
 def _extract_method_class():
     source = (INTEGRATION / "climate.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -101,16 +115,23 @@ def _extract_method_class():
     )
     needed = {
         "async_added_to_hass",
+        "async_will_remove_from_hass",
         "_entry_options",
+        "_selected_priority",
+        "_priority_send_keyword",
+        "_priority_manual_active",
+        "_on_heating_priority_changed",
         "_read_external_temperature",
         "_native_a5_10_06_display_temperature",
         "_refresh_room_temperature_state",
+        "_a5_10_06_controller_profile",
         "_a5_10_06_outgoing_room_temperature",
         "_schedule_a5_10_06_room_temperature_push",
         "_async_flush_a5_10_06_room_temperature_push",
         "_async_push_a5_10_06_room_temperature",
         "_rebind_external_temperature_listener",
         "_handle_external_temperature_state_event",
+        "_handle_room_temperature_refresh",
         "_handle_temperature_options_updated",
         "_fks_sv_controller_data",
         "_async_reply_fks_sv_control",
@@ -133,6 +154,7 @@ def _extract_method_class():
     ns = {
         "_Base": _Base,
         "Any": Any,
+        "timedelta": timedelta,
         "HVACMode": _Modes,
         "PRESET_HOME": "home",
         "PRESET_SLEEP": "sleep",
@@ -140,6 +162,13 @@ def _extract_method_class():
         "ROOM_TEMPERATURE_SOURCE_EXTERNAL": const.ROOM_TEMPERATURE_SOURCE_EXTERNAL,
         "ROOM_TEMPERATURE_SOURCE_NATIVE": const.ROOM_TEMPERATURE_SOURCE_NATIVE,
         "SIGNAL_ROOM_TEMPERATURE_UPDATED": const.SIGNAL_ROOM_TEMPERATURE_UPDATED,
+        "SIGNAL_HEATING_PRIORITY_TX": priority.SIGNAL_HEATING_PRIORITY_TX,
+        "supports_heating_priority": priority.supports_heating_priority,
+        "is_fhk61_priority_device": priority.is_fhk61_priority_device,
+        "heating_control_mode": priority.heating_control_mode,
+        "heating_operating_mode_family": operating_mode.heating_operating_mode_family,
+        "priority_mode": priority.priority_mode,
+        "set_priority_mode": priority.set_priority_mode,
         "resolve_room_temperature_config": room.resolve_room_temperature_config,
         "select_numeric_room_temperature": room.select_numeric_room_temperature,
         "temperature_to_celsius": room.temperature_to_celsius,
@@ -150,6 +179,7 @@ def _extract_method_class():
         "_now_iso": lambda: "2026-11-17T07:00:00+00:00",
         "_LOGGER": logging.getLogger("eltako-room-temp-test"),
         "async_track_state_change_event": _register_event_listener,
+        "async_track_time_interval": _register_interval_listener,
         "async_dispatcher_connect": lambda *args: lambda: None,
         # Match homeassistant.core.callback: dispatcher and state event handlers
         # must be explicitly marked as safe to execute on HA's event loop.
@@ -186,11 +216,16 @@ def make_climate(kind, *, native=None, external=20.0, source="external", restore
     e.last_state = restored
     e.added_to_hass = False
     e.state_updates = 0
-    e._has_room_temperature_assignment = True
+    e._eep = device["eep"]
+    e._has_room_temperature_assignment = room.is_room_temperature_assignable_device(device)
     e._room_temperature_device_kind = room.room_temperature_device_kind(device)
     e._is_fks_sv = kind == "FKS-SV"
+    e._is_fks_hora = False
     e._is_fhk14 = kind in ("FHK14", "F4HK14")
-    e._is_fae14lpr = kind in ("FAE14LPR", "FAE14SSR")
+    e._is_fae14lpr = kind == "FAE14LPR"
+    e._is_fhk61u = "FHK61U" in kind
+    e._is_fhk61 = "FHK61" in kind and not e._is_fhk61u
+    e._is_fhk61_230v = eep10.is_fhk61_230v_temperature_profile(device)
     e._target_temperature = 21.0
     e._attr_min_temp = 8.0 if e._is_fks_sv else 16.0
     e._attr_max_temp = 28.0 if e._is_fks_sv else 25.0
@@ -202,7 +237,7 @@ def make_climate(kind, *, native=None, external=20.0, source="external", restore
     e._internal_temperature = native
     e._current_temperature = None
     e._external_temperature = None
-    e._configured_temperature_source = "native"
+    e._configured_temperature_source = const.ROOM_TEMPERATURE_SOURCE_NATIVE
     e._temperature_source_status = "error"
     e._temperature_config_origin = "default"
     e._actual_temperature_source = None
@@ -212,14 +247,21 @@ def make_climate(kind, *, native=None, external=20.0, source="external", restore
     e._last_sent_target_temperature = None
     e._last_controller_telegram = None
     e._last_controller_response = None
+    e._last_f64_target_tx = None
+    e._temperature_command_lock = asyncio.Lock()
     e._last_error = None
     e._last_tx = None
     e._pending_command = False
     e._successful_replies = 0
     e._room_temperature_push_task = None
     e._room_temperature_push_pending = False
+    e._control_reply_task = None
+    e._teach_in_reply_task = None
+    e._remove_listener = None
     e._remove_temperature_options_listener = None
     e._remove_external_temperature_listener = None
+    e._remove_room_temperature_refresh_listener = None
+    e._remove_heating_priority_listener = None
     return e, gateway, hass
 
 
@@ -246,6 +288,46 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kwargs["current_temperature"], 22.5)
                 self.assertEqual(e._current_temperature, 22.5)
                 self.assertEqual(e._last_sent_room_temperature, 22.5)
+
+    async def test_external_function64_uses_sensor_profile_despite_legacy_ha_priority(self):
+        for kind in ("FHK14", "F4HK14", "FAE14LPR", "FAE14SSR"):
+            with self.subTest(kind=kind):
+                e, gateway, hass = make_climate(kind, external=21.3, source="external")
+                await e.async_added_to_hass()
+                self.assertEqual(e._priority_send_keyword(), "auto")
+                e._handle_temperature_options_updated(gateway.entry_id)
+                await _wait_for_push(e)
+                self.assertEqual(len(gateway.calls), 1)
+                self.assertEqual(gateway.calls[-1][2]["controller_priority"], "auto")
+                self.assertEqual(gateway.calls[-1][2]["controller_profile"], "series14_f64")
+                self.assertEqual(gateway.calls[-1][2]["current_temperature"], 21.3)
+                self.assertEqual(e._last_controller_telegram, "00-86-77-0F")
+
+    async def test_external_source_overrides_stale_manual_priority_without_blocking_push(self):
+        e, gateway, hass = make_climate("F4HK14", external=21.3, source="external")
+        hass.options["heating_priority_overrides"] = {"01-02-03-04": "manual"}
+        # Explicit learned_sensor in YAML must not override the actual HA
+        # external controller source selected through the integration UI.
+        e.device_config["heating_control_mode"] = "learned_sensor"
+        await e.async_added_to_hass()
+        self.assertFalse(e._priority_manual_active())
+        self.assertEqual(e._priority_send_keyword(), "auto")
+        hass.states.set("sensor.room", 22.5)
+        e._handle_external_temperature_state_event(None)
+        await _wait_for_push(e)
+        self.assertEqual(len(gateway.calls), 1)
+        self.assertEqual(gateway.calls[0][2]["controller_priority"], "auto")
+        self.assertEqual(gateway.calls[0][2]["current_temperature"], 22.5)
+
+    async def test_native_function65_keeps_selected_priority(self):
+        e, gateway, hass = make_climate("FHK14", source="internal")
+        hass.options["heating_priority_overrides"] = {"01-02-03-04": "limit"}
+        await e.async_added_to_hass()
+        self.assertEqual(e._priority_send_keyword(), "limit")
+        e._handle_temperature_options_updated(gateway.entry_id)
+        await _wait_for_push(e)
+        self.assertEqual(gateway.calls[0][2]["controller_priority"], "limit")
+        self.assertIsNone(gateway.calls[0][2]["current_temperature"])
 
     async def test_rapid_changes_replay_last_update_after_busy_send(self):
         e, gateway, hass = make_climate("FHK14", external=20.0)
@@ -295,15 +377,17 @@ class RoomTemperatureRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(gateway.calls[0][2]["temperature"], 21.0)
                 self.assertEqual(gateway.calls[0][2]["current_temperature"], 21.5)
 
-    async def test_missing_external_source_switches_to_native_control_without_fake_temp(self):
+    async def test_missing_external_source_suppresses_f64_without_fake_native_fallback(self):
         e, gateway, hass = make_climate("FHK14", external=22.0)
         await e.async_added_to_hass()
         hass.states.set("sensor.room", None)
         e._handle_external_temperature_state_event(None)
         await _wait_for_push(e)
         self.assertIsNone(e._current_temperature)
-        self.assertEqual(e._temperature_source_status, "fallback")
-        self.assertIsNone(gateway.calls[-1][2]["current_temperature"])
+        self.assertEqual(e._temperature_source_status, "error")
+        self.assertIsNone(e._actual_temperature_source)
+        self.assertEqual(gateway.calls, [])
+        self.assertTrue(e._last_error)
 
     async def test_negative_external_sensor_is_not_shown_as_protocol_clamp(self):
         e, gateway, hass = make_climate("FAE14LPR", external=-5.0)

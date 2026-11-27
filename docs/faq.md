@@ -4,7 +4,7 @@
 
 ## Wo installiere ich die Integration?
 
-Über den Home Assistant Marketplace, über **Add from link** mit dem GitHub-Repository oder durch manuelles Entpacken der Release-ZIP. Siehe [Installation](installation.md). Die öffentliche Marketplace-Suche setzt die Annahme des [Katalog-Pull-Requests](https://github.com/hacs/default/pull/13465) voraus.
+Über den Home Assistant Marketplace, über **Add from link** mit dem GitHub-Repository oder durch manuelles Entpacken der Release-ZIP. Siehe [Installation](installation.md). Der [Katalog-Pull-Request](https://github.com/hacs/default/pull/13465) wurde am 19.11.2026 angenommen.
 
 ## Brauche ich EEDTOY zwingend?
 
@@ -30,7 +30,11 @@ Manche EnOcean-Geräte senden Batteriestatus nur mit bestimmten Telegrammen oder
 
 ## Wird FRGBW14 unterstützt?
 
-Die Telegrammverarbeitung ist implementiert; die **praktische Steuerung ist noch nicht vollständig freigegeben**. Diese Einschränkung gilt bis zu einem erfolgreichen Hardwaretest.
+Ja. Mit v0.1.169 sind die geprüften Korrekturen für Farbwechsel und Kanalrückmeldungen enthalten. Die eingestellte Gesamthelligkeit bleibt dabei stabil. Die Controller-Zuordnung erfolgt beim Busaktor über EEDTOY/PCT14; siehe [Einlernen](teach-in.md).
+
+## Wird FHK61 unterstützt?
+
+**Ja, die FHK61-Temperatursteuerung bleibt enthalten.** Der Anwender hat bestätigt, dass sie funktioniert, solange **keine Betriebsart eingelernt ist**. Deshalb beim FHK61 vorerst die Schaltfläche **Betriebsart einlernen** nicht verwenden. Die Kombination mit eingelernter Betriebsart wird separat weiter geprüft. Der Funktionsumfang entspricht v0.1.169-beta.2; die Bestätigung für FHK61 wird nicht pauschal auf die Varianten FHK61U/FHK61SSR übertragen.
 
 ## Kann ich negative Isttemperaturen verwenden?
 
